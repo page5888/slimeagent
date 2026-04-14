@@ -1,0 +1,4 @@
+__pycache__/
+core_backup/
+skills/*.py
+!skills/__init__.py
