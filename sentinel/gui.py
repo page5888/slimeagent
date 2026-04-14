@@ -1968,8 +1968,11 @@ class MainWindow(QMainWindow):
                 config.RELAY_SERVER_URL = s.get("relay_server_url", config.RELAY_SERVER_URL)
                 config.CHAT_MODEL_PREF = s.get("chat_model_pref", config.CHAT_MODEL_PREF)
                 config.ANALYSIS_MODEL_PREF = s.get("analysis_model_pref", config.ANALYSIS_MODEL_PREF)
-                config.TELEGRAM_BOT_TOKEN = s.get("telegram_bot_token", config.TELEGRAM_BOT_TOKEN)
-                config.TELEGRAM_CHAT_ID = int(s.get("telegram_chat_id", config.TELEGRAM_CHAT_ID))
+                config.TELEGRAM_BOT_TOKEN = s.get("telegram_bot_token", "") or ""
+                try:
+                    config.TELEGRAM_CHAT_ID = int(s.get("telegram_chat_id", 0) or 0)
+                except (ValueError, TypeError):
+                    config.TELEGRAM_CHAT_ID = 0
                 if "llm_providers" in s:
                     config.LLM_PROVIDERS = s["llm_providers"]
                 config.SYSTEM_CHECK_INTERVAL = s.get("check_interval", config.SYSTEM_CHECK_INTERVAL)
@@ -2069,6 +2072,10 @@ class MainWindow(QMainWindow):
 
     def _start_telegram_bot(self):
         """Start Telegram bot listener in background thread."""
+        if not config.TELEGRAM_BOT_TOKEN or not config.TELEGRAM_CHAT_ID:
+            log.info("Telegram not configured, skipping bot listener")
+            return
+
         def _run_bot():
             import asyncio
             from telegram import Update, Bot
