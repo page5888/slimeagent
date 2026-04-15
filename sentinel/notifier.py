@@ -1,8 +1,8 @@
-"""Telegram notification module."""
+"""Notification module — Telegram + desktop toast fallback."""
 import asyncio
 import time
 import logging
-from telegram import Bot
+import re
 from sentinel.config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, NOTIFICATION_COOLDOWN
 
 log = logging.getLogger("sentinel.notifier")
@@ -10,10 +10,24 @@ log = logging.getLogger("sentinel.notifier")
 # Track last notification time per category to avoid spam
 _last_sent: dict[str, float] = {}
 
+# GUI signal bridge reference — set by MainWindow on startup
+_signal_bridge = None
 
-async def _send(text: str):
+
+def set_signal_bridge(bridge):
+    """Called by GUI to register the signal bridge for desktop notifications."""
+    global _signal_bridge
+    _signal_bridge = bridge
+
+
+def _strip_markdown(text: str) -> str:
+    """Remove Telegram markdown for desktop toast display."""
+    return re.sub(r'\*([^*]+)\*', r'\1', text)
+
+
+async def _send_telegram(text: str):
+    from telegram import Bot
     bot = Bot(token=TELEGRAM_BOT_TOKEN)
-    # Telegram max message length is 4096
     if len(text) > 4000:
         text = text[:4000] + "\n..."
     await bot.send_message(
@@ -23,29 +37,52 @@ async def _send(text: str):
     )
 
 
-def send_notification(text: str, category: str = "general"):
-    """Send a Telegram message. Respects cooldown per category."""
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        log.debug("Telegram not configured, skipping notification")
+def _send_desktop(text: str, category: str):
+    """Send desktop toast notification via system tray."""
+    if _signal_bridge is None:
+        log.debug("No signal bridge, cannot send desktop notification")
         return False
+    clean = _strip_markdown(text)
+    # Split first line as title, rest as body
+    lines = clean.strip().split("\n", 1)
+    title = lines[0] if lines else "AI Slime"
+    body = lines[1].strip() if len(lines) > 1 else ""
+    _signal_bridge.desktop_notify.emit(title, body)
+    return True
 
+
+def send_notification(text: str, category: str = "general"):
+    """Send notification — tries Telegram first, falls back to desktop toast."""
     now = time.time()
     last = _last_sent.get(category, 0)
     if now - last < NOTIFICATION_COOLDOWN:
         log.debug(f"Cooldown active for '{category}', skipping notification")
         return False
 
-    try:
+    sent = False
+
+    # Try Telegram
+    if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
         try:
-            asyncio.get_event_loop().run_until_complete(_send(text))
-        except RuntimeError:
-            asyncio.run(_send(text))
-        _last_sent[category] = now
-        log.info(f"Sent notification [{category}]")
-        return True
+            try:
+                asyncio.get_event_loop().run_until_complete(_send_telegram(text))
+            except RuntimeError:
+                asyncio.run(_send_telegram(text))
+            sent = True
+            log.info(f"Sent Telegram notification [{category}]")
+        except Exception as e:
+            log.warning(f"Telegram notification failed: {e}")
+
+    # Always also send desktop toast (non-intrusive)
+    try:
+        _send_desktop(text, category)
+        sent = True
     except Exception as e:
-        log.warning(f"Telegram notification failed: {e}")
-        return False
+        log.debug(f"Desktop notification failed: {e}")
+
+    if sent:
+        _last_sent[category] = now
+    return sent
 
 
 def send_startup_message():

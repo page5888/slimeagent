@@ -33,6 +33,7 @@ class SignalBridge(QObject):
     status_update = Signal(str)
     sensor_update = Signal(str)  # 感測器狀態（第二行）
     advice_received = Signal(str, str)  # (emoji, message) — 主動建議
+    desktop_notify = Signal(str, str)   # (title, message) — 桌面彈窗通知
 
 
 # ─── Chat Tab ────────────────────────────────────────────────────────────
@@ -2562,12 +2563,30 @@ class MainWindow(QMainWindow):
         # System tray
         self._setup_tray()
 
+        # Desktop notification signal → tray balloon
+        self.bridge.desktop_notify.connect(self._on_desktop_notify)
+
+        # Register bridge in notifier for desktop toast fallback
+        from sentinel.notifier import set_signal_bridge
+        set_signal_bridge(self.bridge)
+
+        # ── Floating overlay (desktop pet) ──
+        from sentinel.overlay import SlimeOverlay
+        self.overlay = SlimeOverlay()
+        self.overlay.open_main_window.connect(self._show_window)
+        self.bridge.desktop_notify.connect(self._on_overlay_notify)
+        self.overlay.show()
+
         # Auto-refresh timers
         self.evo_timer = QTimer()
         self.evo_timer.timeout.connect(self.evolution_tab.refresh)
         self.evo_timer.timeout.connect(self.equipment_tab.refresh)
         self.evo_timer.timeout.connect(self.home_tab.refresh)
+        self.evo_timer.timeout.connect(self._sync_overlay_state)
         self.evo_timer.start(30000)  # 每 30 秒刷新進化、裝備、首頁
+
+        # Initial overlay state sync
+        QTimer.singleShot(1000, self._sync_overlay_state)
 
         # Daemon state - auto awaken on launch
         self.daemon_thread = None
@@ -2617,6 +2636,10 @@ class MainWindow(QMainWindow):
         settings_action.triggered.connect(lambda: (self._show_window(), self.tabs.setCurrentIndex(6)))
         tray_menu.addAction(settings_action)
 
+        overlay_action = QAction("顯示/隱藏浮窗", self)
+        overlay_action.triggered.connect(self._toggle_overlay)
+        tray_menu.addAction(overlay_action)
+
         tray_menu.addSeparator()
 
         quit_action = QAction(t("tray_quit"), self)
@@ -2627,6 +2650,40 @@ class MainWindow(QMainWindow):
         self.tray.activated.connect(self._on_tray_activated)
         self.tray.setToolTip("AI Slime Agent")
         self.tray.show()
+
+    def _on_desktop_notify(self, title: str, body: str):
+        """Show a system tray balloon notification."""
+        if hasattr(self, 'tray') and self.tray:
+            self.tray.showMessage(title, body, QSystemTrayIcon.Information, 5000)
+
+    def _on_overlay_notify(self, title: str, body: str):
+        """Show notification bubble on the floating overlay."""
+        if hasattr(self, 'overlay') and self.overlay:
+            text = f"{title} {body}".strip() if body else title
+            self.overlay.show_bubble(text, 6000)
+
+    def _sync_overlay_state(self):
+        """Sync overlay slime appearance with current evolution state."""
+        if not hasattr(self, 'overlay'):
+            return
+        try:
+            from sentinel.evolution import load_evolution
+            evo = load_evolution()
+            self.overlay.set_state(
+                evo.form,
+                evo.title,
+                evo.dominant_traits[:3] if evo.dominant_traits else [],
+            )
+        except Exception:
+            pass
+
+    def _toggle_overlay(self):
+        """Toggle floating overlay visibility."""
+        if hasattr(self, 'overlay'):
+            if self.overlay.isVisible():
+                self.overlay.hide()
+            else:
+                self.overlay.show()
 
     def _on_tray_activated(self, reason):
         if reason == QSystemTrayIcon.DoubleClick:
@@ -2640,6 +2697,8 @@ class MainWindow(QMainWindow):
     def _quit(self):
         """真正關閉 AI Slime（含背景線程和 CMD 視窗）。"""
         self.daemon_running = False
+        if hasattr(self, 'overlay'):
+            self.overlay.hide()
         self.tray.hide()
         QApplication.quit()
         # 強制結束 Python process，確保 CMD 也會關閉

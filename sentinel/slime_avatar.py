@@ -86,6 +86,7 @@ class SlimeWidget(QWidget):
         self._traits = []
         self._skill_count = 0
         self._title = "初生史萊姆"
+        self._equipped_visuals = {}  # {slot: {"visual", "rarity", "name"}}
 
         # Animation
         self._anim_phase = 0.0
@@ -102,7 +103,36 @@ class SlimeWidget(QWidget):
         self._title = title
         self._traits = traits[:3]  # Max 3 visible traits
         self._skill_count = skill_count
+        self._load_equipped_visuals()
         self.update()
+
+    def _load_equipped_visuals(self):
+        """Load equipped item visuals from equipment state."""
+        try:
+            from sentinel.wallet.equipment import load_equipment, EQUIPMENT_POOL
+            state = load_equipment()
+            visuals = {}
+            for slot, item_id in state.equipped.items():
+                if not item_id:
+                    continue
+                # Find the item in inventory
+                item = next((i for i in state.inventory if i.item_id == item_id), None)
+                if not item:
+                    continue
+                # Find the template
+                template = next(
+                    (t for t in EQUIPMENT_POOL if t["name"] == item.template_name),
+                    None,
+                )
+                if template and template.get("visual"):
+                    visuals[slot] = {
+                        "visual": template["visual"],
+                        "rarity": item.rarity,
+                        "name": item.template_name,
+                    }
+            self._equipped_visuals = visuals
+        except Exception:
+            self._equipped_visuals = {}
 
     def _tick(self):
         self._anim_phase += 0.05
@@ -143,6 +173,16 @@ class SlimeWidget(QWidget):
 
         colors = TIER_COLORS.get(self._form, TIER_COLORS["Slime"])
 
+        # Skin override from equipment
+        skin_info = self._equipped_visuals.get("skin")
+        if skin_info:
+            from sentinel.equipment_visuals import get_skin_override
+            override = get_skin_override(skin_info.get("visual", ""))
+            if override:
+                colors = dict(colors)  # copy
+                colors["body"] = override["body"]
+                colors["highlight"] = override["highlight"]
+
         # Breathing animation
         breath = math.sin(self._anim_phase) * 0.03
         bounce = math.sin(self._anim_phase * 2) * 2
@@ -152,6 +192,21 @@ class SlimeWidget(QWidget):
         base_size = 50 + tier_index * 5
         body_w = int(base_size * (1.0 + breath))
         body_h = int(base_size * 0.8 * (1.0 - breath))
+
+        # Equipment drawing context
+        equip_ctx = {
+            "cx": cx, "cy": cy, "body_w": body_w, "body_h": body_h,
+            "bounce": bounce, "phase": self._anim_phase,
+            "w": w, "h": h, "tier_index": tier_index, "scale": 1.0,
+        }
+
+        # ─── Background equipment (drawn first) ───
+        if self._equipped_visuals.get("background"):
+            from sentinel.equipment_visuals import VISUAL_REGISTRY
+            bg_fn = VISUAL_REGISTRY.get(self._equipped_visuals["background"].get("visual", ""))
+            if bg_fn:
+                equip_ctx["p"] = p
+                bg_fn(equip_ctx)
 
         # ─── Glow aura ───
         glow_color = colors["glow"]
@@ -210,43 +265,47 @@ class SlimeWidget(QWidget):
             p.drawEllipse(QPoint(bump_cx, bump_cy), bump_w, bump_h)
 
         # ─── Eyes ───
-        eye_y = int(cy - body_h * 0.15 + bounce)
-        eye_spacing = int(body_w * 0.35)
-        eye_size = max(4, 3 + tier_index)
+        has_eye_equip = "eyes" in self._equipped_visuals
+        if not has_eye_equip:
+            eye_y = int(cy - body_h * 0.15 + bounce)
+            eye_spacing = int(body_w * 0.35)
+            eye_size = max(4, 3 + tier_index)
 
-        # Eye whites
-        p.setBrush(QBrush(QColor(255, 255, 255, 220)))
-        p.setPen(Qt.NoPen)
-        p.drawEllipse(QPoint(cx - eye_spacing, eye_y), eye_size + 2, eye_size + 2)
-        p.drawEllipse(QPoint(cx + eye_spacing, eye_y), eye_size + 2, eye_size + 2)
+            # Eye whites
+            p.setBrush(QBrush(QColor(255, 255, 255, 220)))
+            p.setPen(Qt.NoPen)
+            p.drawEllipse(QPoint(cx - eye_spacing, eye_y), eye_size + 2, eye_size + 2)
+            p.drawEllipse(QPoint(cx + eye_spacing, eye_y), eye_size + 2, eye_size + 2)
 
-        # Pupils
-        p.setBrush(QBrush(colors["eye"]))
-        blink = abs(math.sin(self._anim_phase * 0.3))
-        pupil_h = max(1, int(eye_size * blink))
-        p.drawEllipse(QPoint(cx - eye_spacing, eye_y), eye_size - 1, pupil_h)
-        p.drawEllipse(QPoint(cx + eye_spacing, eye_y), eye_size - 1, pupil_h)
+            # Pupils
+            p.setBrush(QBrush(colors["eye"]))
+            blink = abs(math.sin(self._anim_phase * 0.3))
+            pupil_h = max(1, int(eye_size * blink))
+            p.drawEllipse(QPoint(cx - eye_spacing, eye_y), eye_size - 1, pupil_h)
+            p.drawEllipse(QPoint(cx + eye_spacing, eye_y), eye_size - 1, pupil_h)
 
-        # Eye shine
-        p.setBrush(QBrush(QColor(255, 255, 255, 200)))
-        p.drawEllipse(QPoint(cx - eye_spacing - 1, eye_y - 2), 2, 2)
-        p.drawEllipse(QPoint(cx + eye_spacing - 1, eye_y - 2), 2, 2)
+            # Eye shine
+            p.setBrush(QBrush(QColor(255, 255, 255, 200)))
+            p.drawEllipse(QPoint(cx - eye_spacing - 1, eye_y - 2), 2, 2)
+            p.drawEllipse(QPoint(cx + eye_spacing - 1, eye_y - 2), 2, 2)
 
         # ─── Mouth ───
-        mouth_y = int(cy + body_h * 0.15 + bounce)
-        p.setPen(QPen(colors["mouth"], 2))
-        p.setBrush(Qt.NoBrush)
+        has_mouth_equip = "mouth" in self._equipped_visuals
+        if not has_mouth_equip:
+            mouth_y = int(cy + body_h * 0.15 + bounce)
+            p.setPen(QPen(colors["mouth"], 2))
+            p.setBrush(Qt.NoBrush)
 
-        # Smile width grows with tier
-        smile_w = 6 + tier_index * 2
-        if tier_index >= 4:
-            # Big grin for Demon Lord+
-            p.drawArc(QRect(cx - smile_w, mouth_y - smile_w // 2, smile_w * 2, smile_w),
-                       0, -180 * 16)
-        else:
-            # Cute small smile
-            p.drawArc(QRect(cx - smile_w, mouth_y - 3, smile_w * 2, 6),
-                       0, -180 * 16)
+            # Smile width grows with tier
+            smile_w = 6 + tier_index * 2
+            if tier_index >= 4:
+                # Big grin for Demon Lord+
+                p.drawArc(QRect(cx - smile_w, mouth_y - smile_w // 2, smile_w * 2, smile_w),
+                           0, -180 * 16)
+            else:
+                # Cute small smile
+                p.drawArc(QRect(cx - smile_w, mouth_y - 3, smile_w * 2, 6),
+                           0, -180 * 16)
 
         # ─── Trait accessories (floating around slime) ───
         for i, trait in enumerate(self._traits):
@@ -265,13 +324,13 @@ class SlimeWidget(QWidget):
             p.setFont(font)
             p.drawText(QRect(ax - 10, ay - 10, 20, 20), Qt.AlignCenter, acc["symbol"])
 
-        # ─── Crown for Demon Lord+ ───
-        if tier_index >= 4:
+        # ─── Crown for Demon Lord+ (skip if helmet equipped) ───
+        has_helmet = "helmet" in self._equipped_visuals
+        if tier_index >= 4 and not has_helmet:
             crown_y = int(cy - body_h - 15 + bounce)
             crown_color = QColor(255, 215, 0) if tier_index >= 5 else QColor(200, 100, 255)
             p.setPen(QPen(crown_color, 2))
             p.setBrush(QBrush(crown_color))
-            # Simple crown shape
             pts = [
                 QPoint(cx - 15, crown_y + 8),
                 QPoint(cx - 12, crown_y),
@@ -283,5 +342,14 @@ class SlimeWidget(QWidget):
             ]
             from PySide6.QtGui import QPolygon
             p.drawPolygon(QPolygon(pts))
+
+        # ─── Equipment visuals ───
+        if self._equipped_visuals:
+            from sentinel.equipment_visuals import render_equipment
+            # Don't re-draw background (already drawn above)
+            equip_to_draw = {k: v for k, v in self._equipped_visuals.items()
+                            if k != "background"}
+            equip_ctx["p"] = p
+            render_equipment(p, equip_to_draw, equip_ctx)
 
         p.end()
