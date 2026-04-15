@@ -1,6 +1,10 @@
-"""Sentinel configuration."""
+"""AI Slime Agent configuration."""
 import os
+import json
+import logging
 from pathlib import Path
+
+_log = logging.getLogger("sentinel.config")
 
 # Telegram
 TELEGRAM_BOT_TOKEN = ""
@@ -108,3 +112,37 @@ DEFAULT_USER_MODE = "byok"
 
 # Marketplace transaction fee (percentage taken by system)
 MARKETPLACE_FEE_PERCENT = 10  # 10% on P2P trades (base rate)
+
+
+# ─── Auto-load persisted settings on import ────────────────────────
+def _load_persisted_settings():
+    """Load user settings from disk. Called once on module import."""
+    global TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, LLM_PROVIDERS
+    global CHAT_MODEL_PREF, ANALYSIS_MODEL_PREF, RELAY_SERVER_URL
+    global SYSTEM_CHECK_INTERVAL, IDLE_REPORT_INTERVAL, WATCH_DIRS
+
+    settings_file = Path.home() / ".hermes" / "sentinel_settings.json"
+    if not settings_file.exists():
+        return
+    try:
+        s = json.loads(settings_file.read_text(encoding="utf-8"))
+        TELEGRAM_BOT_TOKEN = s.get("telegram_bot_token", "") or ""
+        try:
+            TELEGRAM_CHAT_ID = int(s.get("telegram_chat_id", 0) or 0)
+        except (ValueError, TypeError):
+            TELEGRAM_CHAT_ID = 0
+        if "llm_providers" in s:
+            LLM_PROVIDERS = s["llm_providers"]
+        CHAT_MODEL_PREF = s.get("chat_model_pref", CHAT_MODEL_PREF)
+        ANALYSIS_MODEL_PREF = s.get("analysis_model_pref", ANALYSIS_MODEL_PREF)
+        RELAY_SERVER_URL = s.get("relay_server_url", RELAY_SERVER_URL)
+        SYSTEM_CHECK_INTERVAL = s.get("check_interval", SYSTEM_CHECK_INTERVAL)
+        IDLE_REPORT_INTERVAL = s.get("idle_report_interval", IDLE_REPORT_INTERVAL)
+        if "watch_dirs" in s:
+            WATCH_DIRS = [Path(d) for d in s["watch_dirs"]]
+        _log.debug("Settings loaded from %s", settings_file)
+    except Exception as e:
+        _log.warning("Failed to load settings: %s", e)
+
+
+_load_persisted_settings()

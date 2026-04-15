@@ -125,6 +125,216 @@ class ChatTab(QWidget):
         self.send_btn.setText(t("chat_send"))
 
 
+# ─── Home Tab (首頁) ─────────────────────────────────────────────────────
+
+class HomeTab(QWidget):
+    """首頁：史萊姆狀態總覽 + 錢包連結。"""
+
+    def __init__(self):
+        super().__init__()
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+
+        # ── 歡迎區 ──
+        welcome = QLabel(
+            "<b style='font-size:20px; color:#00dcff;'>AI Slime Agent</b><br>"
+            "<span style='color:#aaa;'>你的轉生守護靈，正在觀察並學習中</span>"
+        )
+        welcome.setAlignment(Qt.AlignCenter)
+        layout.addWidget(welcome)
+
+        # ── 狀態卡片 ──
+        cards = QHBoxLayout()
+        cards.setSpacing(12)
+
+        self.evo_card = self._make_card("🧬 進化", "載入中...")
+        cards.addWidget(self.evo_card["frame"])
+
+        self.obs_card = self._make_card("👁 觀察", "載入中...")
+        cards.addWidget(self.obs_card["frame"])
+
+        self.equip_card = self._make_card("⚔ 裝備", "載入中...")
+        cards.addWidget(self.equip_card["frame"])
+
+        layout.addLayout(cards)
+
+        # ── 錢包區 ──
+        wallet_group = QGroupBox("💰 錢包")
+        wallet_group.setStyleSheet(
+            "QGroupBox { color: #ffa502; font-weight: bold; border: 1px solid #333; "
+            "border-radius: 6px; padding: 12px; margin-top: 8px; }"
+            "QGroupBox::title { subcontrol-position: top left; padding: 4px 8px; }"
+        )
+        wl = QVBoxLayout(wallet_group)
+
+        self.wallet_status = QLabel("模式：自備金鑰（BYOK）")
+        self.wallet_status.setStyleSheet("color: #ccc; font-size: 13px;")
+        wl.addWidget(self.wallet_status)
+
+        self.balance_label = QLabel("")
+        self.balance_label.setStyleSheet("color: #2ed573; font-size: 14px;")
+        wl.addWidget(self.balance_label)
+
+        btn_row = QHBoxLayout()
+        self.login_btn = QPushButton(t("wallet_login"))
+        self.login_btn.clicked.connect(self._on_login)
+        btn_row.addWidget(self.login_btn)
+
+        self.topup_btn = QPushButton(t("wallet_topup"))
+        self.topup_btn.clicked.connect(self._on_topup)
+        btn_row.addWidget(self.topup_btn)
+
+        self.wallet_link_btn = QPushButton(t("wallet_link"))
+        self.wallet_link_btn.clicked.connect(self._on_wallet_link)
+        btn_row.addWidget(self.wallet_link_btn)
+
+        btn_row.addStretch()
+        wl.addLayout(btn_row)
+        layout.addWidget(wallet_group)
+
+        # ── LLM 狀態 ──
+        llm_group = QGroupBox("🤖 LLM 連線狀態")
+        llm_group.setStyleSheet(
+            "QGroupBox { color: #00dcff; font-weight: bold; border: 1px solid #333; "
+            "border-radius: 6px; padding: 12px; margin-top: 8px; }"
+            "QGroupBox::title { subcontrol-position: top left; padding: 4px 8px; }"
+        )
+        ll = QVBoxLayout(llm_group)
+        self.llm_status = QLabel("檢查中...")
+        self.llm_status.setStyleSheet("color: #ccc; font-size: 12px;")
+        self.llm_status.setWordWrap(True)
+        ll.addWidget(self.llm_status)
+        layout.addWidget(llm_group)
+
+        layout.addStretch()
+        self.refresh()
+
+    def _make_card(self, title: str, value: str) -> dict:
+        frame = QFrame()
+        frame.setStyleSheet(
+            "QFrame { background-color: rgba(255,255,255,0.05); "
+            "border: 1px solid #333; border-radius: 8px; padding: 12px; }"
+        )
+        fl = QVBoxLayout(frame)
+        fl.setSpacing(4)
+        title_lbl = QLabel(title)
+        title_lbl.setStyleSheet("color: #888; font-size: 11px;")
+        title_lbl.setAlignment(Qt.AlignCenter)
+        fl.addWidget(title_lbl)
+        value_lbl = QLabel(value)
+        value_lbl.setStyleSheet("color: #fff; font-size: 16px; font-weight: bold;")
+        value_lbl.setAlignment(Qt.AlignCenter)
+        fl.addWidget(value_lbl)
+        return {"frame": frame, "value": value_lbl}
+
+    def refresh(self):
+        try:
+            from sentinel.evolution import load_evolution
+            evo = load_evolution()
+            self.evo_card["value"].setText(f"{evo.title}")
+            self.obs_card["value"].setText(f"{evo.total_observations:,}")
+        except Exception:
+            pass
+
+        try:
+            from sentinel.wallet.equipment import load_equipment
+            eq = load_equipment()
+            equipped_count = sum(1 for v in eq.equipped.values() if v)
+            inv_count = len(eq.inventory)
+            self.equip_card["value"].setText(f"裝備 {equipped_count} / 背包 {inv_count}")
+        except Exception:
+            pass
+
+        # LLM status
+        lines = []
+        for p in config.LLM_PROVIDERS:
+            name = p.get("name", "?")
+            has_key = bool(p.get("api_key"))
+            enabled = p.get("enabled", False)
+            if enabled and has_key:
+                lines.append(f"✅ {name}")
+            elif enabled and not has_key:
+                lines.append(f"⚠️ {name}（未設定金鑰）")
+        if not lines:
+            lines.append("⚠️ 未設定任何 LLM provider，請到魔法陣設定")
+        self.llm_status.setText("  |  ".join(lines))
+
+        # Wallet status
+        try:
+            from sentinel.wallet.quota import QuotaManager
+            qm = QuotaManager(config.RELAY_SERVER_URL)
+            if qm.is_logged_in():
+                self.wallet_status.setText(f"模式：點數制  |  UID: {qm.uid()}")
+                balance = qm.get_balance()
+                if balance is not None:
+                    self.balance_label.setText(f"餘額：{balance:,} 點")
+                else:
+                    self.balance_label.setText("餘額：查詢中...")
+            else:
+                self.wallet_status.setText("模式：自備金鑰（BYOK）")
+                self.balance_label.setText("")
+        except Exception:
+            self.wallet_status.setText("模式：自備金鑰（BYOK）")
+
+    def _on_login(self):
+        QMessageBox.information(self, "AI Slime", "Google 登入功能尚在開發中。\n目前請使用自備金鑰（BYOK）模式。")
+
+    def _on_topup(self):
+        QMessageBox.information(self, "AI Slime", "儲值功能尚在開發中。")
+
+    def _on_wallet_link(self):
+        QMessageBox.information(self, "AI Slime", "錢包頁面尚在開發中。")
+
+    def retranslate(self):
+        self.login_btn.setText(t("wallet_login"))
+        self.topup_btn.setText(t("wallet_topup"))
+        self.wallet_link_btn.setText(t("wallet_link"))
+
+
+# ─── Market Tab (市場) ───────────────────────────────────────────────────
+
+class MarketTab(QWidget):
+    """市場頁籤 — 建構中。"""
+
+    def __init__(self):
+        super().__init__()
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+
+        # 建構中提示
+        icon_label = QLabel("🏪")
+        icon_label.setStyleSheet("font-size: 48px;")
+        icon_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(icon_label)
+
+        title = QLabel("<b style='font-size:18px; color:#ffa502;'>跳蚤市場</b>")
+        title.setAlignment(Qt.AlignCenter)
+        layout.addWidget(title)
+
+        desc = QLabel(
+            "<span style='color:#aaa; font-size:13px;'>"
+            "裝備交易市場正在建構中...<br><br>"
+            "即將推出的功能：<br>"
+            "• P2P 裝備交易<br>"
+            "• 社群 Sprite 投票（10 點 / 票）<br>"
+            "• 創作者收益分潤<br>"
+            "• 限定裝備拍賣"
+            "</span>"
+        )
+        desc.setAlignment(Qt.AlignCenter)
+        desc.setWordWrap(True)
+        layout.addWidget(desc)
+
+        layout.addStretch()
+
+    def retranslate(self):
+        pass
+
+    def refresh(self):
+        pass
+
+
 # ─── Equipment Tab (裝備庫) ──────────────────────────────────────────────
 
 class EquipmentTab(QWidget):
@@ -1884,19 +2094,23 @@ class MainWindow(QMainWindow):
 
         # Tabs
         self.tabs = QTabWidget()
+        self.home_tab = HomeTab()
         self.chat_tab = ChatTab(self.bridge)
         self.memory_tab = MemoryTab()
         self.evolution_tab = EvolutionTab()
         self.equipment_tab = EquipmentTab()
+        self.market_tab = MarketTab()
         self.settings_tab = SettingsTab()
 
         # 裝備變更時刷新形象
         self.equipment_tab.equipment_changed.connect(self.evolution_tab.refresh)
 
+        self.tabs.addTab(self.home_tab, t("tab_home"))
         self.tabs.addTab(self.evolution_tab, t("tab_evolution"))
         self.tabs.addTab(self.equipment_tab, t("tab_equipment"))
         self.tabs.addTab(self.chat_tab, t("tab_chat"))
         self.tabs.addTab(self.memory_tab, t("tab_memory"))
+        self.tabs.addTab(self.market_tab, t("tab_market"))
         self.tabs.addTab(self.settings_tab, t("tab_settings"))
 
         main_layout.addWidget(self.tabs)
@@ -1950,7 +2164,8 @@ class MainWindow(QMainWindow):
         self.evo_timer = QTimer()
         self.evo_timer.timeout.connect(self.evolution_tab.refresh)
         self.evo_timer.timeout.connect(self.equipment_tab.refresh)
-        self.evo_timer.start(30000)  # 每 30 秒刷新進化和裝備
+        self.evo_timer.timeout.connect(self.home_tab.refresh)
+        self.evo_timer.start(30000)  # 每 30 秒刷新進化、裝備、首頁
 
         # Daemon state - auto awaken on launch
         self.daemon_thread = None
@@ -1997,7 +2212,7 @@ class MainWindow(QMainWindow):
         tray_menu.addAction(show_action)
 
         settings_action = QAction(t("tab_settings"), self)
-        settings_action.triggered.connect(lambda: (self._show_window(), self.tabs.setCurrentIndex(4)))
+        settings_action.triggered.connect(lambda: (self._show_window(), self.tabs.setCurrentIndex(6)))
         tray_menu.addAction(settings_action)
 
         tray_menu.addSeparator()
@@ -2531,11 +2746,14 @@ class MainWindow(QMainWindow):
         accent = theme["accent"]
         self.title_label.setText(f"<b style='color:{accent}; font-size:18px;'>AI Slime Agent</b>"
                                  f"  <span style='color:#666;'>{t('app_subtitle')}</span>")
-        self.tabs.setTabText(0, t("tab_evolution"))
-        self.tabs.setTabText(1, t("tab_equipment"))
-        self.tabs.setTabText(2, t("tab_chat"))
-        self.tabs.setTabText(3, t("tab_memory"))
-        self.tabs.setTabText(4, t("tab_settings"))
+        self.tabs.setTabText(0, t("tab_home"))
+        self.tabs.setTabText(1, t("tab_evolution"))
+        self.tabs.setTabText(2, t("tab_equipment"))
+        self.tabs.setTabText(3, t("tab_chat"))
+        self.tabs.setTabText(4, t("tab_memory"))
+        self.tabs.setTabText(5, t("tab_market"))
+        self.tabs.setTabText(6, t("tab_settings"))
+        self.home_tab.retranslate()
         self.chat_tab.retranslate()
         self.memory_tab.retranslate()
         self.evolution_tab.retranslate()
