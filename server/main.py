@@ -1,8 +1,11 @@
 """AI Slime Agent Relay Server."""
 import logging
+from pathlib import Path
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from server import config
 from server.db.engine import init_db, close_db
 
@@ -49,6 +52,15 @@ app.include_router(wallet_router)
 app.include_router(images_router)
 app.include_router(equipment_router)
 app.include_router(marketplace_router)
+
+
+# Serve web frontend
+_public = Path(__file__).parent / "public"
+
+
+@app.get("/market")
+async def market_page():
+    return FileResponse(_public / "market.html")
 
 
 @app.get("/health")
