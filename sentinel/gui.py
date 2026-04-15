@@ -295,44 +295,434 @@ class HomeTab(QWidget):
 # ─── Market Tab (市場) ───────────────────────────────────────────────────
 
 class MarketTab(QWidget):
-    """市場頁籤 — 建構中。"""
+    """市場頁籤 — 投票區 + 交易市場。"""
 
     def __init__(self):
         super().__init__()
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(4)
 
-        # 建構中提示
-        icon_label = QLabel("🏪")
-        icon_label.setStyleSheet("font-size: 48px;")
-        icon_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(icon_label)
+        # ── Sub-tabs: 投票 / 市場 ──
+        self.sub_tabs = QTabWidget()
+        self.sub_tabs.setStyleSheet("QTabBar::tab { padding: 6px 16px; }")
+        layout.addWidget(self.sub_tabs)
 
-        title = QLabel("<b style='font-size:18px; color:#ffa502;'>跳蚤市場</b>")
-        title.setAlignment(Qt.AlignCenter)
-        layout.addWidget(title)
+        self.vote_tab = self._build_vote_tab()
+        self.trade_tab = self._build_trade_tab()
+        self.sub_tabs.addTab(self.vote_tab, "🗳 社群投票")
+        self.sub_tabs.addTab(self.trade_tab, "💰 裝備交易")
 
-        desc = QLabel(
-            "<span style='color:#aaa; font-size:13px;'>"
-            "裝備交易市場正在建構中...<br><br>"
-            "即將推出的功能：<br>"
-            "• P2P 裝備交易<br>"
-            "• 社群 Sprite 投票（10 點 / 票）<br>"
-            "• 創作者收益分潤<br>"
-            "• 限定裝備拍賣"
-            "</span>"
+        # Status bar
+        self.status_label = QLabel("")
+        self.status_label.setStyleSheet("color: #888; font-size: 11px; padding: 2px;")
+        layout.addWidget(self.status_label)
+
+    # ── Vote Tab ─────────────────────────────────────────────────────
+
+    def _build_vote_tab(self) -> QWidget:
+        w = QWidget()
+        layout = QVBoxLayout(w)
+        layout.setContentsMargins(8, 8, 8, 8)
+
+        # Filter row
+        filter_row = QHBoxLayout()
+        self.vote_slot_filter = QComboBox()
+        self.vote_slot_filter.addItem("全部欄位", "")
+        for slot, name in [
+            ("helmet", "頭盔"), ("eyes", "眼睛"), ("mouth", "嘴巴"),
+            ("skin", "皮膚"), ("background", "背景"), ("core", "晶核"),
+            ("left_hand", "左手"), ("right_hand", "右手"),
+            ("mount", "載具"), ("vfx", "特效"), ("drone", "精靈"), ("title", "稱號"),
+        ]:
+            self.vote_slot_filter.addItem(name, slot)
+        filter_row.addWidget(QLabel("欄位:"))
+        filter_row.addWidget(self.vote_slot_filter)
+
+        self.vote_refresh_btn = QPushButton("重新整理")
+        self.vote_refresh_btn.clicked.connect(self._load_submissions)
+        filter_row.addWidget(self.vote_refresh_btn)
+        filter_row.addStretch()
+        layout.addLayout(filter_row)
+
+        # Submission list (scroll area)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { border: none; }")
+        self.vote_list_widget = QWidget()
+        self.vote_list_layout = QVBoxLayout(self.vote_list_widget)
+        self.vote_list_layout.setSpacing(8)
+        self.vote_list_layout.addStretch()
+        scroll.setWidget(self.vote_list_widget)
+        layout.addWidget(scroll)
+
+        # Page controls
+        page_row = QHBoxLayout()
+        self.vote_page = 1
+        self.vote_prev_btn = QPushButton("← 上一頁")
+        self.vote_prev_btn.clicked.connect(lambda: self._change_vote_page(-1))
+        self.vote_next_btn = QPushButton("下一頁 →")
+        self.vote_next_btn.clicked.connect(lambda: self._change_vote_page(1))
+        self.vote_page_label = QLabel("第 1 頁")
+        self.vote_page_label.setAlignment(Qt.AlignCenter)
+        page_row.addWidget(self.vote_prev_btn)
+        page_row.addWidget(self.vote_page_label)
+        page_row.addWidget(self.vote_next_btn)
+        layout.addLayout(page_row)
+
+        return w
+
+    # ── Trade Tab ────────────────────────────────────────────────────
+
+    def _build_trade_tab(self) -> QWidget:
+        w = QWidget()
+        layout = QVBoxLayout(w)
+        layout.setContentsMargins(8, 8, 8, 8)
+
+        # Filter row
+        filter_row = QHBoxLayout()
+        self.trade_slot_filter = QComboBox()
+        self.trade_slot_filter.addItem("全部欄位", "")
+        for slot, name in [
+            ("helmet", "頭盔"), ("eyes", "眼睛"), ("mouth", "嘴巴"),
+            ("skin", "皮膚"), ("background", "背景"), ("core", "晶核"),
+            ("left_hand", "左手"), ("right_hand", "右手"),
+            ("mount", "載具"), ("vfx", "特效"), ("drone", "精靈"), ("title", "稱號"),
+        ]:
+            self.trade_slot_filter.addItem(name, slot)
+        filter_row.addWidget(QLabel("欄位:"))
+        filter_row.addWidget(self.trade_slot_filter)
+
+        self.trade_rarity_filter = QComboBox()
+        self.trade_rarity_filter.addItem("全部稀有度", "")
+        for r, name in [
+            ("common", "普通"), ("uncommon", "優良"), ("rare", "稀有"),
+            ("epic", "史詩"), ("legendary", "傳說"), ("mythic", "神話"),
+            ("ultimate", "究極"),
+        ]:
+            self.trade_rarity_filter.addItem(name, r)
+        filter_row.addWidget(QLabel("稀有度:"))
+        filter_row.addWidget(self.trade_rarity_filter)
+
+        self.trade_refresh_btn = QPushButton("重新整理")
+        self.trade_refresh_btn.clicked.connect(self._load_listings)
+        filter_row.addWidget(self.trade_refresh_btn)
+        filter_row.addStretch()
+        layout.addLayout(filter_row)
+
+        # Listing list
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { border: none; }")
+        self.trade_list_widget = QWidget()
+        self.trade_list_layout = QVBoxLayout(self.trade_list_widget)
+        self.trade_list_layout.setSpacing(8)
+        self.trade_list_layout.addStretch()
+        scroll.setWidget(self.trade_list_widget)
+        layout.addWidget(scroll)
+
+        # Page controls
+        page_row = QHBoxLayout()
+        self.trade_page = 1
+        self.trade_prev_btn = QPushButton("← 上一頁")
+        self.trade_prev_btn.clicked.connect(lambda: self._change_trade_page(-1))
+        self.trade_next_btn = QPushButton("下一頁 →")
+        self.trade_next_btn.clicked.connect(lambda: self._change_trade_page(1))
+        self.trade_page_label = QLabel("第 1 頁")
+        self.trade_page_label.setAlignment(Qt.AlignCenter)
+        page_row.addWidget(self.trade_prev_btn)
+        page_row.addWidget(self.trade_page_label)
+        page_row.addWidget(self.trade_next_btn)
+        layout.addLayout(page_row)
+
+        return w
+
+    # ── Data Loading ─────────────────────────────────────────────────
+
+    def _load_submissions(self):
+        """Load pending submissions from relay server."""
+        from sentinel import relay_client
+        slot = self.vote_slot_filter.currentData() or ""
+        try:
+            data = relay_client.get_submissions(
+                status="pending", slot=slot, page=self.vote_page,
+            )
+            self._render_submissions(data.get("items", []), data.get("total", 0))
+            self.status_label.setText(
+                f"投票區：共 {data.get('total', 0)} 件作品"
+            )
+        except relay_client.RelayError as e:
+            self._show_empty_vote(f"無法連線：{e.message}")
+        except Exception as e:
+            self._show_empty_vote(f"錯誤：{e}")
+
+    def _load_listings(self):
+        """Load marketplace listings from relay server."""
+        from sentinel import relay_client
+        slot = self.trade_slot_filter.currentData() or ""
+        rarity = self.trade_rarity_filter.currentData() or ""
+        try:
+            data = relay_client.get_listings(
+                slot=slot, rarity=rarity, page=self.trade_page,
+            )
+            self._render_listings(data.get("items", []), data.get("total", 0))
+            self.status_label.setText(
+                f"市場：共 {data.get('total', 0)} 件上架"
+            )
+        except relay_client.RelayError as e:
+            self._show_empty_trade(f"無法連線：{e.message}")
+        except Exception as e:
+            self._show_empty_trade(f"錯誤：{e}")
+
+    # ── Rendering ────────────────────────────────────────────────────
+
+    RARITY_COLORS = {
+        "common": "#aaa", "uncommon": "#2ed573", "rare": "#1e90ff",
+        "epic": "#a855f7", "legendary": "#ffa502", "mythic": "#ff4757",
+        "ultimate": "#ffd700",
+    }
+
+    def _clear_layout(self, layout):
+        while layout.count() > 0:
+            item = layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+    def _render_submissions(self, items: list, total: int):
+        self._clear_layout(self.vote_list_layout)
+        if not items:
+            self._show_empty_vote("目前沒有待投票的作品")
+            return
+
+        for item in items:
+            card = self._make_submission_card(item)
+            self.vote_list_layout.addWidget(card)
+        self.vote_list_layout.addStretch()
+
+        total_pages = max(1, (total + 19) // 20)
+        self.vote_page_label.setText(f"第 {self.vote_page} / {total_pages} 頁")
+        self.vote_prev_btn.setEnabled(self.vote_page > 1)
+        self.vote_next_btn.setEnabled(self.vote_page < total_pages)
+
+    def _make_submission_card(self, item: dict) -> QFrame:
+        card = QFrame()
+        rarity = item.get("rarity", "common")
+        color = self.RARITY_COLORS.get(rarity, "#aaa")
+        card.setStyleSheet(
+            f"QFrame {{ background: rgba(255,255,255,0.04); "
+            f"border: 1px solid {color}; border-radius: 6px; padding: 8px; }}"
         )
-        desc.setAlignment(Qt.AlignCenter)
-        desc.setWordWrap(True)
-        layout.addWidget(desc)
+        layout = QHBoxLayout(card)
+        layout.setSpacing(12)
 
-        layout.addStretch()
+        # Info
+        info = QVBoxLayout()
+        name_lbl = QLabel(
+            f"<b style='color:{color};'>[{item.get('rarity', '?')}]</b> "
+            f"<b>{item.get('name', '?')}</b>"
+        )
+        info.addWidget(name_lbl)
+
+        slot_zh = {
+            "helmet": "頭盔", "eyes": "眼睛", "mouth": "嘴巴",
+            "left_hand": "左手", "right_hand": "右手", "skin": "皮膚",
+            "background": "背景", "core": "晶核", "mount": "載具",
+            "vfx": "特效", "drone": "精靈", "title": "稱號",
+        }
+        detail_lbl = QLabel(
+            f"<span style='color:#888;'>"
+            f"欄位: {slot_zh.get(item.get('slot', ''), '?')} | "
+            f"創作者: {item.get('creator_name', '?')} | "
+            f"{item.get('description', '')}"
+            f"</span>"
+        )
+        detail_lbl.setWordWrap(True)
+        info.addWidget(detail_lbl)
+
+        # Buff display
+        buff = item.get("buff")
+        if buff:
+            buff_text = " | ".join(f"{k}: +{v}" for k, v in buff.items())
+            buff_lbl = QLabel(f"<span style='color:#2ed573;'>Buff: {buff_text}</span>")
+            info.addWidget(buff_lbl)
+
+        layout.addLayout(info, stretch=1)
+
+        # Vote section
+        vote_box = QVBoxLayout()
+        vote_count = item.get("vote_count", 0)
+        threshold = item.get("vote_threshold", 10)
+        progress_lbl = QLabel(
+            f"<b style='color:#ffa502;'>{vote_count}/{threshold}</b> 票"
+        )
+        progress_lbl.setAlignment(Qt.AlignCenter)
+        vote_box.addWidget(progress_lbl)
+
+        vote_bar = QProgressBar()
+        vote_bar.setRange(0, threshold)
+        vote_bar.setValue(min(vote_count, threshold))
+        vote_bar.setFixedWidth(80)
+        vote_bar.setTextVisible(False)
+        vote_bar.setStyleSheet(
+            "QProgressBar { background: #333; border-radius: 3px; height: 6px; }"
+            "QProgressBar::chunk { background: #ffa502; border-radius: 3px; }"
+        )
+        vote_box.addWidget(vote_bar)
+
+        if item.get("user_voted"):
+            voted_lbl = QLabel("<span style='color:#2ed573;'>已投票</span>")
+            voted_lbl.setAlignment(Qt.AlignCenter)
+            vote_box.addWidget(voted_lbl)
+        else:
+            vote_btn = QPushButton("投票 (10pt)")
+            vote_btn.setStyleSheet(
+                "QPushButton { background: #ffa502; color: #000; "
+                "border-radius: 4px; padding: 4px 12px; font-weight: bold; }"
+                "QPushButton:hover { background: #e69500; }"
+            )
+            sub_id = item.get("id", "")
+            vote_btn.clicked.connect(lambda checked, sid=sub_id: self._do_vote(sid))
+            vote_box.addWidget(vote_btn)
+
+        layout.addLayout(vote_box)
+        return card
+
+    def _render_listings(self, items: list, total: int):
+        self._clear_layout(self.trade_list_layout)
+        if not items:
+            self._show_empty_trade("目前市場上沒有商品")
+            return
+
+        for item in items:
+            card = self._make_listing_card(item)
+            self.trade_list_layout.addWidget(card)
+        self.trade_list_layout.addStretch()
+
+        total_pages = max(1, (total + 19) // 20)
+        self.trade_page_label.setText(f"第 {self.trade_page} / {total_pages} 頁")
+        self.trade_prev_btn.setEnabled(self.trade_page > 1)
+        self.trade_next_btn.setEnabled(self.trade_page < total_pages)
+
+    def _make_listing_card(self, item: dict) -> QFrame:
+        card = QFrame()
+        rarity = item.get("rarity", "common")
+        color = self.RARITY_COLORS.get(rarity, "#aaa")
+        card.setStyleSheet(
+            f"QFrame {{ background: rgba(255,255,255,0.04); "
+            f"border: 1px solid {color}; border-radius: 6px; padding: 8px; }}"
+        )
+        layout = QHBoxLayout(card)
+
+        # Info
+        info = QVBoxLayout()
+        name_lbl = QLabel(
+            f"<b style='color:{color};'>[{rarity}]</b> "
+            f"<b>{item.get('template_name', '?')}</b>"
+        )
+        info.addWidget(name_lbl)
+
+        slot_zh = {
+            "helmet": "頭盔", "eyes": "眼睛", "mouth": "嘴巴",
+            "left_hand": "左手", "right_hand": "右手", "skin": "皮膚",
+            "background": "背景", "core": "晶核", "mount": "載具",
+            "vfx": "特效", "drone": "精靈", "title": "稱號",
+        }
+        detail_lbl = QLabel(
+            f"<span style='color:#888;'>"
+            f"欄位: {slot_zh.get(item.get('slot', ''), '?')} | "
+            f"賣家: {item.get('seller_name', '?')}"
+            f"</span>"
+        )
+        info.addWidget(detail_lbl)
+        layout.addLayout(info, stretch=1)
+
+        # Price + buy
+        buy_box = QVBoxLayout()
+        price_lbl = QLabel(
+            f"<b style='color:#ffd700; font-size:16px;'>"
+            f"{item.get('price', 0):,} 點</b>"
+        )
+        price_lbl.setAlignment(Qt.AlignCenter)
+        buy_box.addWidget(price_lbl)
+
+        buy_btn = QPushButton("購買")
+        buy_btn.setStyleSheet(
+            "QPushButton { background: #2ed573; color: #000; "
+            "border-radius: 4px; padding: 4px 16px; font-weight: bold; }"
+            "QPushButton:hover { background: #26b863; }"
+        )
+        listing_id = item.get("id", "")
+        buy_btn.clicked.connect(
+            lambda checked, lid=listing_id: self._do_buy(lid)
+        )
+        buy_box.addWidget(buy_btn)
+        layout.addLayout(buy_box)
+
+        return card
+
+    # ── Actions ──────────────────────────────────────────────────────
+
+    def _do_vote(self, submission_id: str):
+        from sentinel import relay_client
+        try:
+            result = relay_client.vote(submission_id)
+            msg = f"投票成功！({result.get('vote_count', '?')}/{result.get('vote_threshold', '?')})"
+            if result.get("approved"):
+                msg += "\n這個作品已通過投票，加入裝備池了！"
+            QMessageBox.information(self, "投票", msg)
+            self._load_submissions()
+        except relay_client.RelayError as e:
+            QMessageBox.warning(self, "投票失敗", e.message)
+
+    def _do_buy(self, listing_id: str):
+        from sentinel import relay_client
+        reply = QMessageBox.question(
+            self, "確認購買", "確定要購買這個裝備嗎？",
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        try:
+            result = relay_client.buy_listing(listing_id)
+            QMessageBox.information(
+                self, "購買成功",
+                f"已購買 {result.get('item_name', '?')}\n"
+                f"花費 {result.get('price', 0):,} 點",
+            )
+            self._load_listings()
+        except relay_client.RelayError as e:
+            QMessageBox.warning(self, "購買失敗", e.message)
+
+    # ── Helpers ──────────────────────────────────────────────────────
+
+    def _show_empty_vote(self, msg: str):
+        self._clear_layout(self.vote_list_layout)
+        lbl = QLabel(f"<span style='color:#888; font-size:13px;'>{msg}</span>")
+        lbl.setAlignment(Qt.AlignCenter)
+        self.vote_list_layout.addWidget(lbl)
+        self.vote_list_layout.addStretch()
+
+    def _show_empty_trade(self, msg: str):
+        self._clear_layout(self.trade_list_layout)
+        lbl = QLabel(f"<span style='color:#888; font-size:13px;'>{msg}</span>")
+        lbl.setAlignment(Qt.AlignCenter)
+        self.trade_list_layout.addWidget(lbl)
+        self.trade_list_layout.addStretch()
+
+    def _change_vote_page(self, delta: int):
+        self.vote_page = max(1, self.vote_page + delta)
+        self._load_submissions()
+
+    def _change_trade_page(self, delta: int):
+        self.trade_page = max(1, self.trade_page + delta)
+        self._load_listings()
 
     def retranslate(self):
-        pass
+        self.sub_tabs.setTabText(0, "🗳 社群投票")
+        self.sub_tabs.setTabText(1, "💰 裝備交易")
 
     def refresh(self):
-        pass
+        pass  # Don't auto-refresh network calls on timer
 
 
 # ─── Equipment Tab (裝備庫) ──────────────────────────────────────────────
