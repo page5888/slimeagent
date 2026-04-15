@@ -664,8 +664,8 @@ class EvolutionTab(QWidget):
         avatar_page = QWidget()
         avatar_layout = QVBoxLayout(avatar_page)
 
-        from sentinel.sprite_renderer import SpriteAvatarWidget
-        self.slime_widget = SpriteAvatarWidget()
+        from sentinel.slime_avatar import SlimeWidget
+        self.slime_widget = SlimeWidget()
         self.slime_widget.setMinimumHeight(260)
         avatar_layout.addWidget(self.slime_widget)
 
