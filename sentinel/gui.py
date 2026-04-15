@@ -2247,114 +2247,114 @@ class MainWindow(QMainWindow):
                     if input_act:
                         ctx += "\n\n" + input_act
 
-                        # 千里眼：隨機截圖觀察
-                        screen_act = ""
-                        if screen_watcher.should_capture():
-                            screen_obs = screen_watcher.capture_and_learn()
-                            if screen_obs:
-                                screen_act = screen_obs["analysis"]
-                                ctx += "\n\n=== 螢幕觀察（千里眼）===\n" + screen_act
+                    # 千里眼：隨機截圖觀察
+                    screen_act = ""
+                    if screen_watcher.should_capture():
+                        screen_obs = screen_watcher.capture_and_learn()
+                        if screen_obs:
+                            screen_act = screen_obs["analysis"]
+                            ctx += "\n\n=== 螢幕觀察（千里眼）===\n" + screen_act
 
-                        # 更新底部狀態列（第一行：主狀態 + 倒數計時）
-                        import datetime as _dt
-                        _now_str = _dt.datetime.now().strftime("%H:%M:%S")
-                        _next_sense = config.SYSTEM_CHECK_INTERVAL
-                        _next_distill = max(0, int(300 - (now - last_distill)))
-                        _next_report = max(0, int(config.IDLE_REPORT_INTERVAL - (now - last_idle)))
-                        _buf_count = len(activity_buf)
-                        _status = (
-                            f"● 觀察中　|　{_now_str}　|　"
-                            f"總觀察 {evo.total_observations:,}　|　"
-                            f"學習 {evo.total_learnings}　|　"
-                            f"緩衝 {_buf_count} 筆　|　"
-                            f"感知 {_next_sense}s　|　"
-                            f"蒸餾 {_next_distill}s　|　"
-                            f"報告 {_next_report}s"
+                    # 更新底部狀態列（第一行：主狀態 + 倒數計時）
+                    import datetime as _dt
+                    _now_str = _dt.datetime.now().strftime("%H:%M:%S")
+                    _next_sense = config.SYSTEM_CHECK_INTERVAL
+                    _next_distill = max(0, int(300 - (now - last_distill)))
+                    _next_report = max(0, int(config.IDLE_REPORT_INTERVAL - (now - last_idle)))
+                    _buf_count = len(activity_buf)
+                    _status = (
+                        f"● 觀察中　|　{_now_str}　|　"
+                        f"總觀察 {evo.total_observations:,}　|　"
+                        f"學習 {evo.total_learnings}　|　"
+                        f"緩衝 {_buf_count} 筆　|　"
+                        f"感知 {_next_sense}s　|　"
+                        f"蒸餾 {_next_distill}s　|　"
+                        f"報告 {_next_report}s"
+                    )
+                    self.bridge.status_update.emit(_status)
+
+                    # 第二行：感測器即時狀態
+                    _sensors = []
+                    _file_count = len(file_events) if file_events else 0
+                    _sensors.append(f"📁檔案:{_file_count}件" if _file_count else "📁檔案:-")
+                    _kb_text = input_tracker.get_typing_summary(5)
+                    _ms_text = input_tracker.get_click_summary(5)
+                    _kb_status = "✓" if _kb_text else "-"
+                    _ms_status = "✓" if _ms_text else "-"
+                    _sensors.append(f"⌨鍵盤:{_kb_status}")
+                    _sensors.append(f"🖱滑鼠:{_ms_status}")
+                    _sensors.append("👁截圖:✓" if screen_act else "👁截圖:-")
+                    _sensors.append("🪟視窗:✓" if user_act else "🪟視窗:-")
+                    _sensors.append("🤖Claude:✓" if claude_act else "🤖Claude:-")
+                    _sensor_line = "  ".join(_sensors)
+                    self.bridge.sensor_update.emit(_sensor_line)
+
+                    # Track observations for evolution - with source breakdown
+                    exp_sources = {"system": 1}
+                    if file_events:
+                        exp_sources["files"] = len(file_events)
+                    if claude_act:
+                        exp_sources["claude"] = 1
+                    if user_act:
+                        exp_sources["activity"] = 1
+                    if input_act:
+                        exp_sources["input"] = 1
+                    if screen_act:
+                        exp_sources["screen"] = 1
+                    obs_count = sum(exp_sources.values())
+                    # Apply equipment EXP buff
+                    exp_mult = get_exp_multiplier(equip_state)
+                    if exp_mult > 1.0:
+                        obs_count = int(obs_count * exp_mult)
+                    # Feed activity to adaptive evolution
+                    record_activity_affinities(evo, user_act + "\n" + (input_act or ""))
+                    record_observation(evo, obs_count, sources=exp_sources)
+
+                    # 裝備掉落：每 100 次觀察有機會
+                    obs_since_drop += obs_count
+                    if obs_since_drop >= 100:
+                        obs_since_drop = 0
+                        drop = try_drop(equip_state, "observation_100")
+                        if drop:
+                            drop_msg = (f"🎁 *裝備掉落！*\n"
+                                        f"[{drop['rarity_zh']}] {drop['name']}\n"
+                                        f"部位：{drop['slot_zh']}\n"
+                                        f"{drop['desc']}")
+                            send_notification(drop_msg, category="equipment")
+                            self.bridge.status_update.emit(f"🎁 獲得裝備：{drop['name']}")
+
+                    # ── 主動建議引擎 ──
+                    if input_act:
+                        advisor.record_input_activity()
+
+                    # 計算最近視窗切換次數
+                    _recent_switches = 0
+                    try:
+                        _recent_switches = tracker.get_switch_count(minutes=10)
+                    except (AttributeError, Exception):
+                        pass
+
+                    _adv_ctx = AdvisorContext(
+                        cpu_percent=snapshot.cpu_percent,
+                        ram_percent=snapshot.ram_percent,
+                        disk_percent=snapshot.disk_percent,
+                        active_app=tracker.current_app_name() if hasattr(tracker, 'current_app_name') else "",
+                        app_duration_minutes=tracker.current_app_duration() / 60 if hasattr(tracker, 'current_app_duration') else 0,
+                        recent_app_switches=_recent_switches,
+                        profile=_load_learner_memory().get("profile", ""),
+                        patterns=_load_learner_memory().get("patterns", {}),
+                        dominant_traits=evo.dominant_traits,
+                        evolution_title=evo.title,
+                        total_observations=evo.total_observations,
+                    )
+                    for advice in advisor.evaluate(_adv_ctx):
+                        _adv_emoji = advice.get("emoji", "💡")
+                        _adv_msg = advice["message"]
+                        self.bridge.advice_received.emit(_adv_emoji, _adv_msg)
+                        send_notification(
+                            f"{_adv_emoji} *AI Slime 的建議*\n{_adv_msg}",
+                            category=advice["type"],
                         )
-                        self.bridge.status_update.emit(_status)
-
-                        # 第二行：感測器即時狀態
-                        _sensors = []
-                        _file_count = len(file_events) if file_events else 0
-                        _sensors.append(f"📁檔案:{_file_count}件" if _file_count else "📁檔案:-")
-                        _kb_text = input_tracker.get_typing_summary(5)
-                        _ms_text = input_tracker.get_click_summary(5)
-                        _kb_status = "✓" if _kb_text else "-"
-                        _ms_status = "✓" if _ms_text else "-"
-                        _sensors.append(f"⌨鍵盤:{_kb_status}")
-                        _sensors.append(f"🖱滑鼠:{_ms_status}")
-                        _sensors.append("👁截圖:✓" if screen_act else "👁截圖:-")
-                        _sensors.append("🪟視窗:✓" if user_act else "🪟視窗:-")
-                        _sensors.append("🤖Claude:✓" if claude_act else "🤖Claude:-")
-                        _sensor_line = "  ".join(_sensors)
-                        self.bridge.sensor_update.emit(_sensor_line)
-
-                        # Track observations for evolution - with source breakdown
-                        exp_sources = {"system": 1}
-                        if file_events:
-                            exp_sources["files"] = len(file_events)
-                        if claude_act:
-                            exp_sources["claude"] = 1
-                        if user_act:
-                            exp_sources["activity"] = 1
-                        if input_act:
-                            exp_sources["input"] = 1
-                        if screen_act:
-                            exp_sources["screen"] = 1
-                        obs_count = sum(exp_sources.values())
-                        # Apply equipment EXP buff
-                        exp_mult = get_exp_multiplier(equip_state)
-                        if exp_mult > 1.0:
-                            obs_count = int(obs_count * exp_mult)
-                        # Feed activity to adaptive evolution
-                        record_activity_affinities(evo, user_act + "\n" + (input_act or ""))
-                        record_observation(evo, obs_count, sources=exp_sources)
-
-                        # 裝備掉落：每 100 次觀察有機會
-                        obs_since_drop += obs_count
-                        if obs_since_drop >= 100:
-                            obs_since_drop = 0
-                            drop = try_drop(equip_state, "observation_100")
-                            if drop:
-                                drop_msg = (f"🎁 *裝備掉落！*\n"
-                                            f"[{drop['rarity_zh']}] {drop['name']}\n"
-                                            f"部位：{drop['slot_zh']}\n"
-                                            f"{drop['desc']}")
-                                send_notification(drop_msg, category="equipment")
-                                self.bridge.status_update.emit(f"🎁 獲得裝備：{drop['name']}")
-
-                        # ── 主動建議引擎 ──
-                        if input_act:
-                            advisor.record_input_activity()
-
-                        # 計算最近視窗切換次數
-                        _recent_switches = 0
-                        try:
-                            _recent_switches = tracker.get_switch_count(minutes=10)
-                        except (AttributeError, Exception):
-                            pass
-
-                        _adv_ctx = AdvisorContext(
-                            cpu_percent=snapshot.cpu_percent,
-                            ram_percent=snapshot.ram_percent,
-                            disk_percent=snapshot.disk_percent,
-                            active_app=tracker.current_app_name() if hasattr(tracker, 'current_app_name') else "",
-                            app_duration_minutes=tracker.current_app_duration() / 60 if hasattr(tracker, 'current_app_duration') else 0,
-                            recent_app_switches=_recent_switches,
-                            profile=_load_learner_memory().get("profile", ""),
-                            patterns=_load_learner_memory().get("patterns", {}),
-                            dominant_traits=evo.dominant_traits,
-                            evolution_title=evo.title,
-                            total_observations=evo.total_observations,
-                        )
-                        for advice in advisor.evaluate(_adv_ctx):
-                            _adv_emoji = advice.get("emoji", "💡")
-                            _adv_msg = advice["message"]
-                            self.bridge.advice_received.emit(_adv_emoji, _adv_msg)
-                            send_notification(
-                                f"{_adv_emoji} *AI Slime 的建議*\n{_adv_msg}",
-                                category=advice["type"],
-                            )
 
                         if file_events or claude_act or user_act or input_act or screen_act:
                             activity_buf.append(ctx)
