@@ -11,7 +11,7 @@ from sentinel import config
 
 log = logging.getLogger("sentinel.relay")
 
-AUTH_FILE = Path.home() / ".hermes" / "rimuru_auth.json"
+AUTH_FILE = Path.home() / ".hermes" / "aislime_auth.json"
 
 
 def _load_auth() -> dict:

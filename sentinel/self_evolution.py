@@ -17,7 +17,7 @@ Directory structure:
   ~/.hermes/evolution_snapshots/  ← pre-modification backups
   ~/.hermes/user_data/    ← user data that rollback NEVER touches:
                              sentinel_memory.json, sentinel_activity.jsonl,
-                             sentinel_chats.jsonl, rimuru_evolution.json, etc.
+                             sentinel_chats.jsonl, aislime_evolution.json, etc.
 """
 import json
 import time
@@ -27,7 +27,7 @@ import importlib
 import traceback
 from pathlib import Path
 
-log = logging.getLogger("rimuru.self_evolution")
+log = logging.getLogger("sentinel.self_evolution")
 
 SENTINEL_DIR = Path(__file__).parent
 CORE_BACKUP_DIR = SENTINEL_DIR / "core_backup"
@@ -57,8 +57,8 @@ USER_DATA_PATTERNS = [
     "sentinel_activity.jsonl",
     "sentinel_chats.jsonl",
     "sentinel_input.jsonl",
-    "rimuru_evolution.json",
-    "rimuru_learning_log.jsonl",
+    "aislime_evolution.json",
+    "aislime_learning_log.jsonl",
     "self_evolution_log.jsonl",
     "sentinel_settings.json",
 ]

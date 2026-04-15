@@ -11,7 +11,7 @@ That's it. AI Slime will auto-detect and use local model when available.
 import logging
 import json
 
-log = logging.getLogger("rimuru.local_llm")
+log = logging.getLogger("sentinel.local_llm")
 
 OLLAMA_URL = "http://localhost:11434"
 _ollama_available = None  # Cache availability check

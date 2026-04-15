@@ -15,10 +15,10 @@ import json
 from pathlib import Path
 from dataclasses import dataclass, field
 
-log = logging.getLogger("rimuru.advisor")
+log = logging.getLogger("sentinel.advisor")
 
 # ── 建議紀錄（避免重複建議）──
-ADVICE_LOG = Path.home() / ".hermes" / "rimuru_advice_log.jsonl"
+ADVICE_LOG = Path.home() / ".hermes" / "aislime_advice_log.jsonl"
 
 # 每種建議的最小間隔（秒）
 ADVICE_COOLDOWNS = {

@@ -783,22 +783,16 @@ class EquipmentTab(QWidget):
         filter_row.addStretch()
         inv_layout.addLayout(filter_row)
 
-        self.inv_html = QTextEdit()
-        self.inv_html.setReadOnly(True)
-        inv_layout.addWidget(self.inv_html)
-
-        # 操作按鈕列
-        btn_row = QHBoxLayout()
-        self.equip_btn = QPushButton(t("equip_equip"))
-        self.equip_btn.clicked.connect(self._equip_selected)
-        btn_row.addWidget(self.equip_btn)
-
-        self.unequip_btn = QPushButton(t("equip_unequip"))
-        self.unequip_btn.clicked.connect(self._unequip_selected)
-        btn_row.addWidget(self.unequip_btn)
-
-        btn_row.addStretch()
-        inv_layout.addLayout(btn_row)
+        # 背包滾動區域（用按鈕卡片取代 HTML）
+        inv_scroll = QScrollArea()
+        inv_scroll.setWidgetResizable(True)
+        inv_scroll.setStyleSheet("QScrollArea { border: none; }")
+        self.inv_list_widget = QWidget()
+        self.inv_list_layout = QVBoxLayout(self.inv_list_widget)
+        self.inv_list_layout.setSpacing(4)
+        self.inv_list_layout.addStretch()
+        inv_scroll.setWidget(self.inv_list_widget)
+        inv_layout.addWidget(inv_scroll)
 
         self.sub_tabs.addTab(inv_page, t("equip_inventory"))
 
@@ -921,7 +915,7 @@ class EquipmentTab(QWidget):
         else:
             self.buffs_label.setText("加成：（無裝備加成）")
 
-        # ── 背包頁面 ──
+        # ── 背包頁面（按鈕卡片）──
         slot_filter = self.slot_filter.currentData() or ""
         rarity_filter = self.rarity_filter.currentData() or ""
 
@@ -936,40 +930,26 @@ class EquipmentTab(QWidget):
         rarity_order = {r: i for i, r in enumerate(RARITIES)}
         filtered.sort(key=lambda i: -rarity_order.get(i.get("rarity", "common"), 0))
 
+        # 清空舊卡片
+        while self.inv_list_layout.count() > 0:
+            child = self.inv_list_layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+
         if filtered:
-            inv_lines = []
             for item in filtered:
-                rarity = item.get("rarity", "common")
-                color = RARITY_COLORS.get(rarity, "#aaa")
-                stars = RARITY_STARS.get(rarity, "★")
-                slot_zh = SLOT_NAMES_ZH.get(item.get("slot", ""), "")
-                equipped_tag = " <span style='color:#2ed573;'>[已裝備]</span>" if item.get("equipped") else ""
-                floor = RARITY_FLOOR_PRICE.get(rarity, 5)
-
-                template = next(
-                    (t for t in EQUIPMENT_POOL if t["name"] == item["template_name"]), None
-                )
-                desc = template["desc"] if template else ""
-                iid = item["item_id"]
-                iid_short = iid[:16]
-
-                inv_lines.append(
-                    f"<div style='padding:3px 0; cursor:pointer;' "
-                    f"title='點擊選取 {iid}'>"
-                    f"<span style='color:{color};'>{stars}</span> "
-                    f"<b>{item['template_name']}</b> "
-                    f"<span style='color:#888;'>({slot_zh})</span>"
-                    f"{equipped_tag}"
-                    f"<br><span style='color:#666; font-size:11px;'>　{desc}　|　"
-                    f"保底回收 {floor} 點　|　ID: {iid_short}...</span>"
-                    f"</div>"
-                )
-            self.inv_html.setHtml("".join(inv_lines))
+                card = self._make_inv_card(item, state, EQUIPMENT_POOL,
+                                           SLOT_NAMES_ZH, RARITY_COLORS,
+                                           RARITY_STARS, RARITY_FLOOR_PRICE)
+                self.inv_list_layout.addWidget(card)
         else:
-            self.inv_html.setHtml(
+            empty = QLabel(
                 "<p style='color:#666; text-align:center; padding:40px;'>"
                 "背包空空的...繼續觀察就會掉裝備！</p>"
             )
+            empty.setAlignment(Qt.AlignCenter)
+            self.inv_list_layout.addWidget(empty)
+        self.inv_list_layout.addStretch()
 
         # 合成候選
         self._refresh_synth_candidates()
@@ -1012,45 +992,77 @@ class EquipmentTab(QWidget):
                 "還沒有掉落紀錄</p>"
             )
 
-    def _get_item_id_from_selection(self) -> str:
-        """從背包 HTML 裡抓目前游標所在的 item_id。"""
-        cursor = self.inv_html.textCursor()
-        block_text = cursor.block().text()
-        # 找 ID: item_xxx 或 synth_xxx
-        import re
-        m = re.search(r'ID: ((?:item|synth)_\S+?)\.\.\.', block_text)
-        if m:
-            # item_id 被截斷了，找完整的
-            prefix = m.group(1)
-            from sentinel.wallet.equipment import load_equipment
-            state = load_equipment()
-            for item in state.inventory:
-                if item["item_id"].startswith(prefix):
-                    return item["item_id"]
-        return ""
+    def _make_inv_card(self, item, state, pool, slot_zh_map, colors, stars_map, floor_map):
+        """為每件背包物品建立一張可操作的卡片。"""
+        card = QFrame()
+        rarity = item.get("rarity", "common")
+        color = colors.get(rarity, "#aaa")
+        is_equipped = item.get("equipped", False)
+        border_color = "#2ed573" if is_equipped else color
 
-    def _equip_selected(self):
-        """裝備游標所在的道具。"""
-        item_id = self._get_item_id_from_selection()
-        if not item_id:
-            QMessageBox.warning(self, "AI Slime", "請先在背包中點擊選取一件裝備")
-            return
+        card.setStyleSheet(
+            f"QFrame {{ background: rgba(255,255,255,0.03); "
+            f"border: 1px solid {border_color}; border-radius: 6px; "
+            f"padding: 6px 10px; }}"
+        )
+        row = QHBoxLayout(card)
+        row.setContentsMargins(4, 4, 4, 4)
+        row.setSpacing(8)
 
+        # Info
+        info = QVBoxLayout()
+        info.setSpacing(1)
+        stars = stars_map.get(rarity, "★")
+        slot_zh = slot_zh_map.get(item.get("slot", ""), "?")
+        eq_tag = " <span style='color:#2ed573;'>[已裝備]</span>" if is_equipped else ""
+        name_lbl = QLabel(
+            f"<span style='color:{color};'>{stars}</span> "
+            f"<b>{item['template_name']}</b> "
+            f"<span style='color:#888;'>({slot_zh})</span>{eq_tag}"
+        )
+        info.addWidget(name_lbl)
+
+        template = next((t for t in pool if t["name"] == item["template_name"]), None)
+        desc = template["desc"] if template else ""
+        floor = floor_map.get(rarity, 5)
+        detail = QLabel(
+            f"<span style='color:#666; font-size:11px;'>{desc}　|　保底 {floor} 點</span>"
+        )
+        info.addWidget(detail)
+        row.addLayout(info, stretch=1)
+
+        # Action button
+        item_id = item["item_id"]
+        if is_equipped:
+            btn = QPushButton("卸下")
+            btn.setStyleSheet(
+                "QPushButton { background: #555; color: #fff; border-radius: 4px; "
+                "padding: 4px 14px; font-size: 12px; }"
+                "QPushButton:hover { background: #666; }"
+            )
+            btn.clicked.connect(lambda checked, iid=item_id: self._do_unequip(iid))
+        else:
+            btn = QPushButton("裝備")
+            btn.setStyleSheet(
+                f"QPushButton {{ background: {color}; color: #000; border-radius: 4px; "
+                f"padding: 4px 14px; font-weight: bold; font-size: 12px; }}"
+                f"QPushButton:hover {{ opacity: 0.9; }}"
+            )
+            btn.clicked.connect(lambda checked, iid=item_id: self._do_equip(iid))
+        row.addWidget(btn)
+
+        return card
+
+    def _do_equip(self, item_id: str):
         from sentinel.wallet.equipment import load_equipment, equip_item
         state = load_equipment()
         if equip_item(state, item_id):
             self.refresh()
             self.equipment_changed.emit()
         else:
-            QMessageBox.warning(self, "AI Slime", "無法裝備這件道具（可能已上架販售）")
+            QMessageBox.warning(self, "AI Slime", "無法裝備（可能已上架販售）")
 
-    def _unequip_selected(self):
-        """卸下游標所在的裝備。"""
-        item_id = self._get_item_id_from_selection()
-        if not item_id:
-            QMessageBox.warning(self, "AI Slime", "請先在背包中點擊選取一件裝備")
-            return
-
+    def _do_unequip(self, item_id: str):
         from sentinel.wallet.equipment import load_equipment, unequip_slot
         state = load_equipment()
         item = next((i for i in state.inventory if i["item_id"] == item_id), None)
@@ -1624,7 +1636,7 @@ class EvolutionTab(QWidget):
         p.end()
 
         # 存檔 + 複製到剪貼簿
-        save_path = Path.home() / ".hermes" / "rimuru_share.png"
+        save_path = Path.home() / ".hermes" / "aislime_share.png"
         pixmap.save(str(save_path), "PNG")
 
         clipboard = QApplication.clipboard()
@@ -1640,7 +1652,7 @@ class EvolutionTab(QWidget):
             self, "AI Slime",
             f"分享卡已產生！\n\n"
             f"✅ 已複製到剪貼簿（直接 Ctrl+V 貼到任何地方）\n"
-            f"💾 已存到：{getattr(self, '_last_share_path', '~/.hermes/rimuru_share.png')}\n\n"
+            f"💾 已存到：{getattr(self, '_last_share_path', '~/.hermes/aislime_share.png')}\n\n"
             f"也可以點社群按鈕一鍵分享"
         )
 
@@ -1656,7 +1668,7 @@ class EvolutionTab(QWidget):
         state = load_evolution()
 
         # 未來上架後改成官網 URL（不是 GitHub，一般人不知道 GitHub）
-        SITE_URL = "https://rimuru.app"
+        SITE_URL = "https://slime.5888.tw"
 
         # 組裝分享文字
         share_text = (
@@ -1875,7 +1887,7 @@ class SettingsTab(QWidget):
 
         # Relay server URL (for quota mode)
         self.relay_input = QLineEdit(config.RELAY_SERVER_URL)
-        self.relay_input.setPlaceholderText("https://api.rimuru.app")
+        self.relay_input.setPlaceholderText("https://slime.5888.tw")
         mode_layout.addWidget(QLabel(t("settings_relay_url")))
         mode_layout.addWidget(self.relay_input)
 

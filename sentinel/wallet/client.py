@@ -13,7 +13,7 @@ import logging
 import urllib.request
 from typing import Any
 
-log = logging.getLogger("rimuru.wallet.client")
+log = logging.getLogger("sentinel.wallet.client")
 
 
 class WalletClient:

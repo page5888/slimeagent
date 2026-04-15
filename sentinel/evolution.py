@@ -10,9 +10,9 @@ import logging
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
 
-log = logging.getLogger("rimuru.evolution")
+log = logging.getLogger("sentinel.evolution")
 
-EVOLUTION_FILE = Path.home() / ".hermes" / "rimuru_evolution.json"
+EVOLUTION_FILE = Path.home() / ".hermes" / "aislime_evolution.json"
 
 
 @dataclass
@@ -235,7 +235,7 @@ def save_evolution(state: EvolutionState):
     EVOLUTION_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
 
 
-EXP_LOG_FILE = Path.home() / ".hermes" / "rimuru_exp_log.jsonl"
+EXP_LOG_FILE = Path.home() / ".hermes" / "aislime_exp_log.jsonl"
 
 
 def record_observation(state: EvolutionState, count: int = 1, sources: dict = None):

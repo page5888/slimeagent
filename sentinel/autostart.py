@@ -4,7 +4,7 @@ import sys
 import logging
 from pathlib import Path
 
-log = logging.getLogger("rimuru.autostart")
+log = logging.getLogger("sentinel.autostart")
 
 STARTUP_DIR = Path(os.environ.get("APPDATA", "")) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
 SHORTCUT_NAME = "AISlimeAgent.bat"

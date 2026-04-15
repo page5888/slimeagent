@@ -107,7 +107,7 @@ ANALYSIS_MODEL_PREF = "local_first"
 RELAY_SERVER_URL = ""
 
 # User mode: "byok" (self-provided API keys) or "quota" (5888 wallet points)
-# Saved per-user in ~/.hermes/rimuru_auth.json, this is just the default.
+# Saved per-user in ~/.hermes/aislime_auth.json, this is just the default.
 DEFAULT_USER_MODE = "byok"
 
 # Marketplace transaction fee (percentage taken by system)

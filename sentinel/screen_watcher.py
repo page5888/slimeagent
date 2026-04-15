@@ -13,7 +13,7 @@ import tempfile
 import re
 from pathlib import Path
 
-log = logging.getLogger("rimuru.screen")
+log = logging.getLogger("sentinel.screen")
 
 # Minimum seconds between screenshots (don't spam)
 MIN_INTERVAL = 120   # 2 minutes
@@ -141,7 +141,7 @@ class ScreenWatcher:
 
             # Save to temp file (will be deleted after analysis)
             tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False,
-                                              prefix="rimuru_eye_")
+                                              prefix="aislime_eye_")
             img.save(tmp.name, "PNG")
             tmp.close()
 

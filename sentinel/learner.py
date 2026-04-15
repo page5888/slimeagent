@@ -102,7 +102,7 @@ def distill_from_activity(recent_activity: str):
         return None
 
 
-LEARNING_LOG_FILE = Path.home() / ".hermes" / "rimuru_learning_log.jsonl"
+LEARNING_LOG_FILE = Path.home() / ".hermes" / "aislime_learning_log.jsonl"
 
 
 def _append_learning_log(entry: dict):

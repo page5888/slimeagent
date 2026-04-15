@@ -58,6 +58,11 @@ app.include_router(marketplace_router)
 _public = Path(__file__).parent / "public"
 
 
+@app.get("/")
+async def landing_page():
+    return FileResponse(_public / "index.html")
+
+
 @app.get("/market")
 async def market_page():
     return FileResponse(_public / "market.html")

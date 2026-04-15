@@ -13,9 +13,9 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Optional
 
-log = logging.getLogger("rimuru.wallet.equipment")
+log = logging.getLogger("sentinel.wallet.equipment")
 
-EQUIPMENT_FILE = Path.home() / ".hermes" / "rimuru_equipment.json"
+EQUIPMENT_FILE = Path.home() / ".hermes" / "aislime_equipment.json"
 
 # ── 12 Slots ─────────────────────────────────────────────────────────
 

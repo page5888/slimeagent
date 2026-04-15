@@ -14,10 +14,10 @@ import urllib.request
 from pathlib import Path
 from typing import Optional
 
-log = logging.getLogger("rimuru.wallet.quota")
+log = logging.getLogger("sentinel.wallet.quota")
 
 # Persisted auth state
-AUTH_FILE = Path.home() / ".hermes" / "rimuru_auth.json"
+AUTH_FILE = Path.home() / ".hermes" / "aislime_auth.json"
 
 # ── Cost Table ───────────────────────────────────────────────────────
 # Points per LLM call type. Server enforces actual costs; client shows estimates.
