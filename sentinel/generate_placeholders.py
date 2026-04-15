@@ -16,13 +16,13 @@ SIZE = 256
 
 # Rarity color schemes
 RARITY_COLORS = {
-    1: {"bg": QColor(120, 120, 120, 60), "border": QColor(180, 180, 180), "label": "★"},
-    2: {"bg": QColor(60, 160, 60, 60), "border": QColor(100, 220, 100), "label": "★★"},
-    3: {"bg": QColor(50, 120, 220, 60), "border": QColor(80, 160, 255), "label": "★★★"},
-    4: {"bg": QColor(140, 60, 200, 60), "border": QColor(180, 100, 255), "label": "★★★★"},
-    5: {"bg": QColor(220, 180, 0, 60), "border": QColor(255, 215, 0), "label": "★★★★★"},
-    6: {"bg": QColor(200, 50, 50, 60), "border": QColor(255, 80, 80), "label": "★★★★★★"},
-    7: {"bg": QColor(30, 30, 30, 80), "border": QColor(255, 215, 0), "label": "★★★★★★★"},
+    1: {"bg": QColor(120, 120, 120, 180), "border": QColor(180, 180, 180), "label": "★"},
+    2: {"bg": QColor(60, 160, 60, 180), "border": QColor(100, 220, 100), "label": "★★"},
+    3: {"bg": QColor(50, 120, 220, 180), "border": QColor(80, 160, 255), "label": "★★★"},
+    4: {"bg": QColor(140, 60, 200, 180), "border": QColor(180, 100, 255), "label": "★★★★"},
+    5: {"bg": QColor(220, 180, 0, 180), "border": QColor(255, 215, 0), "label": "★★★★★"},
+    6: {"bg": QColor(200, 50, 50, 180), "border": QColor(255, 80, 80), "label": "★★★★★★"},
+    7: {"bg": QColor(30, 30, 30, 220), "border": QColor(255, 215, 0), "label": "★★★★★★★"},
 }
 
 # All sprites to generate (slot, filename, display_name, rarity)
@@ -131,8 +131,8 @@ def _draw_placeholder(p: QPainter, slot: str, name: str, rarity: int):
         # Full background fill with gradient
         grad = QLinearGradient(0, 0, 0, h)
         c = colors["border"]
-        grad.setColorAt(0, QColor(c.red(), c.green(), c.blue(), 40))
-        grad.setColorAt(1, QColor(c.red(), c.green(), c.blue(), 80))
+        grad.setColorAt(0, QColor(c.red(), c.green(), c.blue(), 120))
+        grad.setColorAt(1, QColor(c.red(), c.green(), c.blue(), 200))
         p.fillRect(0, 0, w, h, QBrush(grad))
     elif slot == "frame":
         # Frame: border only, transparent center
