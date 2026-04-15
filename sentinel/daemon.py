@@ -45,10 +45,10 @@ def handle_signal(sig, frame):
 # ─── Telegram Bot Handlers ───────────────────────────────────────────────
 
 async def on_message(update: Update, context):
-    """Handle incoming Telegram messages from Peter."""
+    """Handle incoming Telegram messages from the user."""
     if update.message is None:
         return
-    # Only respond to Peter
+    # Only respond to the owner
     if update.message.chat_id != TELEGRAM_CHAT_ID:
         return
 
@@ -56,7 +56,7 @@ async def on_message(update: Update, context):
     if not user_text:
         return
 
-    log.info(f"Received message from Peter: {user_text[:50]}...")
+    log.info(f"Received message from user: {user_text[:50]}...")
     reply = handle_message(user_text)
 
     await update.message.reply_text(reply)

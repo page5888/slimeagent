@@ -1,6 +1,6 @@
-"""Learning module - observes Peter's behavior patterns and builds a profile over time.
+"""Learning module - observes user's behavior patterns and builds a profile over time.
 
-This is the core of what makes Sentinel different from a dumb monitor.
+This is the core of what makes AI Slime different from a dumb monitor.
 It doesn't follow preset workflows. It watches, learns, and adapts.
 """
 import json
@@ -46,7 +46,7 @@ def save_memory(memory: dict):
 
 
 def distill_from_activity(recent_activity: str):
-    """Observe activity and update understanding of Peter."""
+    """Observe activity and update understanding of the user."""
     memory = load_memory()
 
     prompt = DISTILL_TEMPLATE.replace(

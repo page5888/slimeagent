@@ -1,9 +1,9 @@
-"""Two-way Telegram chat - Peter can talk to Sentinel anytime.
+"""Two-way Telegram chat - user can talk to AI Slime anytime.
 
-Sentinel replies with full context awareness:
+AI Slime replies with full context awareness:
 - Current system state
 - Recent dev activity
-- Everything it has learned about Peter
+- Everything it has learned about the user
 - Conversation history within the session
 """
 import logging
@@ -62,7 +62,7 @@ CHAT_SYSTEM_PROMPT = (
     "- 偶爾可以用轉生史萊姆的梗，但不要過度\n"
     "- 如果被問到自己是怎麼運作的，你可以用你的自我認知來回答\n\n"
     + SELF_AWARENESS + "\n"
-    "你對 Peter 的了解：\n"
+    "你對主人的了解：\n"
     "<<PROFILE>>\n\n"
     "你觀察到的模式：\n"
     "<<PATTERNS>>\n\n"
@@ -110,7 +110,7 @@ def _log_chat(role: str, text: str):
 
 
 def handle_message(user_text: str) -> str:
-    """Process an incoming message from Peter and return a response."""
+    """Process an incoming message from the user and return a response."""
     _conversation.append({"role": "user", "text": user_text})
     _log_chat("user", user_text)
 
@@ -153,9 +153,9 @@ def handle_message(user_text: str) -> str:
 
 
 def _maybe_learn_from_chat(user_text: str, reply: str):
-    """Extract learnings from direct conversations with Peter.
+    """Extract learnings from direct conversations with the user.
 
-    This is key - when Peter talks to Sentinel directly,
+    This is key - when the user talks to AI Slime directly,
     that's the richest signal about what he cares about.
     """
     memory = load_memory()
