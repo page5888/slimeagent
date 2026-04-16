@@ -231,12 +231,35 @@ FILENAME: xxx.py
 
 
 def generate_skill(need_description: str) -> dict | None:
-    """Let AI Slime create a new skill based on observed needs.
+    """Let AI Slime propose a new skill based on observed needs.
 
-    Returns {"filename": "...", "skill_name": "...", "description": "..."} or None.
+    IMPORTANT CHANGE (growth PR 1):
+    This used to auto-deploy the generated skill into SKILLS_DIR.
+    It now routes through the approval queue — the skill file is
+    written to ~/.hermes/approvals/pending/ as a proposal. A human
+    must call sentinel.growth.approval.approve() before the skill
+    becomes runnable.
+
+    Returns:
+      {"approval_id": "...", "filename": "...", "skill_name": "...",
+       "description": "...", "status": "pending"}
+    on successful proposal, or None on refusal / generation failure.
     """
     from sentinel.llm import call_llm
     from sentinel.learner import load_memory
+    from sentinel.growth import (
+        can_perform, Capability, scan_code, submit_for_approval,
+    )
+    from sentinel.growth.approval import SKILL_GEN
+    from dataclasses import asdict
+
+    # Capability gate — refuse if this tier can't propose skills
+    decision = can_perform(Capability.PROPOSE_SKILL)
+    if not decision.allowed:
+        log.info("generate_skill refused: %s", decision.reason)
+        _log_event("skill_refused",
+                   f"拒絕技能生成：{decision.reason}")
+        return None
 
     memory = load_memory()
     profile = memory.get("profile", "(尚無)")
@@ -268,28 +291,37 @@ def generate_skill(need_description: str) -> dict | None:
             return None
         code = code_match.group(1).strip()
 
-        # Safety check - scan for dangerous operations
-        if _is_code_safe(code):
-            SKILLS_DIR.mkdir(parents=True, exist_ok=True)
-            skill_path = SKILLS_DIR / filename
-            skill_path.write_text(code, encoding="utf-8")
-
-            # Try to import and validate
-            skill_name, description = _validate_skill(skill_path)
-            if skill_name:
-                _log_event("skill_created", f"新技能「{skill_name}」已產生：{filename}")
-                return {
-                    "filename": filename,
-                    "skill_name": skill_name,
-                    "description": description,
-                }
-            else:
-                # Invalid skill, delete it
-                skill_path.unlink()
-                return None
-        else:
-            log.warning(f"Generated skill failed safety check: {filename}")
+        # AST safety scan — blocks obvious attacks regardless of
+        # whitespace/alias/reflection tricks
+        report = scan_code(code)
+        if not report.safe:
+            for f in report.blocking:
+                log.warning("Skill %s blocked by safety: [%s] %s",
+                            filename, f.rule, f.message)
+            _log_event("skill_blocked",
+                       f"技能「{filename}」未通過安全掃描：{report.summary()}")
             return None
+
+        # Submit to approval queue — NOT deployed yet
+        target = SKILLS_DIR / filename
+        approval = submit_for_approval(
+            kind=SKILL_GEN,
+            title=need_description[:60],
+            reason=need_description,
+            target_path=str(target),
+            source=code,
+            safety_findings=[asdict(f) for f in report.findings],
+            proposer_tier=decision.tier,
+        )
+        _log_event("skill_proposed",
+                   f"提議新技能「{filename}」(id={approval.id})，等待使用者核准")
+        return {
+            "approval_id": approval.id,
+            "filename": filename,
+            "skill_name": filename.replace(".py", ""),
+            "description": need_description,
+            "status": "pending",
+        }
 
     except Exception as e:
         log.error(f"Skill generation error: {e}")
@@ -415,29 +447,48 @@ SELF_MODIFY_PROMPT = """你是 AI Slime，一個正在進化的 AI agent。
 ```"""
 
 
-def self_modify(filename: str, reason: str) -> bool:
-    """Let AI Slime modify one of its own files.
-    Takes a snapshot first, validates the change, rolls back if broken.
+def self_modify(filename: str, reason: str) -> dict | None:
+    """Let AI Slime PROPOSE a modification to one of its own files.
+
+    IMPORTANT CHANGE (growth PR 1):
+    This used to write the modification directly and rollback if the
+    import failed. It now routes through the approval queue — the
+    modification is a proposal until a human approves it.
+
+    Returns:
+      {"approval_id": "...", "filename": "...", "status": "pending"}
+    on successful proposal, or None on refusal.
     """
+    from sentinel.growth import (
+        can_perform, Capability, scan_code, submit_for_approval,
+    )
+    from sentinel.growth.approval import SELF_MOD
+    from dataclasses import asdict
+
+    # Capability gate — only True Demon Lord+ can even propose core mods
+    decision = can_perform(Capability.PROPOSE_SELF_MOD)
+    if not decision.allowed:
+        log.info("self_modify refused: %s", decision.reason)
+        _log_event("self_modify_refused",
+                   f"拒絕自我改良：{decision.reason}")
+        return None
+
     if filename in PROTECTED_FILES:
         log.warning(f"Cannot modify protected file: {filename}")
-        return False
+        return None
 
     if filename not in MODIFIABLE_FILES:
         log.warning(f"File not in modifiable list: {filename}")
-        return False
+        return None
 
     file_path = SENTINEL_DIR / filename
     if not file_path.exists():
-        return False
+        return None
 
-    # 1. Take snapshot BEFORE modification
-    snap_id = take_snapshot(f"self_modify:{filename} - {reason}")
-
-    # 2. Read current code
+    # Read current code
     current_code = file_path.read_text(encoding="utf-8")
 
-    # 3. Ask LLM for improvement
+    # Ask LLM for improvement
     from sentinel.llm import call_llm
     import re
 
@@ -452,38 +503,52 @@ def self_modify(filename: str, reason: str) -> bool:
     text = call_llm(prompt, temperature=0.3, max_tokens=3000)
     if not text:
         log.warning("Self-modification failed: no LLM response")
-        return False
+        return None
 
-    # 4. Extract new code
+    # Extract new code
     code_match = re.search(r'```python\s*\n(.*?)```', text, re.DOTALL)
     if not code_match:
-        return False
+        return None
     new_code = code_match.group(1).strip()
 
-    # 5. Safety check
+    # Size / dangerous-addition heuristic (unchanged from original)
     if not _is_modification_safe(current_code, new_code):
-        log.warning("Self-modification failed safety check")
-        return False
+        log.warning("Self-modification failed heuristic safety check")
+        _log_event("self_modify_blocked",
+                   f"自我改良被啟發式規則擋下：{filename}")
+        return None
 
-    # 6. Apply modification
-    try:
-        file_path.write_text(new_code, encoding="utf-8")
+    # AST scan — catches reflection / alias bypasses that string
+    # matching misses
+    report = scan_code(new_code)
+    if not report.safe:
+        for f in report.blocking:
+            log.warning("self_modify %s blocked by AST: [%s] %s",
+                        filename, f.rule, f.message)
+        _log_event("self_modify_blocked",
+                   f"自我改良未通過 AST 掃描：{filename} — {report.summary()}")
+        return None
 
-        # 7. Validate - try to import the modified file
-        if _validate_modified_file(filename):
-            _log_event("self_modify", f"自我改良成功：{filename}（{reason}）")
-            return True
-        else:
-            # Import failed - rollback!
-            log.error(f"Modified {filename} failed validation, rolling back")
-            rollback_to_snapshot(snap_id)
-            _log_event("self_modify_rollback", f"自我改良失敗，已回滾：{filename}")
-            return False
-
-    except Exception as e:
-        log.error(f"Self-modification error: {e}")
-        rollback_to_snapshot(snap_id)
-        return False
+    # Submit to approval queue. Human must approve before file is
+    # actually written. Snapshot will happen at approval time via
+    # the approve() caller.
+    approval = submit_for_approval(
+        kind=SELF_MOD,
+        title=f"改良 {filename}",
+        reason=reason,
+        target_path=str(file_path),
+        source=new_code,
+        previous_source=current_code,
+        safety_findings=[asdict(f) for f in report.findings],
+        proposer_tier=decision.tier,
+    )
+    _log_event("self_modify_proposed",
+               f"提議改良 {filename}（id={approval.id}），等待使用者核准")
+    return {
+        "approval_id": approval.id,
+        "filename": filename,
+        "status": "pending",
+    }
 
 
 def _is_modification_safe(old_code: str, new_code: str) -> bool:
@@ -535,23 +600,34 @@ def maybe_evolve(evolution_state, memory: dict) -> list[str]:
     patterns = memory.get("patterns", {})
     profile = memory.get("profile", "")
 
-    # Skill generation: every 10 learnings, consider generating a new skill
+    # Skill generation: every 10 learnings, consider PROPOSING a new skill.
+    # Proposals land in the approval queue; the user decides whether to
+    # actually deploy them. We don't announce them as "acquired" because
+    # they aren't yet — they're pending human review.
     if learnings > 0 and learnings % 10 == 0:
         existing_skills = list_skills()
-        if len(existing_skills) < 10:  # Cap at 10 generated skills
+        if len(existing_skills) < 10:  # Cap at 10 approved skills
             need = _identify_skill_need(patterns, profile, existing_skills)
             if need:
                 result = generate_skill(need)
-                if result:
-                    events.append(f"習得新技能「{result['skill_name']}」！")
+                if result and result.get("status") == "pending":
+                    events.append(
+                        f"提議了新技能「{result['skill_name']}」，"
+                        f"等你確認（id={result['approval_id']}）"
+                    )
 
-    # Self-modification: every 30 learnings, consider improving a prompt
+    # Self-modification: every 30 learnings, consider PROPOSING an
+    # improvement. Same rule — proposal only, no auto-deploy.
     if learnings > 0 and learnings % 30 == 0 and learnings >= 30:
         improvement = _identify_improvement(patterns, profile)
         if improvement:
             filename, reason = improvement
-            if self_modify(filename, reason):
-                events.append(f"自我改良了 {filename}：{reason}")
+            result = self_modify(filename, reason)
+            if result and result.get("status") == "pending":
+                events.append(
+                    f"提議改良 {filename}（{reason}），"
+                    f"等你確認（id={result['approval_id']}）"
+                )
 
     return events
 
