@@ -348,8 +348,8 @@ class HomeTab(QWidget):
 
         # Wallet / auth status
         try:
-            from sentinel.relay_client import AUTH_FILE
-            if AUTH_FILE.exists():
+            from sentinel.relay_client import AUTH_FILE, _get_token
+            if AUTH_FILE.exists() and _get_token():
                 data = json.loads(AUTH_FILE.read_text(encoding="utf-8"))
                 name = data.get("display_name", data.get("email", "?"))
                 self.wallet_status.setText(f"已登入：{name}")
@@ -371,8 +371,8 @@ class HomeTab(QWidget):
 
     def _on_login(self):
         """Google OAuth login from home page."""
-        from sentinel.relay_client import AUTH_FILE
-        if AUTH_FILE.exists():
+        from sentinel.relay_client import _get_token
+        if _get_token():
             # Already logged in — offer logout
             reply = QMessageBox.question(
                 self, "帳號",
@@ -1333,10 +1333,10 @@ class EquipmentTab(QWidget):
         """Put an item up for sale on the marketplace (local + relay)."""
         from sentinel.wallet.equipment import load_equipment, list_for_sale
         from sentinel import relay_client
-        from sentinel.relay_client import AUTH_FILE
+        from sentinel.relay_client import _get_token
 
         # Check login first
-        if not AUTH_FILE.exists():
+        if not _get_token():
             reply = QMessageBox.question(
                 self, "上架",
                 "上架需要先登入 Google 帳號。\n現在要登入嗎？",
@@ -2531,9 +2531,9 @@ class SettingsTab(QWidget):
 
     def _refresh_auth_status(self):
         """Show current login state."""
-        from sentinel.relay_client import AUTH_FILE
+        from sentinel.relay_client import AUTH_FILE, _get_token
         logged_in = False
-        if AUTH_FILE.exists():
+        if AUTH_FILE.exists() and _get_token():
             try:
                 import json
                 data = json.loads(AUTH_FILE.read_text(encoding="utf-8"))
