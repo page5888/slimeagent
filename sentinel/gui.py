@@ -2172,13 +2172,7 @@ class SettingsTab(QWidget):
         mode_layout.addWidget(self.wallet_info)
         self.wallet_info.setVisible(self._quota_mgr.mode == "quota")
 
-        # Relay server URL (for quota mode)
-        self.relay_input = QLineEdit(config.RELAY_SERVER_URL)
-        self.relay_input.setPlaceholderText("https://slimeagent-relay.onrender.com")
-        mode_layout.addWidget(QLabel(t("settings_relay_url")))
-        mode_layout.addWidget(self.relay_input)
-
-        # Google Client ID
+        # Google Client ID (usually pre-filled, only admin changes this)
         self.gcid_input = QLineEdit(config.GOOGLE_CLIENT_ID)
         self.gcid_input.setPlaceholderText("xxxx.apps.googleusercontent.com")
         mode_layout.addWidget(QLabel("Google Client ID"))
@@ -2433,13 +2427,13 @@ class SettingsTab(QWidget):
     def _google_login(self):
         """Google OAuth login — opens browser, gets token, sends to relay."""
         client_id = self.gcid_input.text().strip()
-        relay_url = self.relay_input.text().strip()
+        relay_url = config.RELAY_SERVER_URL
 
         if not client_id:
             QMessageBox.warning(self, "登入", "請先填入 Google Client ID")
             return
         if not relay_url:
-            QMessageBox.warning(self, "登入", "請先填入中繼伺服器網址")
+            QMessageBox.warning(self, "登入", "中繼伺服器未設定")
             return
 
         self.google_login_btn.setEnabled(False)
@@ -2506,7 +2500,6 @@ class SettingsTab(QWidget):
             "language": self.lang_combo.currentData(),
             "theme": self.theme_combo.currentData(),
             "user_mode": self.mode_combo.currentData(),
-            "relay_server_url": self.relay_input.text().strip(),
             "google_client_id": self.gcid_input.text().strip(),
             "chat_model_pref": self.chat_pref_combo.currentData(),
             "analysis_model_pref": self.analysis_pref_combo.currentData(),
@@ -2525,7 +2518,6 @@ class SettingsTab(QWidget):
         settings_file.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
 
         # Apply to runtime config
-        config.RELAY_SERVER_URL = settings["relay_server_url"]
         config.GOOGLE_CLIENT_ID = settings["google_client_id"]
         config.CHAT_MODEL_PREF = settings["chat_model_pref"]
         config.ANALYSIS_MODEL_PREF = settings["analysis_model_pref"]

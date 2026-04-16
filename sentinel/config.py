@@ -140,7 +140,7 @@ def _load_persisted_settings():
             LLM_PROVIDERS = s["llm_providers"]
         CHAT_MODEL_PREF = s.get("chat_model_pref", CHAT_MODEL_PREF)
         ANALYSIS_MODEL_PREF = s.get("analysis_model_pref", ANALYSIS_MODEL_PREF)
-        RELAY_SERVER_URL = s.get("relay_server_url", RELAY_SERVER_URL)
+        # RELAY_SERVER_URL is hardcoded — don't load from settings
         GOOGLE_CLIENT_ID = s.get("google_client_id", GOOGLE_CLIENT_ID)
         SYSTEM_CHECK_INTERVAL = s.get("check_interval", SYSTEM_CHECK_INTERVAL)
         IDLE_REPORT_INTERVAL = s.get("idle_report_interval", IDLE_REPORT_INTERVAL)
