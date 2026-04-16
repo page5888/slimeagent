@@ -1,4 +1,6 @@
 """Auth endpoints."""
+import logging
+import traceback
 import uuid
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException
@@ -9,6 +11,8 @@ from server.db.engine import get_db
 from server.auth.google import verify_google_token
 from server.auth.deps import get_current_user
 from server.wallet.service import get_wallet_client
+
+log = logging.getLogger("server.auth")
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -40,54 +44,70 @@ async def login(req: LoginRequest):
     # Verify Google token
     try:
         google_info = await verify_google_token(req.google_token)
-    except Exception:
+    except Exception as e:
+        log.warning("Google token verify failed: %s", e)
         raise HTTPException(401, "Invalid Google token")
 
-    db = await get_db()
+    try:
+        db = await get_db()
+    except Exception as e:
+        log.exception("DB not initialized")
+        raise HTTPException(500, f"DB init error: {e}")
+
     google_sub = google_info["sub"]
 
     # Upsert user
-    row = await db.execute_fetchone(
-        "SELECT id, wallet_uid, referral_code FROM users WHERE google_sub = ?",
-        (google_sub,),
-    )
-
-    if row:
-        user_id = row["id"]
-        await db.execute(
-            "UPDATE users SET last_login_at = CURRENT_TIMESTAMP, "
-            "display_name = ?, photo_url = ? WHERE id = ?",
-            (google_info["name"], google_info["picture"], user_id),
+    try:
+        row = await db.execute_fetchone(
+            "SELECT id, wallet_uid, referral_code FROM users WHERE google_sub = ?",
+            (google_sub,),
         )
-        await db.commit()
-        wallet_uid = row["wallet_uid"]
-        referral_code = row["referral_code"]
-    else:
-        user_id = str(uuid.uuid4())
-        wallet_uid = ""
-        referral_code = ""
+    except Exception as e:
+        log.exception("SELECT users failed")
+        raise HTTPException(500, f"DB query error: {type(e).__name__}: {e}")
 
-        # Register with 5888 wallet
-        wc = get_wallet_client()
-        if wc:
-            try:
-                wr = wc.ensure_user(
-                    google_sub, google_info["email"],
-                    google_info["name"], google_info["picture"],
-                    req.referral_code,
-                )
-                wallet_uid = wr.get("uid", "")
-                referral_code = wr.get("referralCode", "")
-            except Exception:
-                pass  # wallet registration failed, continue without it
+    try:
+        if row:
+            user_id = row["id"]
+            await db.execute(
+                "UPDATE users SET last_login_at = CURRENT_TIMESTAMP, "
+                "display_name = ?, photo_url = ? WHERE id = ?",
+                (google_info["name"], google_info["picture"], user_id),
+            )
+            await db.commit()
+            wallet_uid = row["wallet_uid"]
+            referral_code = row["referral_code"]
+        else:
+            user_id = str(uuid.uuid4())
+            wallet_uid = ""
+            referral_code = ""
 
-        await db.execute(
-            "INSERT INTO users (id, google_sub, email, display_name, photo_url, "
-            "wallet_uid, referral_code) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (user_id, google_sub, google_info["email"], google_info["name"],
-             google_info["picture"], wallet_uid, referral_code),
-        )
-        await db.commit()
+            # Register with 5888 wallet
+            wc = get_wallet_client()
+            if wc:
+                try:
+                    wr = wc.ensure_user(
+                        google_sub, google_info["email"],
+                        google_info["name"], google_info["picture"],
+                        req.referral_code,
+                    )
+                    wallet_uid = wr.get("uid", "")
+                    referral_code = wr.get("referralCode", "")
+                except Exception as e:
+                    log.warning("Wallet ensure_user failed (non-fatal): %s", e)
+
+            await db.execute(
+                "INSERT INTO users (id, google_sub, email, display_name, photo_url, "
+                "wallet_uid, referral_code) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (user_id, google_sub, google_info["email"], google_info["name"],
+                 google_info["picture"], wallet_uid, referral_code),
+            )
+            await db.commit()
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.exception("Login upsert failed")
+        raise HTTPException(500, f"Upsert error: {type(e).__name__}: {e}")
 
     # Get balance
     balance = 0
@@ -96,10 +116,14 @@ async def login(req: LoginRequest):
         try:
             br = wc.get_balance(wallet_uid)
             balance = br.get("balance", 0)
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning("Wallet get_balance failed (non-fatal): %s", e)
 
-    token = _make_jwt(user_id, google_sub, google_info["email"])
+    try:
+        token = _make_jwt(user_id, google_sub, google_info["email"])
+    except Exception as e:
+        log.exception("JWT encode failed")
+        raise HTTPException(500, f"JWT error: {type(e).__name__}: {e}")
 
     return LoginResponse(
         token=token,
