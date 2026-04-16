@@ -183,6 +183,14 @@ def monitor_loop(bot_send_fn):
                 bot_send_fn(
                     f"💤 *AI Slime 定期報告*\n系統正常。\n{snapshot.summary()}"
                 )
+                # I. Narrative arc: check for loneliness during idle reports
+                # (rate-limited internally — at most one loneliness moment per
+                # 30 days regardless of how often we call this).
+                try:
+                    from sentinel import identity
+                    identity.record_loneliness_arc_if_due()
+                except Exception as e:
+                    log.warning(f"loneliness arc check error: {e}")
 
             time.sleep(2)
 

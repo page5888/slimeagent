@@ -75,6 +75,38 @@ TRAIT_ACCESSORIES = {
     "late_night": {"symbol": "🌙", "color": QColor(150, 150, 255)},
 }
 
+# J. Dominant-trait body tint. These are subtle nudges layered on top of
+# the tier base color so a coder's Slime+ doesn't look the same as a
+# designer's Slime+. Format: (r_bias, g_bias, b_bias), each in [-30, +30].
+TRAIT_BODY_TINT = {
+    "coding":        (-10,  +20,   0),   # greener
+    "research":      (+15,  +15,  -10),  # warm amber
+    "creative":      (+20,    0,  +20),  # magenta-ish
+    "communication": (  0,  +10,  +15),  # slightly cyan
+    "multitasking":  (+15,   +5,  -10),  # orange
+    "deep_focus":    (-10,    0,  +15),  # deeper
+    "late_night":    (-10,  -10,  +15),  # twilight
+}
+
+
+def _apply_trait_tint(base_color: QColor, traits: list) -> QColor:
+    """Blend a trait-based tint onto the base body color.
+
+    Only uses the strongest trait (traits[0]). Tint is subtle — the tier
+    base should still dominate. Tint is skipped if an equipment skin is
+    overriding, since the equipment designer's intent takes priority.
+    """
+    if not traits:
+        return base_color
+    tint = TRAIT_BODY_TINT.get(traits[0])
+    if not tint:
+        return base_color
+    dr, dg, db = tint
+    r = max(0, min(255, base_color.red() + dr))
+    g = max(0, min(255, base_color.green() + dg))
+    b = max(0, min(255, base_color.blue() + db))
+    return QColor(r, g, b, base_color.alpha())
+
 
 class SlimeWidget(QWidget):
     """Animated pixel-art slime avatar widget."""
@@ -178,6 +210,7 @@ class SlimeWidget(QWidget):
 
         # Skin override from equipment
         skin_info = self._equipped_visuals.get("skin")
+        skin_overridden = False
         if skin_info:
             from sentinel.equipment_visuals import get_skin_override
             override = get_skin_override(skin_info.get("visual", ""))
@@ -185,6 +218,15 @@ class SlimeWidget(QWidget):
                 colors = dict(colors)  # copy
                 colors["body"] = override["body"]
                 colors["highlight"] = override["highlight"]
+                skin_overridden = True
+
+        # J. Apply dominant-trait body tint unless equipment skin is active.
+        # Equipment override takes priority — designer's intent wins over
+        # automatic tint.
+        if not skin_overridden and self._traits:
+            colors = dict(colors)
+            colors["body"] = _apply_trait_tint(colors["body"], self._traits)
+            colors["highlight"] = _apply_trait_tint(colors["highlight"], self._traits)
 
         # Breathing animation
         breath = math.sin(self._anim_phase) * 0.03

@@ -45,11 +45,19 @@ class EvolutionState:
     evolution_direction: str = ""       # LLM-generated: what the slime is evolving towards
     dominant_traits: list = field(default_factory=list)  # e.g., ["programmer", "night_owl"]
     affinity_scores: dict = field(default_factory=dict)  # behavior_type -> score
+    # Identity & relationship (A + G)
+    slime_name: str = ""               # Given by master at Named Slime tier; sacred, immutable after set
+    last_seen: float = 0               # Epoch seconds — master last interacted with the slime (startup or chat)
+    naming_pending: bool = False       # Set True when tier advances to Named Slime; GUI consumes + clears
 
     def days_alive(self) -> float:
         if not self.birth_time:
             return 0
         return (time.time() - self.birth_time) / 86400
+
+    def display_name(self) -> str:
+        """What the slime calls itself. Falls back to form title before naming."""
+        return self.slime_name or "AI Slime"
 
 
 # ─── Evolution Milestones ────────────────────────────────────────────────
@@ -201,10 +209,16 @@ def load_evolution() -> EvolutionState:
     if EVOLUTION_FILE.exists():
         try:
             data = json.loads(EVOLUTION_FILE.read_text(encoding='utf-8'))
-            state = EvolutionState(
-                **{k: v for k, v in data.items()
-                   if k not in ('skills', 'evolution_log', 'dominant_traits', 'affinity_scores')}
-            )
+            # Filter to only fields EvolutionState actually declares — keeps
+            # old saves loadable after schema changes, and new fields loadable
+            # if older code is run against new saves.
+            valid_fields = {f.name for f in EvolutionState.__dataclass_fields__.values()}
+            scalar_kwargs = {
+                k: v for k, v in data.items()
+                if k in valid_fields
+                and k not in ('skills', 'evolution_log', 'dominant_traits', 'affinity_scores')
+            }
+            state = EvolutionState(**scalar_kwargs)
             state.skills = [Skill(**s) for s in data.get('skills', [])]
             state.evolution_log = data.get('evolution_log', [])
             state.dominant_traits = data.get('dominant_traits', [])
@@ -255,6 +269,13 @@ def record_observation(state: EvolutionState, count: int = 1, sources: dict = No
     # 記錄經驗來源
     if sources:
         _log_exp(count, sources)
+
+    # Round-number observation milestones become memorable moments (D)
+    try:
+        from sentinel import identity as _id
+        _id.record_milestone_if_hit(state.total_observations)
+    except Exception:
+        pass
 
 
 def _log_exp(count: int, sources: dict):
@@ -494,8 +515,21 @@ def perform_evolution(state: EvolutionState) -> dict:
         "event": "evolution",
         "message": f"進化！{old_form} → {state.form}「{state.title}」",
     })
+    # A. Naming ceremony — when entering Named Slime tier for the first
+    # time, flag for the GUI to prompt the master. This is a one-shot: the
+    # GUI clears naming_pending after the dialog resolves.
+    if state.form == "Named Slime" and not state.slime_name:
+        state.naming_pending = True
     save_evolution(state)
     log.info(f"EVOLUTION: {old_form} -> {state.form} ({state.title})")
+
+    # D. Record evolution as a memorable moment. Dedup-protected, so a
+    # duplicate call from the GUI layer is harmless.
+    try:
+        from sentinel import identity as _id
+        _id.record_evolution_moment(old_form, state.form, state.title)
+    except Exception:
+        pass
     return {
         "ok": True,
         "reason": "進化成功",
@@ -584,6 +618,17 @@ def _check_adaptive_unlocks(state: EvolutionState):
                 "message": template["unlock_msg"],
             })
             log.info(f"Adaptive skill unlocked: {skill_name}")
+            # Record as memorable moment — an awakening is always special.
+            # Lazy import to avoid circular dep (identity → learner → memory).
+            try:
+                from sentinel import identity as _id
+                _id.add_memorable_moment(
+                    category="skill",
+                    headline=f"覺醒了新技能：{new_skill.jp_name}",
+                    detail=new_skill.description,
+                )
+            except Exception:
+                pass
 
 
 def _level_up_by_affinity(state: EvolutionState):

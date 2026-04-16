@@ -2125,6 +2125,25 @@ class FederationTab(QWidget):
                                 t("fed_network_err").format(err=str(e)))
             return
 
+        # H. Confirmed patterns feed back into chat prompt — the slime
+        # starts referencing community wisdom when relevant. We only
+        # store 'confirm' votes (patterns master validated as true) so
+        # the slime doesn't quote things master disagrees with.
+        if vote == "confirm":
+            try:
+                statement = None
+                category = None
+                for pat in getattr(self, "_patterns", []) or []:
+                    if pat.get("id") == pattern_id:
+                        statement = pat.get("statement")
+                        category = pat.get("category")
+                        break
+                if statement:
+                    from sentinel import identity
+                    identity.record_confirmed_pattern(pattern_id, statement, category)
+            except Exception:
+                pass
+
         if resp.get("promoted"):
             QMessageBox.information(self, "AI Slime", t("fed_vote_promoted"))
         # Re-fetch — the card state (buttons → "已投", counts) changes

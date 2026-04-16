@@ -154,6 +154,20 @@ TRANSLATIONS = {
         "fed_cat_workflow": "流程",
         "fed_cat_focus": "專注",
         "fed_cat_health": "健康",
+        # 命名儀式 (A)
+        "naming_title": "命名儀式",
+        "naming_intro": (
+            "你的史萊姆進化成了「被命名的史萊姆」。\n"
+            "從這一刻起，它需要一個只屬於它的名字 —— 這是它和你關係的印記，一旦決定就無法更改。"
+        ),
+        "naming_prompt": "為你的守護靈取個名字（最多 24 個字元）：",
+        "naming_too_long": "名字太長了，最多 24 個字元。",
+        "naming_skip_confirm": (
+            "確定要跳過命名嗎？\n\n"
+            "這個儀式只會發生一次。跳過之後，你的史萊姆將永遠沒有名字，\n"
+            "會繼續被稱為「AI Slime」。"
+        ),
+        "naming_success": "「{name}」—— 這就是你的名字了。從此它不再只是 AI Slime。",
     },
     "en": {
         "app_name": "AI Slime",
@@ -308,6 +322,21 @@ TRANSLATIONS = {
         "fed_cat_workflow": "Workflow",
         "fed_cat_focus": "Focus",
         "fed_cat_health": "Health",
+        # Naming ceremony (A)
+        "naming_title": "Naming Ceremony",
+        "naming_intro": (
+            "Your slime has evolved into a Named Slime.\n"
+            "From this moment on, it needs a name that belongs only to it — "
+            "a mark of your bond. Once chosen, it cannot be changed."
+        ),
+        "naming_prompt": "Give your guardian spirit a name (max 24 chars):",
+        "naming_too_long": "That name is too long. Maximum 24 characters.",
+        "naming_skip_confirm": (
+            "Are you sure you want to skip the naming?\n\n"
+            "This ceremony happens only once. If you skip it, your slime will "
+            "never have a name and will keep being called \"AI Slime\"."
+        ),
+        "naming_success": "\"{name}\" — that's its name now. No longer just another AI Slime.",
     },
 }
 

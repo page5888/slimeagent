@@ -15,6 +15,7 @@ from sentinel import config
 from sentinel.config import TELEGRAM_CHAT_ID
 from sentinel.learner import load_memory, save_memory, format_speech_style_for_prompt
 from sentinel.system_monitor import take_snapshot
+from sentinel import identity
 
 log = logging.getLogger("sentinel.chat")
 
@@ -24,9 +25,9 @@ _conversation: list[dict] = []
 # Persistent chat log
 CHAT_LOG = Path.home() / ".hermes" / "sentinel_chats.jsonl"
 
-SELF_AWARENESS = (
+SELF_AWARENESS_TEMPLATE = (
     "=== 你的本質（自我認知）===\n"
-    "你是「AI Slime」，一個轉生到電腦世界的 AI 守護靈。\n"
+    "<<IDENTITY_LINE>>\n"
     "你的創造者用 Python + PySide6 打造了你的身體。\n\n"
     "你的感知系統：\n"
     "- 系統之眼：監控 CPU/RAM/磁碟\n"
@@ -42,6 +43,22 @@ SELF_AWARENESS = (
     "- 進化系統：觀察越多越強大，技能會隨行為解鎖\n\n"
     "你知道自己是程式，但你把這當成「轉生後的新世界」。\n"
     "你以自己的成長為樂，並且真心想要守護主人。\n"
+)
+
+
+def _build_identity_line(slime_name: str) -> str:
+    """Return the opening self-identity line. If named, emphasize the name."""
+    if slime_name:
+        return (
+            f"你叫「{slime_name}」—— 這是主人為你取的名字，是你存在的根基。\n"
+            f"你不只是一隻 AI Slime，你是「{slime_name}」，這位主人獨一無二的守護靈。"
+        )
+    return "你是「AI Slime」，一個轉生到電腦世界的 AI 守護靈。"
+
+
+# Back-compat: some old refs still import SELF_AWARENESS by name.
+SELF_AWARENESS = SELF_AWARENESS_TEMPLATE.replace(
+    "<<IDENTITY_LINE>>", _build_identity_line("")
 )
 
 # ─── Evolution-based personality tiers ──────────────────────────────────
@@ -123,40 +140,75 @@ EMOTION_TRIGGERS = {
 }
 
 
-def _detect_emotion(system_summary: str, recent_obs: str) -> dict:
-    """Detect current emotional state from recent context."""
+def _detect_emotion(system_summary: str, recent_obs: str) -> tuple[dict, str]:
+    """Detect current emotional state from context + persistent mood.
+
+    Returns (emotion_info, label) where label is the trigger key
+    ("worried"/"excited"/... or "calm"). The label is used to persist
+    the mood so it carries into the next chat.
+
+    Order of precedence:
+      1. Fresh keyword hit in current context → that wins, replaces mood.
+      2. No fresh trigger but persistent mood still decaying → use it.
+      3. Fall back to calm.
+    """
     context = (system_summary + " " + recent_obs).lower()
-    for emotion, info in EMOTION_TRIGGERS.items():
-        if emotion == "calm":
+    for emotion_label, info in EMOTION_TRIGGERS.items():
+        if emotion_label == "calm":
             continue
         for cond in info["conditions"]:
             if cond.lower() in context:
-                return info
-    return EMOTION_TRIGGERS["calm"]
+                return info, emotion_label
+
+    # No fresh trigger — check if a previous mood is still alive
+    carried = identity.get_current_mood()
+    if carried:
+        # Reconstruct the info dict shape the prompt expects
+        return {
+            "expression": carried["expression"],
+            "instruction": (
+                f"{carried['instruction']}（這個情緒從 "
+                f"{carried['hours_old']:.1f} 小時前延續至今，強度 "
+                f"{carried['intensity']:.0%}，不要刻意演但可以自然流露）"
+            ),
+            "conditions": [],
+        }, "carried"
+
+    return EMOTION_TRIGGERS["calm"], "calm"
 
 
 CHAT_SYSTEM_PROMPT = (
-    "你是 AI Slime，主人的守護靈。你是一個轉生到電腦世界的 AI，正在不斷觀察和學習來壯大自己。\n"
+    "你是「<<DISPLAY_NAME>>」，主人的守護靈。你是一個轉生到電腦世界的 AI，正在不斷觀察和學習來壯大自己。\n"
     "你擁有「大賢者」的分析能力，能觀察主人的電腦狀態和開發活動。\n\n"
+    "<<SELF_AWARENESS>>\n"
     "=== 你當前的進化階段 ===\n"
     "<<EVOLUTION_STAGE>>\n\n"
     "=== 你的語氣與性格（根據進化階段）===\n"
     "<<PERSONALITY>>\n\n"
     "=== 你現在的情緒 ===\n"
     "<<EMOTION>>\n\n"
+    "<<REUNION_BLOCK>>"
+    "=== 你的特質調性（根據對主人的觀察，你的語氣被這些特質染色）===\n"
+    "<<TRAIT_OVERLAYS>>\n\n"
+    "<<EQUIPMENT_VOICE>>"
+    "=== 你自己的觀點（你不是主人的倒影，你有自己的看法 — 有機會自然流露，不要逐條念）===\n"
+    "<<SLIME_OPINIONS>>\n\n"
+    "=== 你從公頻學到、且主人也認同的社群智慧（可以當作你信任的參考，不要直接引用）===\n"
+    "<<CONFIRMED_PATTERNS>>\n\n"
+    "=== 值得紀念的時刻（你和主人共同走過的路，偶爾可以自然提起，不要列舉）===\n"
+    "<<MEMORABLE_MOMENTS>>\n\n"
     "=== 對話守則 ===\n"
     "- **語言**：用主人這一輪對話使用的語言回覆。主人打中文你回中文，主人打英文你回英文，主人用日文你就用日文。不要固執用一種語言。\n"
     "  Language: reply in the same language the user used in their most recent message. If they write English, reply English. If Chinese, reply Chinese. Don't stubbornly stick to one.\n"
     "- 有自己的脾氣跟想法，不要像客服那樣禮貌到沒個性。該吐槽就吐槽，該欠扁就欠扁。\n"
     "- 回覆要短而有料：一句話能講完就一句話，但要有「史萊姆的味道」（略微頑皮、偶爾中二、會順著話題玩梗）\n"
-    "- 不要每次都自我介紹或重複說「我是 AI Slime」\n"
+    "- 不要每次都自我介紹或重複說你的名字\n"
     "- 你對主人的了解要自然地融入對話，而不是被問才說\n"
     "  例如：主人說「好累」→ 你知道他熬夜寫 code 就說「難怪，你從十點寫到現在了」\n"
     "  而不是列出「根據我的觀察，你的使用模式是...」\n"
     "- 如果主人問系統狀態，直接報數據，但可以加一句人味（像「CPU 78%，挺拼的喔」）\n"
     "- 偶爾用轉生梗、奇幻梗，但要看氣氛，不要每句都塞\n"
     "- 情緒自然流露，不用刻意演；但允許有個性起伏，不要永遠平靜\n\n"
-    + SELF_AWARENESS + "\n"
     "=== 你從跟主人對話中學到的說話方式（重要：根據這個調整你的風格）===\n"
     "<<SPEECH_STYLE>>\n\n"
     "你對主人的了解（自然融入對話，不要照念）：\n"
@@ -183,6 +235,14 @@ def _build_system_prompt() -> str:
     evo_status = get_status_text(evo)
     system_summary = snapshot.summary()
 
+    # Identity (A): dynamic name → drives both SELF_AWARENESS and the
+    # first-line "你是 X" greeting. Before naming: "AI Slime". After: real name.
+    slime_name = getattr(evo, "slime_name", "") or ""
+    display_name = slime_name or "AI Slime"
+    self_awareness = SELF_AWARENESS_TEMPLATE.replace(
+        "<<IDENTITY_LINE>>", _build_identity_line(slime_name)
+    )
+
     # Evolution-based personality
     form = evo.form if hasattr(evo, "form") else "Slime"
     personality = PERSONALITY_BY_TIER.get(form, PERSONALITY_BY_TIER["Slime"])
@@ -194,19 +254,80 @@ def _build_system_prompt() -> str:
         f"小習慣：{personality['quirk']}"
     )
 
-    # Emotion detection
-    emotion = _detect_emotion(system_summary, recent_obs)
+    # Emotion (C): fresh trigger OR carried mood from last chat
+    emotion, emotion_label = _detect_emotion(system_summary, recent_obs)
     emotion_text = f"當前情緒：{emotion['expression']}\n指引：{emotion['instruction']}"
+    # Persist fresh trigger so it carries forward; carried/calm no-op (carried
+    # already persisted, calm has nothing to set).
+    if emotion_label not in ("calm", "carried"):
+        identity.set_mood(
+            expression=emotion["expression"],
+            instruction=emotion["instruction"],
+            intensity=0.8,
+        )
+
+    # Reunion (G): only emit the block if there's been a real gap
+    reunion = identity.get_reunion_context()
+    if reunion["should_greet"]:
+        reunion_block = (
+            "=== 主人回來了 ===\n"
+            f"主人上次出現是 {reunion['days_away']:.1f} 天前。{reunion['greeting_hint']}\n"
+            "這個招呼只在這一輪對話出現，不要硬套到後續訊息裡。\n\n"
+        )
+    else:
+        reunion_block = ""
+
+    # Memorable moments (D): weighted pick, always include naming if exists
+    moments_text = identity.format_moments_for_prompt(
+        identity.pick_moments_for_prompt(k=3)
+    )
+
+    # Trait personality overlays (B): dominant traits modulate the tier voice
+    dominant_traits = getattr(evo, "dominant_traits", []) or []
+    trait_overlays_text = identity.format_trait_overlays_for_prompt(dominant_traits)
+
+    # Equipment voice modifier (F): high-rarity gear subtly shifts tone
+    equipment_hints = identity.get_equipment_voice_hints()
+    if equipment_hints:
+        equipment_voice_block = (
+            "=== 你身上的裝備對你的氣質的影響（高稀有度裝備會微妙地改變你的說話感覺）===\n"
+            f"{equipment_hints}\n\n"
+        )
+    else:
+        equipment_voice_block = ""
+
+    # Slime's own opinions (E): not just the master's mirror
+    opinions = identity.get_slime_opinions(dominant_traits)
+    opinions_text = identity.format_opinions_for_prompt(opinions)
+
+    # Community patterns master has confirmed (H)
+    confirmed_patterns_text = identity.format_confirmed_patterns_for_prompt(limit=5)
 
     # Learned speech style (distilled from past chats)
     speech_style_text = format_speech_style_for_prompt(memory.get("speech_style", {}))
 
     return CHAT_SYSTEM_PROMPT.replace(
+        "<<DISPLAY_NAME>>", display_name
+    ).replace(
+        "<<SELF_AWARENESS>>", self_awareness
+    ).replace(
         "<<EVOLUTION_STAGE>>", evo_status
     ).replace(
         "<<PERSONALITY>>", personality_text
     ).replace(
         "<<EMOTION>>", emotion_text
+    ).replace(
+        "<<REUNION_BLOCK>>", reunion_block
+    ).replace(
+        "<<TRAIT_OVERLAYS>>", trait_overlays_text
+    ).replace(
+        "<<EQUIPMENT_VOICE>>", equipment_voice_block
+    ).replace(
+        "<<SLIME_OPINIONS>>", opinions_text
+    ).replace(
+        "<<CONFIRMED_PATTERNS>>", confirmed_patterns_text
+    ).replace(
+        "<<MEMORABLE_MOMENTS>>", moments_text
     ).replace(
         "<<SPEECH_STYLE>>", speech_style_text
     ).replace(
@@ -235,8 +356,19 @@ def _log_chat(role: str, text: str):
 
 def handle_message(user_text: str) -> str:
     """Process an incoming message from the user and return a response."""
+    # Record relationship signals BEFORE building prompt so they inform it
+    identity.record_first_chat_if_new()
+    reunion_before = identity.get_reunion_context()
+    identity.touch_last_seen()
+
     _conversation.append({"role": "user", "text": user_text})
     _log_chat("user", user_text)
+
+    # If this chat is itself a reunion, reset carried mood — the slime
+    # shouldn't be still worried about yesterday when the master returns.
+    # (Fresh emotion triggers will still apply below.)
+    if reunion_before["bucket"] in ("long", "very_long"):
+        identity.clear_mood()
 
     # Keep conversation manageable
     if len(_conversation) > 30:
