@@ -176,8 +176,12 @@ def exchange_code_for_tokens(auth_code: str, client_id: str,
         method="POST",
     )
 
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        return json.loads(resp.read())
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Google token exchange failed (HTTP {e.code}): {body}")
 
 
 def send_token_to_relay(id_token: str, relay_url: str) -> dict:
@@ -194,8 +198,12 @@ def send_token_to_relay(id_token: str, relay_url: str) -> dict:
         method="POST",
     )
 
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        return json.loads(resp.read())
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"中繼伺服器拒絕登入 (HTTP {e.code}): {body}")
 
 
 def save_auth(auth_data: dict):
