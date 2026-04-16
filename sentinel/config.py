@@ -106,6 +106,11 @@ ANALYSIS_MODEL_PREF = "local_first"
 # BYOK users don't need this; it's only for paid point-pack mode.
 RELAY_SERVER_URL = ""
 
+# Google OAuth Client ID — needed for marketplace login.
+# Create at https://console.cloud.google.com/apis/credentials
+# Type: "Web application", add http://127.0.0.1:18510 to redirect URIs.
+GOOGLE_CLIENT_ID = "942074052009-fo2itqu5skv22u00fl0dnhkardeb3d8s.apps.googleusercontent.com"
+
 # User mode: "byok" (self-provided API keys) or "quota" (5888 wallet points)
 # Saved per-user in ~/.hermes/aislime_auth.json, this is just the default.
 DEFAULT_USER_MODE = "byok"
@@ -118,7 +123,7 @@ MARKETPLACE_FEE_PERCENT = 10  # 10% on P2P trades (base rate)
 def _load_persisted_settings():
     """Load user settings from disk. Called once on module import."""
     global TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, LLM_PROVIDERS
-    global CHAT_MODEL_PREF, ANALYSIS_MODEL_PREF, RELAY_SERVER_URL
+    global CHAT_MODEL_PREF, ANALYSIS_MODEL_PREF, RELAY_SERVER_URL, GOOGLE_CLIENT_ID
     global SYSTEM_CHECK_INTERVAL, IDLE_REPORT_INTERVAL, WATCH_DIRS
 
     settings_file = Path.home() / ".hermes" / "sentinel_settings.json"
@@ -136,6 +141,7 @@ def _load_persisted_settings():
         CHAT_MODEL_PREF = s.get("chat_model_pref", CHAT_MODEL_PREF)
         ANALYSIS_MODEL_PREF = s.get("analysis_model_pref", ANALYSIS_MODEL_PREF)
         RELAY_SERVER_URL = s.get("relay_server_url", RELAY_SERVER_URL)
+        GOOGLE_CLIENT_ID = s.get("google_client_id", GOOGLE_CLIENT_ID)
         SYSTEM_CHECK_INTERVAL = s.get("check_interval", SYSTEM_CHECK_INTERVAL)
         IDLE_REPORT_INTERVAL = s.get("idle_report_interval", IDLE_REPORT_INTERVAL)
         if "watch_dirs" in s:

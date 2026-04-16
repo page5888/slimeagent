@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
     QFormLayout, QComboBox, QPlainTextEdit, QSystemTrayIcon, QMenu,
     QScrollArea, QFrame, QSpinBox, QMessageBox, QInputDialog,
 )
-from PySide6.QtCore import Qt, QTimer, Signal, QObject, QThread, QSize, QRect, QPoint
+from PySide6.QtCore import Qt, QTimer, Signal, Slot, QObject, QThread, QSize, QRect, QPoint
 from PySide6.QtWidgets import QLayout, QSizePolicy
 from PySide6.QtGui import QFont, QColor, QTextCursor, QAction
 
@@ -2174,9 +2174,36 @@ class SettingsTab(QWidget):
 
         # Relay server URL (for quota mode)
         self.relay_input = QLineEdit(config.RELAY_SERVER_URL)
-        self.relay_input.setPlaceholderText("https://slime.5888.tw")
+        self.relay_input.setPlaceholderText("https://slimeagent-relay.onrender.com")
         mode_layout.addWidget(QLabel(t("settings_relay_url")))
         mode_layout.addWidget(self.relay_input)
+
+        # Google Client ID
+        self.gcid_input = QLineEdit(config.GOOGLE_CLIENT_ID)
+        self.gcid_input.setPlaceholderText("xxxx.apps.googleusercontent.com")
+        mode_layout.addWidget(QLabel("Google Client ID"))
+        mode_layout.addWidget(self.gcid_input)
+
+        # Google login button
+        relay_btn_row = QHBoxLayout()
+        self.google_login_btn = QPushButton("Google 登入")
+        self.google_login_btn.setStyleSheet(
+            "QPushButton { background: #4285f4; color: #fff; border: none; "
+            "border-radius: 4px; padding: 6px 16px; font-weight: bold; }"
+            "QPushButton:hover { background: #5a95f5; }"
+        )
+        self.google_login_btn.clicked.connect(self._google_login)
+        relay_btn_row.addWidget(self.google_login_btn)
+
+        self.logout_btn = QPushButton("登出")
+        self.logout_btn.setFixedWidth(60)
+        self.logout_btn.clicked.connect(self._logout)
+        relay_btn_row.addWidget(self.logout_btn)
+
+        self.auth_status = QLabel("")
+        self._refresh_auth_status()
+        relay_btn_row.addWidget(self.auth_status, stretch=1)
+        mode_layout.addLayout(relay_btn_row)
 
         mode_group.setLayout(mode_layout)
         form.addWidget(mode_group)
@@ -2380,6 +2407,94 @@ class SettingsTab(QWidget):
         QApplication.instance().setStyleSheet(get_theme_style())
         self.language_changed.emit()  # trigger retranslate to update header colors
 
+    def _refresh_auth_status(self):
+        """Show current login state."""
+        from sentinel.relay_client import AUTH_FILE
+        logged_in = False
+        if AUTH_FILE.exists():
+            try:
+                import json
+                data = json.loads(AUTH_FILE.read_text(encoding="utf-8"))
+                name = data.get("display_name", data.get("email", "?"))
+                self.auth_status.setText(
+                    f"<span style='color:#2ed573;'>✓ 已登入：{name}</span>"
+                )
+                logged_in = True
+            except Exception:
+                self.auth_status.setText(
+                    "<span style='color:#ffa502;'>Token 檔案異常</span>"
+                )
+        else:
+            self.auth_status.setText(
+                "<span style='color:#888;'>尚未登入（上架需要先登入）</span>"
+            )
+        self.logout_btn.setVisible(logged_in)
+
+    def _google_login(self):
+        """Google OAuth login — opens browser, gets token, sends to relay."""
+        client_id = self.gcid_input.text().strip()
+        relay_url = self.relay_input.text().strip()
+
+        if not client_id:
+            QMessageBox.warning(self, "登入", "請先填入 Google Client ID")
+            return
+        if not relay_url:
+            QMessageBox.warning(self, "登入", "請先填入中繼伺服器網址")
+            return
+
+        self.google_login_btn.setEnabled(False)
+        self.google_login_btn.setText("登入中...")
+
+        # Run OAuth flow in a thread to avoid blocking GUI
+        import threading
+
+        def _do_login():
+            try:
+                from sentinel.google_auth import full_login_flow
+                auth_data = full_login_flow(
+                    client_id, relay_url,
+                    on_status=lambda s: None,
+                )
+                # Back on GUI thread
+                from PySide6.QtCore import QMetaObject, Qt, Q_ARG
+                QMetaObject.invokeMethod(
+                    self, "_on_login_success",
+                    Qt.ConnectionType.QueuedConnection,
+                    Q_ARG(str, auth_data.get("display_name", "?")),
+                )
+            except Exception as e:
+                from PySide6.QtCore import QMetaObject, Qt, Q_ARG
+                QMetaObject.invokeMethod(
+                    self, "_on_login_error",
+                    Qt.ConnectionType.QueuedConnection,
+                    Q_ARG(str, str(e)),
+                )
+
+        threading.Thread(target=_do_login, daemon=True).start()
+
+    @Slot(str)
+    def _on_login_success(self, name: str):
+        self.google_login_btn.setEnabled(True)
+        self.google_login_btn.setText("Google 登入")
+        self._refresh_auth_status()
+        QMessageBox.information(
+            self, "登入成功",
+            f"已登入為 {name}，現在可以上架了！",
+        )
+
+    @Slot(str)
+    def _on_login_error(self, error: str):
+        self.google_login_btn.setEnabled(True)
+        self.google_login_btn.setText("Google 登入")
+        QMessageBox.warning(self, "登入失敗", error)
+
+    def _logout(self):
+        """Clear saved auth token."""
+        from sentinel.google_auth import clear_auth
+        clear_auth()
+        self._refresh_auth_status()
+        QMessageBox.information(self, "登出", "已登出，需要重新登入才能使用市場功能。")
+
     def save_settings(self):
         """Save settings to a JSON config file."""
         # Build updated providers list
@@ -2392,6 +2507,7 @@ class SettingsTab(QWidget):
             "theme": self.theme_combo.currentData(),
             "user_mode": self.mode_combo.currentData(),
             "relay_server_url": self.relay_input.text().strip(),
+            "google_client_id": self.gcid_input.text().strip(),
             "chat_model_pref": self.chat_pref_combo.currentData(),
             "analysis_model_pref": self.analysis_pref_combo.currentData(),
             "telegram_bot_token": self.token_input.text(),
@@ -2410,6 +2526,7 @@ class SettingsTab(QWidget):
 
         # Apply to runtime config
         config.RELAY_SERVER_URL = settings["relay_server_url"]
+        config.GOOGLE_CLIENT_ID = settings["google_client_id"]
         config.CHAT_MODEL_PREF = settings["chat_model_pref"]
         config.ANALYSIS_MODEL_PREF = settings["analysis_model_pref"]
         config.TELEGRAM_BOT_TOKEN = settings["telegram_bot_token"]
@@ -2508,6 +2625,26 @@ class SetupWizard(QWidget):
 
     def _build_page_welcome(self):
         _, lay = self._make_page()
+
+        # Language selector at the very top
+        lang_row = QHBoxLayout()
+        lang_row.addStretch()
+        self._lang_btn_zh = QPushButton("中文")
+        self._lang_btn_en = QPushButton("English")
+        for btn, lang in [(self._lang_btn_zh, "zh"), (self._lang_btn_en, "en")]:
+            active = get_language() == lang
+            btn.setFixedSize(80, 32)
+            btn.setStyleSheet(
+                f"QPushButton {{ background: {'#00dcff' if active else '#333'}; "
+                f"color: {'#000' if active else '#aaa'}; border: none; "
+                f"border-radius: 4px; font-weight: {'bold' if active else 'normal'}; }}"
+                f"QPushButton:hover {{ background: {'#00c4e0' if active else '#444'}; }}"
+            )
+            btn.clicked.connect(lambda _, l=lang: self._switch_language(l))
+            lang_row.addWidget(btn)
+        lang_row.addStretch()
+        lay.addLayout(lang_row)
+        lay.addSpacing(8)
 
         # Slime ASCII art
         art = QLabel(
@@ -2710,6 +2847,31 @@ class SetupWizard(QWidget):
         else:
             self.api_key_input.setEchoMode(QLineEdit.Password)
             self.show_key_btn.setText("👁 顯示")
+
+    def _switch_language(self, lang: str):
+        """Switch wizard language and rebuild all pages."""
+        set_language(lang)
+        # Remove all pages from stack
+        while self.stack.count() > 0:
+            w = self.stack.widget(0)
+            self.stack.removeWidget(w)
+            w.deleteLater()
+        # Rebuild
+        from PySide6.QtWidgets import QRadioButton, QButtonGroup
+        self._build_page_welcome()
+        self._build_page_mode(QRadioButton, QButtonGroup)
+        self._build_page_api()
+        self._build_page_telegram()
+        self._build_page_done()
+        self.stack.setCurrentIndex(0)
+        self._update_nav()
+        # Update nav button text
+        self.back_btn.setText(t("wizard_back"))
+        self.next_btn.setText(t("wizard_next"))
+        self.setWindowTitle(
+            "AI Slime Agent — 新手引導" if lang == "zh"
+            else "AI Slime Agent — Setup"
+        )
 
     def _update_nav(self):
         idx = self.stack.currentIndex()
