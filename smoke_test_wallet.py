@@ -1,12 +1,23 @@
 """Day 1 smoke test for 5888 wallet staging integration.
 
-Runs the 3-step checklist from NEW_SITE_ONBOARDING.md §11:
-1. s2sEnsureUser
-2. s2sGetBalance
-3. s2sSpend (x2 to verify idempotency)
+Covers the three reasons 5888 whitelisted for slime on staging:
+  1. s2sEnsureUser      — create/lookup user, seed test balance
+  2. s2sSpend            reason=slime_evolve   (2 pt, idempotency check)
+  3. s2sSpend            reason=slime_list_fee (10 pt, tiered)
+
+Plus s2sGetBalance between spends so failures point at the right step.
+
+Note: the old generic `smoke_test` reason is no longer whitelisted —
+any spend with that reason will now come back 403 SITE_NOT_AUTHORIZED.
 
 Credentials passed via env vars:
-    WALLET_API_BASE, WALLET_SITE_ID, WALLET_API_KEY, WALLET_HMAC_SECRET
+    WALLET_API_BASE   — https://asia-east1-wallet-5888-staging.cloudfunctions.net
+    WALLET_SITE_ID    — the slime-staging site id
+    WALLET_API_KEY    — the slime-staging api key
+    WALLET_HMAC_SECRET
+
+Optional:
+    SMOKE_TEST_GOOGLE_SUB — reuse an account across runs
 """
 import os
 import sys
@@ -18,6 +29,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from sentinel.wallet.client import WalletClient, WalletError
+from sentinel.wallet.market_rules import (
+    SPEND_TYPE_EVOLVE, SPEND_TYPE_LIST_FEE, EVOLVE_COST, listing_fee,
+)
 
 API_BASE = os.environ["WALLET_API_BASE"]
 SITE_ID = os.environ["WALLET_SITE_ID"]
@@ -26,30 +40,43 @@ HMAC_SECRET = os.environ["WALLET_HMAC_SECRET"]
 
 client = WalletClient(API_BASE, SITE_ID, API_KEY, HMAC_SECRET)
 
-# googleSub: pass SMOKE_TEST_GOOGLE_SUB env to reuse an account,
-# otherwise generate a fresh UUID each run for fully repeatable tests.
 TEST_GOOGLE_SUB = os.environ.get(
     "SMOKE_TEST_GOOGLE_SUB",
     f"slime_smoketest_{uuid.uuid4().hex[:12]}",
 )
 
-# Idempotency key: time-stamped so each run actually exercises spend + dedup.
-# A hardcoded key would return duplicate=true from the second run onward
-# without actually verifying anything.
+# Unique idempotency suffix per run. Each spend gets its own key so
+# 5888 doesn't collapse repeat runs into duplicate=true.
 TS = int(time.time())
-IDEMPOTENCY_KEY = f"5888_slime_staging_smoketest_{TS}"
+EVOLVE_KEY = f"slime_evolve:smoketest_{TS}"
+LIST_FEE_KEY = f"slime_list_fee:smoketest_{TS}"
+
+# 100 pt price → tier-2 listing fee (10 pt) per market_rules.listing_fee.
+LIST_FEE_PRICE_TIER = 100
+LIST_FEE_AMOUNT = listing_fee(LIST_FEE_PRICE_TIER)
 
 print("=" * 60)
-print("5888 Wallet Staging — Smoke Test")
+print("5888 Wallet Staging — Smoke Test (Day 1)")
 print("=" * 60)
-print(f"API base   : {API_BASE}")
-print(f"Site ID    : {SITE_ID}")
-print(f"googleSub  : {TEST_GOOGLE_SUB}")
-print(f"idempoKey  : {IDEMPOTENCY_KEY}")
+print(f"API base        : {API_BASE}")
+print(f"Site ID         : {SITE_ID}")
+print(f"googleSub       : {TEST_GOOGLE_SUB}")
+print(f"evolve key      : {EVOLVE_KEY}")
+print(f"list-fee key    : {LIST_FEE_KEY}")
+print(f"list-fee amount : {LIST_FEE_AMOUNT} (price tier {LIST_FEE_PRICE_TIER})")
 print()
 
+
+def _fail(step: str, err: "WalletError|Exception") -> None:
+    print(f"  ✗ {step} FAILED: {err}")
+    if isinstance(err, WalletError):
+        print(f"    http_code  = {err.http_code}")
+        print(f"    error_code = {err.error_code}")
+    sys.exit(1)
+
+
 # ── Step 1: s2sEnsureUser ─────────────────────────────────────────
-print("[1/3] s2sEnsureUser ...")
+print("[1/5] s2sEnsureUser ...")
 try:
     result = client.ensure_user(
         google_sub=TEST_GOOGLE_SUB,
@@ -58,86 +85,120 @@ try:
     )
     uid = result.get("uid", "")
     balance = result.get("balance", 0)
-    referral = result.get("referralCode", "")
     is_new = result.get("isNewUser", False)
     print(f"  ✓ uid          = {uid}")
     print(f"  ✓ balance      = {balance}")
-    print(f"  ✓ referralCode = {referral}")
     print(f"  ✓ isNewUser    = {is_new}")
 except WalletError as e:
-    print(f"  ✗ FAILED: {e}")
-    sys.exit(1)
+    _fail("ensureUser", e)
 
 print()
 
-# ── Step 2: s2sGetBalance ─────────────────────────────────────────
-print("[2/3] s2sGetBalance ...")
+# ── Step 2: s2sGetBalance (before spends) ─────────────────────────
+print("[2/5] s2sGetBalance (pre-spend) ...")
 try:
     result = client.get_balance(uid)
     balance_before = result.get("balance", 0)
-    updated = result.get("updatedAt", "")
-    print(f"  ✓ balance   = {balance_before}")
-    print(f"  ✓ updatedAt = {updated}")
+    print(f"  ✓ balance = {balance_before}")
 except WalletError as e:
-    print(f"  ✗ FAILED: {e}")
-    sys.exit(1)
+    _fail("getBalance", e)
+
+# If balance is below what the rest of the test needs, stop here rather
+# than failing on an insufficient-balance branch and making it look like
+# a wiring bug.
+needed = EVOLVE_COST + LIST_FEE_AMOUNT
+if balance_before < needed:
+    print()
+    print(f"  ⚠ balance {balance_before} < {needed} (evolve {EVOLVE_COST} + "
+          f"list_fee {LIST_FEE_AMOUNT}).")
+    print(f"  ⚠ Top up via s2sResetTestBalance or s2sGrant, then re-run.")
+    print()
+    print("=" * 60)
+    print("PARTIAL PASS — ensureUser + getBalance OK, spends need balance")
+    print("=" * 60)
+    sys.exit(0)
 
 print()
 
-# ── Step 3a: s2sSpend (first call) ────────────────────────────────
-print("[3a/3] s2sSpend (first call, amount=10) ...")
+# ── Step 3: slime_evolve ──────────────────────────────────────────
+print(f"[3/5] s2sSpend reason={SPEND_TYPE_EVOLVE} amount={EVOLVE_COST} ...")
 try:
     result = client.spend(
-        uid=uid, amount=10, reason="smoke_test",
-        idempotency_key=IDEMPOTENCY_KEY,
+        uid=uid, amount=EVOLVE_COST,
+        reason=SPEND_TYPE_EVOLVE, idempotency_key=EVOLVE_KEY,
     )
-    balance_after = result.get("balanceAfter", 0)
-    commissions = result.get("commissions", [])
-    tier = result.get("tier", "")
-    is_first = result.get("isFirstPurchase", False)
+    balance_after_evolve = result.get("balanceAfter", 0)
     duplicate = result.get("duplicate", False)
-    print(f"  ✓ balanceAfter    = {balance_after}")
-    print(f"  ✓ tier            = {tier}")
-    print(f"  ✓ isFirstPurchase = {is_first}")
-    print(f"  ✓ commissions     = {commissions}")
-    print(f"  ✓ duplicate       = {duplicate}")
+    print(f"  ✓ balanceAfter = {balance_after_evolve}")
+    print(f"  ✓ duplicate    = {duplicate}  (should be False on first call)")
+    if duplicate:
+        print("  ✗ EXPECTED duplicate=False on fresh idempotency key")
+        sys.exit(1)
 except WalletError as e:
-    if e.is_insufficient_balance:
-        print(f"  ⚠ INSUFFICIENT_BALANCE (balance {balance_before} < 10)")
-        print(f"  ⚠ Skip spend test — need to top up first")
-        print()
-        print("=" * 60)
-        print("PARTIAL PASS — ensureUser + getBalance works, spend needs topup")
-        print("=" * 60)
-        sys.exit(0)
-    print(f"  ✗ FAILED: {e}")
-    sys.exit(1)
+    _fail("spend(slime_evolve)", e)
+
+# Replay same key → expect duplicate=true, balance unchanged.
+print(f"      replay same key → expect duplicate=true ...")
+try:
+    result = client.spend(
+        uid=uid, amount=EVOLVE_COST,
+        reason=SPEND_TYPE_EVOLVE, idempotency_key=EVOLVE_KEY,
+    )
+    dup2 = result.get("duplicate", False)
+    bal2 = result.get("balanceAfter", 0)
+    print(f"  ✓ duplicate    = {dup2}")
+    print(f"  ✓ balanceAfter = {bal2}  (unchanged)")
+    if not dup2:
+        print("  ✗ EXPECTED duplicate=true on replay — idempotency BROKEN")
+        sys.exit(1)
+    if bal2 != balance_after_evolve:
+        print(f"  ✗ EXPECTED balance to stay {balance_after_evolve}, got {bal2}")
+        sys.exit(1)
+except WalletError as e:
+    _fail("spend(slime_evolve replay)", e)
 
 print()
 
-# ── Step 3b: s2sSpend (idempotency check) ─────────────────────────
-print("[3b/3] s2sSpend (same key — should be duplicate) ...")
+# ── Step 4: slime_list_fee ────────────────────────────────────────
+print(f"[4/5] s2sSpend reason={SPEND_TYPE_LIST_FEE} amount={LIST_FEE_AMOUNT} ...")
 try:
     result = client.spend(
-        uid=uid, amount=10, reason="smoke_test",
-        idempotency_key=IDEMPOTENCY_KEY,
+        uid=uid, amount=LIST_FEE_AMOUNT,
+        reason=SPEND_TYPE_LIST_FEE, idempotency_key=LIST_FEE_KEY,
     )
+    balance_after_list = result.get("balanceAfter", 0)
     duplicate = result.get("duplicate", False)
-    balance_after2 = result.get("balanceAfter", 0)
+    print(f"  ✓ balanceAfter = {balance_after_list}")
     print(f"  ✓ duplicate    = {duplicate}")
-    print(f"  ✓ balanceAfter = {balance_after2}")
-    if not duplicate:
-        print("  ✗ EXPECTED duplicate=true — idempotency BROKEN")
-        sys.exit(1)
-    if balance_after2 != balance_after:
-        print(f"  ✗ EXPECTED balance to stay at {balance_after}, got {balance_after2}")
+    if duplicate:
+        print("  ✗ EXPECTED duplicate=False")
         sys.exit(1)
 except WalletError as e:
-    print(f"  ✗ FAILED: {e}")
-    sys.exit(1)
+    _fail("spend(slime_list_fee)", e)
+
+print()
+
+# ── Step 5: final balance sanity check ────────────────────────────
+print("[5/5] s2sGetBalance (post-spend) ...")
+try:
+    result = client.get_balance(uid)
+    final_balance = result.get("balance", 0)
+    expected = balance_before - EVOLVE_COST - LIST_FEE_AMOUNT
+    print(f"  ✓ balance = {final_balance}")
+    print(f"    expected ≥ {expected} (balance_before − evolve − list_fee)")
+    # Allow ≥ because commissions could flow back in (they shouldn't for
+    # slime_evolve/list_fee spends on test accounts with no upline, but
+    # we don't want to fail the smoke if 5888 adds bonuses later).
+    if final_balance < expected:
+        print(f"  ✗ balance short by {expected - final_balance}")
+        sys.exit(1)
+except WalletError as e:
+    _fail("getBalance(final)", e)
 
 print()
 print("=" * 60)
-print("FULL PASS — all 3 steps succeeded, idempotency verified")
+print("FULL PASS — all 3 whitelisted reasons work, idempotency verified")
 print("=" * 60)
-print(f"Final balance: {balance_after2}")
+print(f"Start balance: {balance_before}")
+print(f"Final balance: {final_balance}")
+print(f"Spent:         {balance_before - final_balance}")

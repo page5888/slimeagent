@@ -76,6 +76,15 @@ def listing_fee(price: int) -> int:
 SPEND_TYPE_EVOLVE = "slime_evolve"          # 2 pts, per evolution trigger
 SPEND_TYPE_LIST_FEE = "slime_list_fee"      # tiered, per listing
 SPEND_TYPE_BUY_SETTLE = "slime_buy_settle"  # buyer deduction at purchase
+SPEND_TYPE_CREATOR_REWARD = "slime_creator_reward"  # voter → creator tip (10 pts/vote)
+# NOTE on slime_creator_reward — Phase 1 flow (current):
+#   Voter pays via s2sSpend(reason=slime_creator_reward). Points go to
+#   5888 platform pool; creator credit is tracked LOCALLY in our
+#   `creator_reward_ledger` table, NOT transferred through 5888.
+# Phase 2 (when 5888 ships s2sCreatorRewardSettle, target Week 5-6):
+#   A migration walks ledger rows with status='pending' and calls the
+#   atomic settle endpoint. We stop writing new ledger rows and call
+#   settle inline from cast_vote instead.
 
 # grant reasons (applied atomically by 5888's marketSaleSettle endpoint
 # once it ships — we do NOT call grant with these ourselves):

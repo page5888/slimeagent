@@ -4,10 +4,11 @@ import uuid
 import logging
 from server import config
 from server.db.engine import get_db
-from server.wallet.service import spend_points, grant_points
+from server.wallet.service import spend_points
 from server.equipment.models import (
     VALID_SLOTS, VALID_RARITIES, MAX_BUFF_VALUES,
 )
+from sentinel.wallet.market_rules import SPEND_TYPE_CREATOR_REWARD
 
 log = logging.getLogger("server.equipment")
 
@@ -175,11 +176,25 @@ async def cast_vote(user_id: str, submission_id: str) -> dict:
     if existing:
         raise ValueError("Already voted on this submission")
 
-    # Deduct points
+    # Deduct points. Reason must be slime_creator_reward — 5888
+    # sitePolicy rejects anything else with 403 SITE_NOT_AUTHORIZED.
+    # Idempotency key is scoped to the vote_id so 5888 dedupes client
+    # retries safely.
     vote_id = str(uuid.uuid4())
-    idempotency_key = f"vote:{vote_id}"
+    idempotency_key = f"slime_creator_reward:{vote_id}"
     await spend_points(user_id, config.VOTE_COST,
-                       f"Vote on {sub['name']}", idempotency_key)
+                       SPEND_TYPE_CREATOR_REWARD, idempotency_key)
+
+    # Phase 1 ledger entry — creator will be paid in a future batch
+    # once s2sCreatorRewardSettle ships. See 003_creator_ledger.sql.
+    ledger_id = str(uuid.uuid4())
+    await db.execute(
+        "INSERT INTO creator_reward_ledger "
+        "(id, creator_id, voter_id, submission_id, amount, voter_spend_key) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (ledger_id, sub["creator_id"], user_id, submission_id,
+         config.VOTE_COST, idempotency_key),
+    )
 
     # Record vote
     await db.execute(
@@ -243,14 +258,25 @@ async def _approve_submission(db, sub) -> bool:
         (new_version,),
     )
 
-    # Reward creator
-    try:
-        reward_key = f"submission_approved:{submission_id}"
-        await grant_points(sub["creator_id"], config.CREATOR_REWARD,
-                           f"Submission approved: {sub['name']}", reward_key)
-    except Exception as e:
-        log.warning(f"Failed to reward creator: {e}")
+    # Creator approval bonus — Phase 1: record in ledger, NOT granted
+    # via 5888 wallet yet. 5888 sitePolicy grant whitelist doesn't yet
+    # include slime_creator_approval_bonus; attempting grant here would
+    # 403. Will be paid in the Phase 2 replay (same endpoint as the
+    # per-vote tips). Dedicated entry with voter_id='system' and a
+    # distinguishing spend_key prefix so the replay can tell
+    # per-vote tips apart from the approval bonus.
+    bonus_id = str(uuid.uuid4())
+    bonus_key = f"slime_creator_approval:{submission_id}"
+    await db.execute(
+        "INSERT INTO creator_reward_ledger "
+        "(id, creator_id, voter_id, submission_id, amount, voter_spend_key) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (bonus_id, sub["creator_id"], None, submission_id,
+         config.CREATOR_REWARD, bonus_key),
+    )
 
     log.info(f"Submission approved: [{sub['rarity']}] {sub['name']} "
-             f"(slot={sub['slot']}, votes={sub['vote_count'] + 1})")
+             f"(slot={sub['slot']}, votes={sub['vote_count'] + 1}); "
+             f"creator {sub['creator_id']} owed {config.CREATOR_REWARD} pts "
+             f"in ledger (pending Phase 2 settle)")
     return True

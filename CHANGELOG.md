@@ -4,6 +4,31 @@
 
 ---
 
+## [Unreleased]
+
+### Added
+- **Creator reward ledger**（Phase 1）— 新增 `creator_reward_ledger` 表追蹤
+  每位創作者被投票累積的點數，以及通過審核的 100 點獎勵。這是
+  5888 `s2sCreatorRewardSettle`（Week 5–6 上線）之前的過渡存錄。
+- **`SPEND_TYPE_CREATOR_REWARD` 常數** — 對齊 5888 sitePolicy 白名單
+
+### Changed
+- **投票扣點** `reason` 從 free-form 字串改成 `slime_creator_reward`，否則
+  會被 5888 sitePolicy 403 SITE_NOT_AUTHORIZED 擋下
+- **通過審核的 100 點獎勵** 從 `grant_points()` 改成 ledger 紀錄；
+  創作者收款會在 Phase 2 replay 時一次補齊
+- **Smoke test** `smoke_test_wallet.py` 更新為 5 步驟，覆蓋
+  `slime_evolve` + `slime_list_fee`（舊的 generic `smoke_test` reason
+  已不在白名單，會被 403 擋下）
+
+### Phase 2 計畫（Week 5–6，等 5888 `s2sCreatorRewardSettle` 上線）
+1. 寫 replay script 走訪 `creator_reward_ledger WHERE status='pending'`
+2. 每筆以 `slime_creator_reward_settle:{ledger_id}` 當 idempotency key 呼叫 settle endpoint
+3. 確認成功後將該 row 標為 `status='settled'`，寫入 `settle_tx_id`
+4. Replay 完成後，`cast_vote()` 改為 inline 呼叫 settle（不再寫 ledger）
+
+---
+
 ## [0.3.0] — 2026-04-16
 
 ### Added
