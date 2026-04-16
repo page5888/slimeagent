@@ -56,9 +56,23 @@ class _PgAdapter:
         return [dict(r) for r in rows]
 
     async def executescript(self, sql):
-        """Execute multi-statement SQL (migrations)."""
+        """Execute multi-statement SQL (migrations).
+
+        asyncpg does not support multiple statements in one execute(),
+        so we split by semicolons and run each individually.
+        """
         async with self._pool.acquire() as conn:
-            await conn.execute(sql)
+            for stmt in sql.split(";"):
+                stmt = stmt.strip()
+                if stmt and not stmt.startswith("--"):
+                    try:
+                        await conn.execute(stmt)
+                    except Exception as e:
+                        # Skip "already exists" errors during migration
+                        err_msg = str(e).lower()
+                        if "already exists" in err_msg or "duplicate" in err_msg:
+                            continue
+                        raise
 
     async def commit(self):
         pass  # Postgres auto-commits; transactions handled per-query
