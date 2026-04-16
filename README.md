@@ -222,7 +222,11 @@ python smoke_test_wallet.py
 
 ---
 
-## 授權與致謝
+## 授權
+
+本專案採用 [MIT License](LICENSE) — 你可以自由使用、修改、散佈，商業或個人用途皆可，只要保留原版權聲明。
+
+## 致謝
 
 - 視覺設計：受 Pokémon / 轉生史萊姆 啟發
 - LLM 提供商：Google Gemini（免費）/ OpenAI / Anthropic
