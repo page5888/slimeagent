@@ -2237,10 +2237,21 @@ class SettingsTab(QWidget):
         scroll.setWidget(inner)
         layout.addWidget(scroll)
 
-        # Save button
+        # Save + Update buttons
+        btn_row = QHBoxLayout()
         self.save_btn = QPushButton(t("settings_save"))
         self.save_btn.clicked.connect(self.save_settings)
-        layout.addWidget(self.save_btn)
+        btn_row.addWidget(self.save_btn)
+
+        self.update_btn = QPushButton("🔄 檢查更新")
+        self.update_btn.setStyleSheet(
+            "QPushButton { background: #1e90ff; color: #fff; border: none; "
+            "border-radius: 4px; padding: 8px 16px; font-weight: bold; }"
+            "QPushButton:hover { background: #3aa0ff; }"
+        )
+        self.update_btn.clicked.connect(self._check_update)
+        btn_row.addWidget(self.update_btn)
+        layout.addLayout(btn_row)
 
     @staticmethod
     def _set_combo_by_data(combo: QComboBox, value):
@@ -2248,6 +2259,73 @@ class SettingsTab(QWidget):
             if combo.itemData(i) == value:
                 combo.setCurrentIndex(i)
                 return
+
+    def _check_update(self):
+        """Git pull from origin main and prompt restart if updated."""
+        import subprocess
+        self.update_btn.setEnabled(False)
+        self.update_btn.setText("更新中...")
+
+        try:
+            # Fetch + check if there are new commits
+            result = subprocess.run(
+                ["git", "fetch", "origin", "main"],
+                capture_output=True, text=True, timeout=30,
+                cwd=str(Path(__file__).parent.parent),
+            )
+
+            # Check how many commits behind
+            result = subprocess.run(
+                ["git", "rev-list", "--count", "HEAD..origin/main"],
+                capture_output=True, text=True, timeout=10,
+                cwd=str(Path(__file__).parent.parent),
+            )
+            behind = int(result.stdout.strip() or "0")
+
+            if behind == 0:
+                QMessageBox.information(self, "檢查更新", "已經是最新版本！")
+                self.update_btn.setText("🔄 檢查更新")
+                self.update_btn.setEnabled(True)
+                return
+
+            # Pull
+            result = subprocess.run(
+                ["git", "pull", "origin", "main"],
+                capture_output=True, text=True, timeout=60,
+                cwd=str(Path(__file__).parent.parent),
+            )
+
+            if result.returncode != 0:
+                QMessageBox.warning(
+                    self, "更新失敗",
+                    f"git pull 失敗：\n{result.stderr[:500]}",
+                )
+                self.update_btn.setText("🔄 檢查更新")
+                self.update_btn.setEnabled(True)
+                return
+
+            reply = QMessageBox.question(
+                self, "更新完成",
+                f"已拉取 {behind} 筆新提交。\n需要重新啟動才能生效。\n\n現在重啟嗎？",
+                QMessageBox.Yes | QMessageBox.No,
+            )
+            if reply == QMessageBox.Yes:
+                # Restart: launch a new process then exit
+                import sys
+                subprocess.Popen(
+                    [sys.executable, "-m", "sentinel"],
+                    cwd=str(Path(__file__).parent.parent),
+                )
+                QApplication.quit()
+                import os
+                os._exit(0)
+            else:
+                self.update_btn.setText("✅ 已更新（需重啟）")
+
+        except Exception as e:
+            QMessageBox.warning(self, "更新失敗", f"錯誤：{e}")
+            self.update_btn.setText("🔄 檢查更新")
+            self.update_btn.setEnabled(True)
 
     def _refresh_ollama_status(self):
         """偵測 Ollama 連線狀態（同步，簡單直接）。"""
