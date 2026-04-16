@@ -1737,6 +1737,21 @@ class EvolutionTab(QWidget):
         self.progress_bar = QProgressBar()
         avatar_layout.addWidget(self.progress_bar)
 
+        # 手動進化按鈕（進度達標後啟用；扣 2pt / BYOK 免費）
+        evolve_row = QHBoxLayout()
+        evolve_row.addStretch()
+        self.evolve_btn = QPushButton(t("evolve_btn"))
+        self.evolve_btn.setFixedWidth(180)
+        self.evolve_btn.setStyleSheet(
+            "QPushButton { background:#00dcff; color:#000; font-weight:bold;"
+            " padding:8px 16px; border-radius:4px; }"
+            "QPushButton:disabled { background:#333; color:#666; }"
+        )
+        self.evolve_btn.clicked.connect(self._on_evolve_clicked)
+        evolve_row.addWidget(self.evolve_btn)
+        evolve_row.addStretch()
+        avatar_layout.addLayout(evolve_row)
+
         # 分享按鈕列
         share_layout = QHBoxLayout()
         share_layout.addStretch()
@@ -1877,6 +1892,34 @@ class EvolutionTab(QWidget):
             self.progress_bar.setValue(100)
             self.progress_label.setText("已達最終進化！")
 
+        # 進化按鈕狀態
+        from sentinel.evolution import is_evolution_available
+        info = is_evolution_available(state)
+        if info["at_max"]:
+            self.evolve_btn.setEnabled(False)
+            self.evolve_btn.setText(t("evolve_btn_maxed"))
+        elif info["available"]:
+            self.evolve_btn.setEnabled(True)
+            # BYOK 模式免費；quota 模式顯示扣點
+            try:
+                from sentinel.wallet.quota import QuotaManager
+                mode = QuotaManager(relay_url=config.RELAY_SERVER_URL).mode
+            except Exception:
+                mode = "byok"
+            if mode == "byok":
+                self.evolve_btn.setText(t("evolve_btn_ready_free").format(
+                    form=info["next_form"]
+                ))
+            else:
+                from sentinel.wallet.market_rules import EVOLVE_COST
+                self.evolve_btn.setText(t("evolve_btn_ready_paid").format(
+                    form=info["next_form"], cost=EVOLVE_COST
+                ))
+        else:
+            self.evolve_btn.setEnabled(False)
+            needed = info["next_threshold"] - state.total_observations
+            self.evolve_btn.setText(t("evolve_btn_locked").format(needed=needed))
+
         # 數據頁
         self.days_label.setText(f"{state.days_alive():.1f}")
         self.obs_label.setText(f"{state.total_observations:,}")
@@ -1959,6 +2002,103 @@ class EvolutionTab(QWidget):
             self.log_text.setHtml("".join(html_parts))
         else:
             self.log_text.setHtml("<p style='color:#666;'>（等待第一次觀察...）</p>")
+
+    def _on_evolve_clicked(self):
+        """Manual evolution trigger. BYOK = free, quota = 2pt via relay.
+
+        Flow:
+          1. Load state, re-check eligibility (state may have changed since
+             last refresh).
+          2. If BYOK mode → skip relay, call perform_evolution() directly.
+          3. If quota mode → confirm 2pt cost → POST /evolution/evolve →
+             on success, call perform_evolution() locally.
+          4. Refresh UI + show result dialog.
+        """
+        import uuid
+        from sentinel.evolution import (
+            load_evolution, is_evolution_available, perform_evolution,
+        )
+        from sentinel.wallet.market_rules import EVOLVE_COST
+
+        state = load_evolution()
+        info = is_evolution_available(state)
+
+        if info["at_max"]:
+            QMessageBox.information(self, t("evolve_dialog_title"),
+                                    t("evolve_already_max"))
+            return
+        if not info["available"]:
+            needed = info["next_threshold"] - state.total_observations
+            QMessageBox.information(
+                self, t("evolve_dialog_title"),
+                t("evolve_not_ready").format(needed=needed),
+            )
+            return
+
+        # Determine mode
+        try:
+            from sentinel.wallet.quota import QuotaManager
+            qm = QuotaManager(relay_url=config.RELAY_SERVER_URL)
+            mode = qm.mode
+        except Exception:
+            mode = "byok"
+
+        # Confirm dialog (include cost for quota mode)
+        if mode == "byok":
+            msg = t("evolve_confirm_byok").format(
+                cur=state.form, nxt=info["next_form"],
+                nxt_title=info["next_title"],
+            )
+        else:
+            msg = t("evolve_confirm_paid").format(
+                cur=state.form, nxt=info["next_form"],
+                nxt_title=info["next_title"], cost=EVOLVE_COST,
+            )
+        reply = QMessageBox.question(
+            self, t("evolve_dialog_title"), msg,
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        # Quota mode: deduct points via relay first
+        if mode == "quota":
+            try:
+                from sentinel import relay_client
+                user_id = qm.uid or "anon"
+                idem = f"slime_evolve_{user_id}_{uuid.uuid4()}"
+                relay_client.evolve(idempotency_key=idem)
+            except Exception as e:
+                # Map RelayError 402 → insufficient-balance message
+                code = getattr(e, "code", "")
+                if code == "402":
+                    QMessageBox.warning(
+                        self, t("evolve_dialog_title"),
+                        t("evolve_insufficient").format(cost=EVOLVE_COST),
+                    )
+                else:
+                    msg_text = getattr(e, "message", str(e))
+                    QMessageBox.warning(
+                        self, t("evolve_dialog_title"),
+                        t("evolve_network_err").format(err=msg_text),
+                    )
+                return
+
+        # Perform locally (both modes)
+        result = perform_evolution(state)
+        if result["ok"]:
+            QMessageBox.information(
+                self, t("evolve_dialog_title"),
+                t("evolve_success").format(
+                    frm=result["from"], to=result["to"], title=result["title"],
+                ),
+            )
+        else:
+            # Shouldn't happen — eligibility was just checked — but handle it.
+            QMessageBox.warning(self, t("evolve_dialog_title"),
+                                result.get("reason", "進化失敗"))
+
+        self.refresh()
 
     def _share_slime(self):
         """Generate a share card with the slime avatar and stats."""
@@ -2158,6 +2298,8 @@ class EvolutionTab(QWidget):
 
     def retranslate(self):
         self.refresh_btn.setText(t("status_refresh"))
+        # evolve_btn text is driven by state in refresh()
+        self.refresh()
 
 
 # ─── Settings Tab ────────────────────────────────────────────────────────

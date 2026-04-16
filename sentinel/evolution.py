@@ -241,10 +241,14 @@ EXP_LOG_FILE = Path.home() / ".hermes" / "aislime_exp_log.jsonl"
 def record_observation(state: EvolutionState, count: int = 1, sources: dict = None):
     """Record observations with source breakdown.
 
-    sources example: {"system": 1, "files": 3, "claude": 1, "activity": 1, "input": 1, "screen": 1}
+    Form evolution (Slime → Slime+ → ...) is NO LONGER auto-advanced.
+    The user must press the evolve button and pay 2 pts (quota mode)
+    to actually change form — see perform_evolution(). Adaptive skill
+    unlocks still happen passively based on observation patterns.
+
+    sources example: {"system": 1, "files": 3, "claude": 1, ...}
     """
     state.total_observations += count
-    _check_evolution(state)
     _check_adaptive_unlocks(state)
     save_evolution(state)
 
@@ -395,27 +399,110 @@ def _find_skill(state: EvolutionState, name: str) -> Skill | None:
     return None
 
 
-def _check_evolution(state: EvolutionState):
-    """Check if the slime should evolve to a new form."""
-    current_tier = 0
-    for i, (threshold, form, title) in enumerate(EVOLUTION_TIERS):
-        if state.total_observations >= threshold:
-            current_tier = i
+def _current_tier_index(state: EvolutionState) -> int:
+    """Return the index of the slime's current form in EVOLUTION_TIERS."""
+    for i, (_, form, _) in enumerate(EVOLUTION_TIERS):
+        if form == state.form:
+            return i
+    return 0
 
-    new_form = EVOLUTION_TIERS[current_tier][1]
-    new_title = EVOLUTION_TIERS[current_tier][2]
 
-    if new_form != state.form:
-        old_form = state.form
-        state.form = new_form
-        state.title = new_title
-        state.last_evolution = time.time()
-        state.evolution_log.append({
-            "time": time.time(),
-            "event": "evolution",
-            "message": f"進化！{old_form} → {new_form}「{new_title}」",
-        })
-        log.info(f"EVOLUTION: {old_form} -> {new_form} ({new_title})")
+def is_evolution_available(state: EvolutionState) -> dict:
+    """Check whether the slime has earned enough to evolve ONE step.
+
+    Returns:
+      {
+        "available":        bool — True iff next tier exists and is unlocked
+        "current_form":     str
+        "current_title":    str
+        "next_form":        str | ""     (empty if already max)
+        "next_title":       str | ""
+        "next_threshold":   int          (obs needed for next tier)
+        "current_obs":      int
+        "progress":         float 0–1    (how close to next tier)
+        "at_max":           bool
+      }
+    """
+    idx = _current_tier_index(state)
+    at_max = idx >= len(EVOLUTION_TIERS) - 1
+    if at_max:
+        return {
+            "available": False,
+            "current_form": state.form,
+            "current_title": state.title,
+            "next_form": "",
+            "next_title": "",
+            "next_threshold": 0,
+            "current_obs": state.total_observations,
+            "progress": 1.0,
+            "at_max": True,
+        }
+
+    next_threshold, next_form, next_title = EVOLUTION_TIERS[idx + 1]
+    current_threshold = EVOLUTION_TIERS[idx][0]
+    span = max(1, next_threshold - current_threshold)
+    progress = min(1.0, max(0.0,
+        (state.total_observations - current_threshold) / span
+    ))
+
+    return {
+        "available": state.total_observations >= next_threshold,
+        "current_form": state.form,
+        "current_title": state.title,
+        "next_form": next_form,
+        "next_title": next_title,
+        "next_threshold": next_threshold,
+        "current_obs": state.total_observations,
+        "progress": progress,
+        "at_max": False,
+    }
+
+
+def perform_evolution(state: EvolutionState) -> dict:
+    """Advance the slime's form by ONE tier, if eligible.
+
+    Caller is responsible for handling payment (2 pts via 5888 wallet
+    in quota mode, free in BYOK mode) BEFORE calling this. This
+    function only mutates state; it doesn't know about wallets.
+
+    Returns:
+      {"ok": bool, "reason": str, "from": str, "to": str, "title": str}
+    """
+    info = is_evolution_available(state)
+    if info["at_max"]:
+        return {"ok": False, "reason": "已達最終型態，無法再進化",
+                "from": state.form, "to": state.form, "title": state.title}
+    if not info["available"]:
+        needed = info["next_threshold"] - state.total_observations
+        return {
+            "ok": False,
+            "reason": (
+                f"觀察次數不足：還需 {needed:,} 次才能進化到"
+                f"「{info['next_title']}」"
+            ),
+            "from": state.form,
+            "to": state.form,
+            "title": state.title,
+        }
+
+    old_form = state.form
+    state.form = info["next_form"]
+    state.title = info["next_title"]
+    state.last_evolution = time.time()
+    state.evolution_log.append({
+        "time": time.time(),
+        "event": "evolution",
+        "message": f"進化！{old_form} → {state.form}「{state.title}」",
+    })
+    save_evolution(state)
+    log.info(f"EVOLUTION: {old_form} -> {state.form} ({state.title})")
+    return {
+        "ok": True,
+        "reason": "進化成功",
+        "from": old_form,
+        "to": state.form,
+        "title": state.title,
+    }
 
 
 def _update_affinities(state: EvolutionState):

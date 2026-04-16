@@ -133,3 +133,20 @@ def delist_item(listing_id: str) -> dict:
 
 def get_trade_history(page: int = 1) -> dict:
     return _request("GET", f"marketplace/history?page={page}")
+
+
+# ── Evolution ────────────────────────────────────────────────────────
+
+def evolve(idempotency_key: str | None = None) -> dict:
+    """Deduct 2 pts for a manual evolution trigger.
+
+    On success returns {"ok": True, "cost": 2, "balance_after": int,
+    "idempotency_key": str}. After this call returns success, the desktop
+    should call sentinel.evolution.perform_evolution() locally.
+
+    Raises RelayError with code "402" when balance is insufficient.
+    """
+    body: dict = {}
+    if idempotency_key:
+        body["idempotency_key"] = idempotency_key
+    return _request("POST", "evolution/evolve", body)
