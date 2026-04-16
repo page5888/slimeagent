@@ -24,6 +24,22 @@ DISTILL_TEMPLATE = (
     '"updated_profile":"一段話總結使用者"}'
 )
 
+SPEECH_DISTILL_TEMPLATE = (
+    "你在分析 AI Slime 和主人的對話，幫助 Slime 學習怎麼跟這位主人講話。\n"
+    "不要分析「主人在幹嘛」，只看「雙方的說話方式 + 主人是否糾正過 Slime」。\n\n"
+    "Slime 現有的說話方式理解：\n<<EXISTING_STYLE>>\n\n"
+    "最近對話（主人 = 使用者，Slime = AI 助手）：\n<<RECENT_CHATS>>\n\n"
+    "分析重點：\n"
+    "1. 主人用什麼語言？（中文/英文/日文/混用）主人訊息的長度？用詞正式還隨性？有用 emoji 嗎？\n"
+    "2. 主人有沒有糾正 Slime？例如「太長了」「別用那個梗」「說中文」「不要那麼中二」之類的反饋。\n"
+    "3. 主人看起來喜歡或不喜歡哪種回應風格？（從後續主人的態度判斷）\n\n"
+    "用純 JSON 回覆（不要 markdown、不要 ```）：\n"
+    '{"master_style":"主人怎麼講話（一句話，20字內）",'
+    '"slime_should":["Slime 應該怎麼調整（條列，每項10字內，最多3項）"],'
+    '"slime_avoid":["Slime 不要再做的事（條列，每項10字內，最多3項）"]}\n'
+    "如果對話太少無法判斷，照實填「資料不足」不要瞎掰。"
+)
+
 
 def load_memory() -> dict:
     if MEMORY_FILE.exists():
@@ -138,3 +154,118 @@ def get_profile_summary() -> str:
     if not memory["profile"]:
         return "(還在學習中，尚未建立 profile)"
     return memory["profile"]
+
+
+def _load_recent_chats(n: int = 20) -> list[dict]:
+    """Read the last n entries from the chat log."""
+    chat_log = Path.home() / ".hermes" / "sentinel_chats.jsonl"
+    if not chat_log.exists():
+        return []
+    entries = []
+    try:
+        with open(chat_log, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entries.append(json.loads(line))
+                except json.JSONDecodeError:
+                    pass
+    except OSError:
+        return []
+    return entries[-n:]
+
+
+def distill_speech_style():
+    """Learn how master talks and what Slime should adjust.
+
+    Reads recent chat logs and distills two things:
+      - master's speaking style (language, length, tone)
+      - corrections/preferences Slime should apply next time
+
+    Stored in memory['speech_style'] for chat.py to inject into prompts.
+    Returns the updated style dict, or None on failure / insufficient data.
+    """
+    chats = _load_recent_chats(20)
+    if len(chats) < 4:
+        # Not enough signal to learn from
+        return None
+
+    memory = load_memory()
+    existing = memory.get("speech_style", {})
+    existing_str = json.dumps(existing, ensure_ascii=False) if existing else "(尚無)"
+
+    # Format chats: just user/assistant turns, chronological
+    lines = []
+    for c in chats:
+        role = "主人" if c.get("role") == "user" else "Slime"
+        text = (c.get("text") or "").replace("\n", " ")[:300]
+        lines.append(f"{role}: {text}")
+    recent = "\n".join(lines)
+
+    prompt = SPEECH_DISTILL_TEMPLATE.replace(
+        "<<EXISTING_STYLE>>", existing_str
+    ).replace(
+        "<<RECENT_CHATS>>", recent
+    )
+
+    try:
+        text = call_llm(prompt, temperature=0.3, max_tokens=400,
+                        model_pref=config.ANALYSIS_MODEL_PREF, task_type="analysis")
+        if text is None:
+            log.info("說話風格蒸餾失敗：LLM 無回應")
+            return None
+
+        import re
+        text = re.sub(r'^```(?:json)?\s*', '', text.strip())
+        text = re.sub(r'\s*```$', '', text.strip())
+        match = re.search(r'\{.*\}', text, re.DOTALL)
+        if not match:
+            log.warning(f"speech distill: no JSON in {text[:100]}")
+            return None
+
+        result = json.loads(match.group(0))
+        # Basic shape validation
+        style = {
+            "master_style": str(result.get("master_style", ""))[:200],
+            "slime_should": [str(x)[:80] for x in result.get("slime_should", [])][:3],
+            "slime_avoid": [str(x)[:80] for x in result.get("slime_avoid", [])][:3],
+            "last_updated": time.time(),
+            "based_on_chats": len(chats),
+        }
+        # Skip if LLM said "資料不足"
+        if "資料不足" in style["master_style"] and not style["slime_should"] and not style["slime_avoid"]:
+            log.info("說話風格蒸餾：資料不足，略過")
+            return None
+
+        memory["speech_style"] = style
+        save_memory(memory)
+        log.info(f"說話風格已更新：{style['master_style']}")
+        return style
+
+    except Exception as e:
+        log.error(f"speech distill error: {e}")
+        return None
+
+
+def get_speech_style() -> dict:
+    """Get the current speech-style understanding, or empty dict if none yet."""
+    return load_memory().get("speech_style", {})
+
+
+def format_speech_style_for_prompt(style: dict) -> str:
+    """Render speech style into a short text block for the chat system prompt."""
+    if not style:
+        return "(還在觀察主人怎麼講話)"
+    lines = []
+    ms = style.get("master_style")
+    if ms:
+        lines.append(f"主人的風格：{ms}")
+    should = style.get("slime_should") or []
+    if should:
+        lines.append("應該：" + "；".join(should))
+    avoid = style.get("slime_avoid") or []
+    if avoid:
+        lines.append("避免：" + "；".join(avoid))
+    return "\n".join(lines) if lines else "(還在觀察主人怎麼講話)"

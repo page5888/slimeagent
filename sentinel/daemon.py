@@ -17,7 +17,7 @@ from sentinel.system_monitor import take_snapshot
 from sentinel.file_watcher import FileWatcher
 from sentinel.claude_watcher import get_claude_activity_summary
 from sentinel.brain import analyze_events, build_context
-from sentinel.learner import distill_from_activity, get_profile_summary, load_memory
+from sentinel.learner import distill_from_activity, distill_speech_style, get_profile_summary, load_memory
 from sentinel.chat import handle_message
 
 logging.basicConfig(
@@ -119,6 +119,7 @@ def monitor_loop(bot_send_fn):
     last_distill = time.time()
     last_idle_report = time.time()
     last_notify_time: dict[str, float] = {}
+    last_chat_count = load_memory().get("chat_count", 0)
     activity_buffer = []
 
     try:
@@ -165,6 +166,15 @@ def monitor_loop(bot_send_fn):
                     log.info(f"Learning cycle done. Profile: {get_profile_summary()[:100]}...")
                 else:
                     log.info("Distill failed (rate limit?), keeping buffer for next cycle")
+
+                # Speech-style learning: only if chats happened since last run
+                current_chat_count = load_memory().get("chat_count", 0)
+                if current_chat_count > last_chat_count:
+                    try:
+                        distill_speech_style()
+                    except Exception as e:
+                        log.warning(f"speech-style distill error: {e}")
+                    last_chat_count = current_chat_count
 
             # Idle report (every 30 min)
             if now - last_idle_report >= IDLE_REPORT_INTERVAL:

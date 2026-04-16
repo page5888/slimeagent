@@ -1616,6 +1616,16 @@ class MemoryTab(QWidget):
         patterns_group.setLayout(patterns_layout)
         layout.addWidget(patterns_group)
 
+        # Speech style - what Slime learned about how master talks + how to adjust
+        self.speech_group = QGroupBox(t("memory_speech_style"))
+        speech_layout = QVBoxLayout()
+        self.speech_text = QTextEdit()
+        self.speech_text.setReadOnly(True)
+        self.speech_text.setMaximumHeight(90)
+        speech_layout.addWidget(self.speech_text)
+        self.speech_group.setLayout(speech_layout)
+        layout.addWidget(self.speech_group)
+
         # Learning Log - concrete evidence of what was learned and when
         log_group = QGroupBox("學習日誌 / Learning Log")
         log_layout = QVBoxLayout()
@@ -1652,6 +1662,11 @@ class MemoryTab(QWidget):
         else:
             self.patterns_text.setPlainText(t("memory_learning"))
 
+        # Speech style
+        from sentinel.learner import format_speech_style_for_prompt
+        style = memory.get("speech_style", {})
+        self.speech_text.setPlainText(format_speech_style_for_prompt(style))
+
         # Learning log - show concrete evidence of each learning event
         log_entries = get_learning_log(last_n=20)
         if log_entries:
@@ -1673,6 +1688,7 @@ class MemoryTab(QWidget):
 
     def retranslate(self):
         self.refresh_btn.setText(t("status_refresh"))
+        self.speech_group.setTitle(t("memory_speech_style"))
 
 
 # ─── Evolution Tab (子頁籤版) ────────────────────────────────────────────

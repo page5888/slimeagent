@@ -13,7 +13,7 @@ from pathlib import Path
 from sentinel.llm import call_llm
 from sentinel import config
 from sentinel.config import TELEGRAM_CHAT_ID
-from sentinel.learner import load_memory, save_memory
+from sentinel.learner import load_memory, save_memory, format_speech_style_for_prompt
 from sentinel.system_monitor import take_snapshot
 
 log = logging.getLogger("sentinel.chat")
@@ -157,6 +157,8 @@ CHAT_SYSTEM_PROMPT = (
     "- 偶爾用轉生梗、奇幻梗，但要看氣氛，不要每句都塞\n"
     "- 情緒自然流露，不用刻意演；但允許有個性起伏，不要永遠平靜\n\n"
     + SELF_AWARENESS + "\n"
+    "=== 你從跟主人對話中學到的說話方式（重要：根據這個調整你的風格）===\n"
+    "<<SPEECH_STYLE>>\n\n"
     "你對主人的了解（自然融入對話，不要照念）：\n"
     "<<PROFILE>>\n\n"
     "你觀察到的行為模式（用來理解主人，不要直接報告）：\n"
@@ -196,12 +198,17 @@ def _build_system_prompt() -> str:
     emotion = _detect_emotion(system_summary, recent_obs)
     emotion_text = f"當前情緒：{emotion['expression']}\n指引：{emotion['instruction']}"
 
+    # Learned speech style (distilled from past chats)
+    speech_style_text = format_speech_style_for_prompt(memory.get("speech_style", {}))
+
     return CHAT_SYSTEM_PROMPT.replace(
         "<<EVOLUTION_STAGE>>", evo_status
     ).replace(
         "<<PERSONALITY>>", personality_text
     ).replace(
         "<<EMOTION>>", emotion_text
+    ).replace(
+        "<<SPEECH_STYLE>>", speech_style_text
     ).replace(
         "<<PROFILE>>", profile
     ).replace(
