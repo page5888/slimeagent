@@ -609,9 +609,18 @@ def draw_kusanagi(ctx):
 
 def draw_night_city(ctx):
     p, w, h, scale = ctx["p"], ctx["w"], ctx["h"], ctx["scale"]
-    # City silhouette at bottom
+    # Full-widget twilight sky gradient so the "night city" atmosphere
+    # actually reads as a backdrop, not a line of dots at the bottom.
+    sky = QLinearGradient(0, 0, 0, h)
+    sky.setColorAt(0, QColor(10, 15, 40, 180))       # deep midnight top
+    sky.setColorAt(0.6, QColor(40, 20, 60, 140))     # purple haze
+    sky.setColorAt(1, QColor(255, 100, 50, 90))      # warm horizon glow
     p.setPen(Qt.NoPen)
-    p.setBrush(QBrush(QColor(20, 25, 40, 140)))
+    p.setBrush(QBrush(sky))
+    p.drawRect(0, 0, w, h)
+
+    # City silhouette at bottom — now solid enough to read
+    p.setBrush(QBrush(QColor(10, 15, 30, 230)))
     base_y = int(h * 0.85)
     buildings = [(0.1, 0.15), (0.2, 0.25), (0.35, 0.12), (0.5, 0.2),
                  (0.65, 0.18), (0.8, 0.22), (0.9, 0.1)]
@@ -620,9 +629,9 @@ def draw_night_city(ctx):
         bh = int(bh_pct * h)
         bw = _s(10, scale)
         p.drawRect(QRect(bx, base_y - bh, bw, bh))
-    # Neon glow windows
-    p.setBrush(QBrush(QColor(0, 255, 200, 130)))
-    for bx_pct, bh_pct in buildings[:3]:
+    # Neon glow windows — bright cyan punches against the dark buildings
+    p.setBrush(QBrush(QColor(0, 255, 220, 220)))
+    for bx_pct, bh_pct in buildings[:5]:
         bx = int(bx_pct * w) + _s(2, scale)
         by = base_y - int(bh_pct * h) + _s(3, scale)
         p.drawRect(QRect(bx, by, _s(3, scale), _s(2, scale)))
@@ -630,27 +639,44 @@ def draw_night_city(ctx):
 
 def draw_jura_forest(ctx):
     p, w, h, scale = ctx["p"], ctx["w"], ctx["h"], ctx["scale"]
-    # Green trees silhouette
-    base_y = int(h * 0.88)
     p.setPen(Qt.NoPen)
-    trees = [(0.1, 20), (0.25, 25), (0.4, 18), (0.6, 22), (0.75, 28), (0.9, 16)]
+    # Sky-to-canopy gradient fills the whole widget
+    sky = QLinearGradient(0, 0, 0, h)
+    sky.setColorAt(0, QColor(140, 180, 120, 170))    # morning leaf-light
+    sky.setColorAt(0.55, QColor(60, 110, 55, 140))    # mid canopy
+    sky.setColorAt(1, QColor(20, 50, 25, 180))       # forest floor
+    p.setBrush(QBrush(sky))
+    p.drawRect(0, 0, w, h)
+
+    # Green trees silhouette — denser and more opaque
+    base_y = int(h * 0.88)
+    trees = [(0.08, 22), (0.18, 28), (0.3, 18), (0.42, 26),
+             (0.55, 24), (0.68, 30), (0.8, 20), (0.92, 18)]
     for tx_pct, th in trees:
         tx = int(tx_pct * w)
         th_s = _s(th, scale)
-        # Triangle tree
-        p.setBrush(QBrush(QColor(20, 80, 30, 130)))
+        p.setBrush(QBrush(QColor(15, 60, 25, 220)))
         pts = [QPoint(tx, base_y),
-               QPoint(tx - _s(8, scale), base_y),
+               QPoint(tx - _s(9, scale), base_y),
                QPoint(tx - _s(4, scale), base_y - th_s)]
         p.drawPolygon(QPolygon(pts))
 
 
 def draw_demon_castle(ctx):
     p, w, h, phase, scale = ctx["p"], ctx["w"], ctx["h"], ctx["phase"], ctx["scale"]
-    base_y = int(h * 0.88)
-    # Dark castle silhouette
     p.setPen(Qt.NoPen)
-    p.setBrush(QBrush(QColor(30, 10, 40, 140)))
+    # Ominous blood-violet sky so the castle sits in front of a mood,
+    # not a void.
+    sky = QLinearGradient(0, 0, 0, h)
+    sky.setColorAt(0, QColor(30, 10, 50, 180))       # deep violet
+    sky.setColorAt(0.5, QColor(70, 15, 40, 150))     # burgundy haze
+    sky.setColorAt(1, QColor(120, 25, 35, 170))      # hellish glow
+    p.setBrush(QBrush(sky))
+    p.drawRect(0, 0, w, h)
+
+    base_y = int(h * 0.88)
+    # Dark castle silhouette — solid now
+    p.setBrush(QBrush(QColor(15, 5, 25, 240)))
     cx = w // 2
     # Main tower
     tw = _s(16, scale)
@@ -661,27 +687,47 @@ def draw_demon_castle(ctx):
     sth = _s(20, scale)
     p.drawRect(QRect(cx - tw - stw, base_y - sth, stw, sth))
     p.drawRect(QRect(cx + tw, base_y - sth, stw, sth))
-    # Glowing window
-    p.setBrush(QBrush(QColor(255, 50, 50, int(160 + 60 * math.sin(phase * 2)))))
-    p.drawEllipse(QPoint(cx, base_y - th + _s(8, scale)), _s(3, scale), _s(4, scale))
+    # Pulsing blood-red window
+    p.setBrush(QBrush(QColor(255, 50, 50, int(200 + 50 * math.sin(phase * 2)))))
+    p.drawEllipse(QPoint(cx, base_y - th + _s(8, scale)), _s(4, scale), _s(5, scale))
 
 
 def draw_starry_abyss(ctx):
     p, w, h, phase, scale = ctx["p"], ctx["w"], ctx["h"], ctx["phase"], ctx["scale"]
-    # Scattered stars around the edges
     p.setPen(Qt.NoPen)
+    # Deep-space radial gradient — centered slightly above the slime so
+    # the widget looks like a window into the cosmos, not a star field
+    # over nothing.
+    cx, cy = w // 2, int(h * 0.45)
+    abyss = QRadialGradient(cx, cy, max(w, h) * 0.7)
+    abyss.setColorAt(0, QColor(40, 20, 80, 200))     # violet nebula core
+    abyss.setColorAt(0.5, QColor(15, 10, 40, 220))   # void mid
+    abyss.setColorAt(1, QColor(0, 0, 15, 240))       # deep black edge
+    p.setBrush(QBrush(abyss))
+    p.drawRect(0, 0, w, h)
+
+    # Faint cross-nebula streak for some structure
+    neb = QLinearGradient(0, int(h * 0.3), w, int(h * 0.55))
+    neb.setColorAt(0, QColor(80, 20, 120, 0))
+    neb.setColorAt(0.5, QColor(160, 60, 200, 60))
+    neb.setColorAt(1, QColor(80, 20, 120, 0))
+    p.setBrush(QBrush(neb))
+    p.drawRect(0, 0, w, h)
+
+    # Stars — more, brighter, mix of sizes
     import random
-    rng = random.Random(42)  # Deterministic star positions
-    # More stars, brighter, slightly larger — makes the abyss actually
-    # visible behind the slime body instead of a barely-there shimmer.
-    for _ in range(28):
+    rng = random.Random(42)
+    for _ in range(42):
         sx = rng.randint(0, w)
         sy = rng.randint(0, h)
-        brightness = int(180 + 70 * math.sin(phase + rng.random() * 6.28))
+        brightness = int(200 + 55 * math.sin(phase + rng.random() * 6.28))
         brightness = max(0, min(255, brightness))
-        p.setBrush(QBrush(QColor(220, 220, 255, brightness)))
-        # Mix of tiny and slightly bigger stars for parallax feel
-        star_size = 1 if rng.random() > 0.3 else 2
+        # Occasional warm-tinted star for variety
+        if rng.random() > 0.88:
+            p.setBrush(QBrush(QColor(255, 220, 180, brightness)))
+        else:
+            p.setBrush(QBrush(QColor(230, 230, 255, brightness)))
+        star_size = rng.choice([1, 1, 1, 2, 2, 3])
         p.drawEllipse(QPoint(sx, sy), star_size, star_size)
 
 

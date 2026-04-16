@@ -2475,16 +2475,30 @@ class EvolutionTab(QWidget):
         encoded_url = urllib.parse.quote(SITE_URL)
         encoded_title = urllib.parse.quote("我的 AI Slime Agent")
 
+        # 社群分享 intent URL 都不支援直接附圖，所以開瀏覽器之前先提醒
+        # 用戶「圖片已在剪貼簿」— 文字自動帶進 intent，圖片要 Ctrl+V 貼。
+        def _remind_paste_image(where: str):
+            QMessageBox.information(
+                self, "AI Slime",
+                f"文字已帶入 {where} 發文頁面。\n\n"
+                f"史萊姆圖片已複製到剪貼簿 —\n"
+                f"在發文框裡按 Ctrl+V 即可貼上圖片。",
+            )
+
         if platform == "x":
+            _remind_paste_image("X (Twitter)")
             webbrowser.open(f"https://x.com/intent/tweet?text={encoded}")
         elif platform == "facebook":
             # Facebook sharer 只支援 u 參數，文字由 OG meta 決定
+            _remind_paste_image("Facebook")
             webbrowser.open(f"https://www.facebook.com/sharer/sharer.php?u={encoded_url}")
         elif platform == "reddit":
+            _remind_paste_image("Reddit")
             webbrowser.open(
                 f"https://www.reddit.com/submit?title={encoded_title}&url={encoded_url}&selftext=true&text={encoded}"
             )
         elif platform == "threads":
+            _remind_paste_image("Threads")
             webbrowser.open(f"https://www.threads.net/intent/post?text={encoded}")
         elif platform == "discord":
             # Discord 沒有 share URL，複製 markdown 格式文字
