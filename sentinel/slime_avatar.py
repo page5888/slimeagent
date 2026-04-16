@@ -169,7 +169,10 @@ class SlimeWidget(QWidget):
         w = self.width()
         h = self.height()
         cx = w // 2
-        cy = h // 2
+        # Shift slime down ~12% so the upper area reveals background
+        # equipment (starfields, skies) that were previously hidden behind
+        # the body and glow aura.
+        cy = int(h * 0.58)
 
         colors = TIER_COLORS.get(self._form, TIER_COLORS["Slime"])
 

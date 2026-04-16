@@ -611,7 +611,7 @@ def draw_night_city(ctx):
     p, w, h, scale = ctx["p"], ctx["w"], ctx["h"], ctx["scale"]
     # City silhouette at bottom
     p.setPen(Qt.NoPen)
-    p.setBrush(QBrush(QColor(20, 25, 40, 60)))
+    p.setBrush(QBrush(QColor(20, 25, 40, 140)))
     base_y = int(h * 0.85)
     buildings = [(0.1, 0.15), (0.2, 0.25), (0.35, 0.12), (0.5, 0.2),
                  (0.65, 0.18), (0.8, 0.22), (0.9, 0.1)]
@@ -621,7 +621,7 @@ def draw_night_city(ctx):
         bw = _s(10, scale)
         p.drawRect(QRect(bx, base_y - bh, bw, bh))
     # Neon glow windows
-    p.setBrush(QBrush(QColor(0, 255, 200, 40)))
+    p.setBrush(QBrush(QColor(0, 255, 200, 130)))
     for bx_pct, bh_pct in buildings[:3]:
         bx = int(bx_pct * w) + _s(2, scale)
         by = base_y - int(bh_pct * h) + _s(3, scale)
@@ -638,7 +638,7 @@ def draw_jura_forest(ctx):
         tx = int(tx_pct * w)
         th_s = _s(th, scale)
         # Triangle tree
-        p.setBrush(QBrush(QColor(20, 80, 30, 50)))
+        p.setBrush(QBrush(QColor(20, 80, 30, 130)))
         pts = [QPoint(tx, base_y),
                QPoint(tx - _s(8, scale), base_y),
                QPoint(tx - _s(4, scale), base_y - th_s)]
@@ -650,7 +650,7 @@ def draw_demon_castle(ctx):
     base_y = int(h * 0.88)
     # Dark castle silhouette
     p.setPen(Qt.NoPen)
-    p.setBrush(QBrush(QColor(30, 10, 40, 50)))
+    p.setBrush(QBrush(QColor(30, 10, 40, 140)))
     cx = w // 2
     # Main tower
     tw = _s(16, scale)
@@ -662,7 +662,7 @@ def draw_demon_castle(ctx):
     p.drawRect(QRect(cx - tw - stw, base_y - sth, stw, sth))
     p.drawRect(QRect(cx + tw, base_y - sth, stw, sth))
     # Glowing window
-    p.setBrush(QBrush(QColor(255, 50, 50, int(40 + 20 * math.sin(phase * 2)))))
+    p.setBrush(QBrush(QColor(255, 50, 50, int(160 + 60 * math.sin(phase * 2)))))
     p.drawEllipse(QPoint(cx, base_y - th + _s(8, scale)), _s(3, scale), _s(4, scale))
 
 
@@ -672,12 +672,17 @@ def draw_starry_abyss(ctx):
     p.setPen(Qt.NoPen)
     import random
     rng = random.Random(42)  # Deterministic star positions
-    for _ in range(15):
+    # More stars, brighter, slightly larger — makes the abyss actually
+    # visible behind the slime body instead of a barely-there shimmer.
+    for _ in range(28):
         sx = rng.randint(0, w)
         sy = rng.randint(0, h)
-        brightness = int(80 + 60 * math.sin(phase + rng.random() * 6.28))
-        p.setBrush(QBrush(QColor(200, 200, 255, brightness)))
-        p.drawEllipse(QPoint(sx, sy), 1, 1)
+        brightness = int(180 + 70 * math.sin(phase + rng.random() * 6.28))
+        brightness = max(0, min(255, brightness))
+        p.setBrush(QBrush(QColor(220, 220, 255, brightness)))
+        # Mix of tiny and slightly bigger stars for parallax feel
+        star_size = 1 if rng.random() > 0.3 else 2
+        p.drawEllipse(QPoint(sx, sy), star_size, star_size)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
