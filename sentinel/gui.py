@@ -400,7 +400,8 @@ class HomeTab(QWidget):
         def _do():
             try:
                 from sentinel.google_auth import full_login_flow
-                auth_data = full_login_flow(client_id, relay_url)
+                auth_data = full_login_flow(client_id, relay_url,
+                                             client_secret=config.GOOGLE_CLIENT_SECRET)
                 from PySide6.QtCore import QMetaObject, Qt, Q_ARG
                 QMetaObject.invokeMethod(
                     self, "_login_done",
@@ -1427,7 +1428,8 @@ class EquipmentTab(QWidget):
         def _do():
             try:
                 from sentinel.google_auth import full_login_flow
-                auth_data = full_login_flow(client_id, relay_url)
+                auth_data = full_login_flow(client_id, relay_url,
+                                             client_secret=config.GOOGLE_CLIENT_SECRET)
                 from PySide6.QtCore import QMetaObject, Qt, Q_ARG
                 QMetaObject.invokeMethod(
                     self, "_on_login_result",
@@ -2300,12 +2302,6 @@ class SettingsTab(QWidget):
         mode_layout.addWidget(self.wallet_info)
         self.wallet_info.setVisible(self._quota_mgr.mode == "quota")
 
-        # Google Client ID (usually pre-filled, only admin changes this)
-        self.gcid_input = QLineEdit(config.GOOGLE_CLIENT_ID)
-        self.gcid_input.setPlaceholderText("xxxx.apps.googleusercontent.com")
-        mode_layout.addWidget(QLabel("Google Client ID"))
-        mode_layout.addWidget(self.gcid_input)
-
         # Google login button
         relay_btn_row = QHBoxLayout()
         self.google_login_btn = QPushButton("Google 登入")
@@ -2554,7 +2550,7 @@ class SettingsTab(QWidget):
 
     def _google_login(self):
         """Google OAuth login — opens browser, gets token, sends to relay."""
-        client_id = self.gcid_input.text().strip()
+        client_id = config.GOOGLE_CLIENT_ID
         relay_url = config.RELAY_SERVER_URL
 
         if not client_id:
@@ -2576,6 +2572,7 @@ class SettingsTab(QWidget):
                 auth_data = full_login_flow(
                     client_id, relay_url,
                     on_status=lambda s: None,
+                    client_secret=config.GOOGLE_CLIENT_SECRET,
                 )
                 # Back on GUI thread
                 from PySide6.QtCore import QMetaObject, Qt, Q_ARG
@@ -2628,7 +2625,6 @@ class SettingsTab(QWidget):
             "language": self.lang_combo.currentData(),
             "theme": self.theme_combo.currentData(),
             "user_mode": self.mode_combo.currentData(),
-            "google_client_id": self.gcid_input.text().strip(),
             "chat_model_pref": self.chat_pref_combo.currentData(),
             "analysis_model_pref": self.analysis_pref_combo.currentData(),
             "telegram_bot_token": self.token_input.text(),
@@ -2646,7 +2642,6 @@ class SettingsTab(QWidget):
         settings_file.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
 
         # Apply to runtime config
-        config.GOOGLE_CLIENT_ID = settings["google_client_id"]
         config.CHAT_MODEL_PREF = settings["chat_model_pref"]
         config.ANALYSIS_MODEL_PREF = settings["analysis_model_pref"]
         config.TELEGRAM_BOT_TOKEN = settings["telegram_bot_token"]

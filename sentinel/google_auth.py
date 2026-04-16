@@ -158,17 +158,21 @@ def wait_for_callback(port: int, state: str, result: OAuthResult,
 
 
 def exchange_code_for_tokens(auth_code: str, client_id: str,
-                             code_verifier: str, port: int) -> dict:
+                             code_verifier: str, port: int,
+                             client_secret: str = "") -> dict:
     """Exchange authorization code for tokens (id_token, access_token)."""
     redirect_uri = f"http://{_REDIRECT_HOST}:{port}"
 
-    data = urllib.parse.urlencode({
+    params = {
         "code": auth_code,
         "client_id": client_id,
         "redirect_uri": redirect_uri,
         "grant_type": "authorization_code",
         "code_verifier": code_verifier,
-    }).encode("utf-8")
+    }
+    if client_secret:
+        params["client_secret"] = client_secret
+    data = urllib.parse.urlencode(params).encode("utf-8")
 
     req = urllib.request.Request(
         GOOGLE_TOKEN_URL, data=data,
@@ -222,7 +226,7 @@ def clear_auth():
 
 
 def full_login_flow(client_id: str, relay_url: str,
-                    on_status=None) -> dict:
+                    on_status=None, client_secret: str = "") -> dict:
     """Run complete Google OAuth → Relay login flow (blocking).
 
     on_status: optional callback(str) for progress updates.
@@ -253,7 +257,8 @@ def full_login_flow(client_id: str, relay_url: str,
 
     # Exchange code for tokens
     tokens = exchange_code_for_tokens(
-        result.auth_code, client_id, code_verifier, port
+        result.auth_code, client_id, code_verifier, port,
+        client_secret=client_secret,
     )
 
     id_token_str = tokens.get("id_token")

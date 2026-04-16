@@ -109,7 +109,26 @@ RELAY_SERVER_URL = "https://slimeagent-relay.onrender.com"
 # Google OAuth Client ID — needed for marketplace login.
 # Create at https://console.cloud.google.com/apis/credentials
 # Type: "Web application", add http://127.0.0.1:18510 to redirect URIs.
-GOOGLE_CLIENT_ID = "942074052009-bpso1jl3rptcm0023d9ac5ct4po9ud09.apps.googleusercontent.com"
+GOOGLE_CLIENT_ID = ""
+# Desktop OAuth client secret — per Google docs, not confidential for installed apps.
+# Loaded from ~/.hermes/google_oauth.json to avoid GitHub secret scanning.
+GOOGLE_CLIENT_SECRET = ""
+
+
+def _load_google_oauth():
+    """Load Google OAuth credentials from ~/.hermes/google_oauth.json."""
+    global GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET
+    creds_file = Path.home() / ".hermes" / "google_oauth.json"
+    if creds_file.exists():
+        try:
+            data = json.loads(creds_file.read_text(encoding="utf-8"))
+            GOOGLE_CLIENT_ID = data.get("client_id", "")
+            GOOGLE_CLIENT_SECRET = data.get("client_secret", "")
+        except Exception as e:
+            _log.warning("Failed to load google_oauth.json: %s", e)
+
+
+_load_google_oauth()
 
 # User mode: "byok" (self-provided API keys) or "quota" (5888 wallet points)
 # Saved per-user in ~/.hermes/aislime_auth.json, this is just the default.
@@ -123,7 +142,7 @@ MARKETPLACE_FEE_PERCENT = 10  # 10% on P2P trades (base rate)
 def _load_persisted_settings():
     """Load user settings from disk. Called once on module import."""
     global TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, LLM_PROVIDERS
-    global CHAT_MODEL_PREF, ANALYSIS_MODEL_PREF, RELAY_SERVER_URL, GOOGLE_CLIENT_ID
+    global CHAT_MODEL_PREF, ANALYSIS_MODEL_PREF
     global SYSTEM_CHECK_INTERVAL, IDLE_REPORT_INTERVAL, WATCH_DIRS
 
     settings_file = Path.home() / ".hermes" / "sentinel_settings.json"
@@ -140,8 +159,7 @@ def _load_persisted_settings():
             LLM_PROVIDERS = s["llm_providers"]
         CHAT_MODEL_PREF = s.get("chat_model_pref", CHAT_MODEL_PREF)
         ANALYSIS_MODEL_PREF = s.get("analysis_model_pref", ANALYSIS_MODEL_PREF)
-        # RELAY_SERVER_URL is hardcoded — don't load from settings
-        GOOGLE_CLIENT_ID = s.get("google_client_id", GOOGLE_CLIENT_ID)
+        # RELAY_SERVER_URL and GOOGLE_CLIENT_ID are loaded separately
         SYSTEM_CHECK_INTERVAL = s.get("check_interval", SYSTEM_CHECK_INTERVAL)
         IDLE_REPORT_INTERVAL = s.get("idle_report_interval", IDLE_REPORT_INTERVAL)
         if "watch_dirs" in s:
