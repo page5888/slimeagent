@@ -79,6 +79,29 @@ def _new_id() -> str:
     return secrets.token_hex(3)  # 6 hex chars
 
 
+# ── Callbacks on submit ───────────────────────────────────────────
+# GUI / daemon register here so the user gets notified when a
+# proposal is queued. Keeps growth module free of PySide/Telegram
+# dependencies.
+
+_submit_callbacks: list = []
+
+
+def register_on_submit(callback) -> None:
+    """Register a callable(PendingApproval) -> None to fire on submit.
+
+    Callbacks MUST NOT raise. If they do, the exception is swallowed
+    and logged — one broken listener shouldn't kill the queue.
+    """
+    if callback not in _submit_callbacks:
+        _submit_callbacks.append(callback)
+
+
+def unregister_on_submit(callback) -> None:
+    if callback in _submit_callbacks:
+        _submit_callbacks.remove(callback)
+
+
 # ── Submit ────────────────────────────────────────────────────────
 
 def submit_for_approval(
@@ -124,6 +147,14 @@ def submit_for_approval(
         "warnings": len(approval.safety_findings),
     })
     log.info("Approval queued: %s (%s) — %s", approval.id, kind, title)
+
+    # Fire callbacks — each listener isolated so one crash doesn't stop the rest
+    for cb in list(_submit_callbacks):
+        try:
+            cb(approval)
+        except Exception as e:
+            log.warning("approval submit callback %r raised: %s", cb, e)
+
     return approval
 
 

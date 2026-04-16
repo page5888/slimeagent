@@ -43,6 +43,8 @@ from sentinel.growth.approval import (
     list_pending,
     approve,
     reject,
+    register_on_submit,
+    unregister_on_submit,
 )
 from sentinel.growth.safety import (
     scan_code,
@@ -53,5 +55,6 @@ __all__ = [
     "Capability", "current_capabilities", "can_perform",
     "PendingApproval", "submit_for_approval", "list_pending",
     "approve", "reject",
+    "register_on_submit", "unregister_on_submit",
     "scan_code", "SafetyReport",
 ]

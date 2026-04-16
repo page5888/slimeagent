@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QTextEdit, QLineEdit, QPushButton, QLabel, QProgressBar, QGroupBox,
     QFormLayout, QComboBox, QPlainTextEdit, QSystemTrayIcon, QMenu,
     QScrollArea, QFrame, QSpinBox, QMessageBox, QInputDialog,
+    QListWidget, QListWidgetItem, QSplitter,
 )
 from PySide6.QtCore import Qt, QTimer, Signal, Slot, QObject, QThread, QSize, QRect, QPoint
 from PySide6.QtWidgets import QLayout, QSizePolicy
@@ -2665,6 +2666,291 @@ class SettingsTab(QWidget):
         self.save_btn.setText(t("settings_save"))
 
 
+# ─── Approval Tab (growth PR 2a) ───────────────────────────────────────────
+# 待同意頁籤。list_pending() 是事實的來源。GUI 只是一層 viewer —
+# 真正落檔發生在 approve()，真正歸檔發生在 reject()。
+
+class ApprovalTab(QWidget):
+    """Pending-approval queue UI.
+
+    Left: QListWidget of pending proposals (newest first).
+    Right: detail panel — title, reason, target, safety warnings, source.
+    Bottom: [Approve & deploy] [Reject] buttons.
+
+    Refresh happens on MainWindow's 30s timer + when the user clicks
+    the tab + after every approve/reject action.
+    """
+
+    # 其他分頁想在人類動作完成後重新整理時可以 connect 這個 signal
+    proposals_changed = Signal()
+
+    def __init__(self):
+        super().__init__()
+        self._current_id: str | None = None
+        self._pending_cache: list = []  # list[PendingApproval]
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(8, 8, 8, 8)
+
+        # Header row: title + refresh button
+        header = QHBoxLayout()
+        self.title_lbl = QLabel("")  # set in retranslate()
+        self.title_lbl.setStyleSheet("font-weight: bold; font-size: 14px;")
+        header.addWidget(self.title_lbl)
+        header.addStretch()
+        self.refresh_btn = QPushButton("")
+        self.refresh_btn.clicked.connect(self.refresh)
+        header.addWidget(self.refresh_btn)
+        root.addLayout(header)
+
+        # Main split: list | detail
+        split = QSplitter(Qt.Horizontal)
+
+        # Left: list
+        self.list_widget = QListWidget()
+        self.list_widget.currentItemChanged.connect(self._on_selection_changed)
+        split.addWidget(self.list_widget)
+
+        # Right: detail
+        detail_box = QWidget()
+        detail_layout = QVBoxLayout(detail_box)
+        detail_layout.setContentsMargins(8, 0, 0, 0)
+
+        self.empty_lbl = QLabel("")  # shown when list is empty
+        self.empty_lbl.setAlignment(Qt.AlignCenter)
+        self.empty_lbl.setStyleSheet("color: #888; padding: 40px;")
+        detail_layout.addWidget(self.empty_lbl)
+
+        self.detail_text = QTextEdit()
+        self.detail_text.setReadOnly(True)
+        # Mono font for code blocks — Qt will fall back gracefully
+        mono = QFont("Consolas", 10)
+        mono.setStyleHint(QFont.Monospace)
+        self.detail_text.setFont(mono)
+        detail_layout.addWidget(self.detail_text, stretch=1)
+
+        # Action buttons
+        btn_row = QHBoxLayout()
+        self.approve_btn = QPushButton("")
+        self.approve_btn.setStyleSheet(
+            "QPushButton { background-color: #2ecc71; color: white; "
+            "padding: 8px 16px; font-weight: bold; } "
+            "QPushButton:disabled { background-color: #555; color: #888; }"
+        )
+        self.approve_btn.clicked.connect(self._on_approve)
+        self.reject_btn = QPushButton("")
+        self.reject_btn.setStyleSheet(
+            "QPushButton { background-color: #e74c3c; color: white; "
+            "padding: 8px 16px; } "
+            "QPushButton:disabled { background-color: #444; color: #888; }"
+        )
+        self.reject_btn.clicked.connect(self._on_reject)
+        btn_row.addStretch()
+        btn_row.addWidget(self.reject_btn)
+        btn_row.addWidget(self.approve_btn)
+        detail_layout.addLayout(btn_row)
+
+        split.addWidget(detail_box)
+        split.setStretchFactor(0, 1)
+        split.setStretchFactor(1, 2)
+        root.addWidget(split, stretch=1)
+
+        self.retranslate()
+        self.refresh()
+
+    def retranslate(self):
+        self.title_lbl.setText(t("approval_list_header"))
+        self.refresh_btn.setText(t("approval_refresh"))
+        self.empty_lbl.setText(t("approval_empty"))
+        self.approve_btn.setText(t("approval_approve"))
+        self.reject_btn.setText(t("approval_reject"))
+
+    # ── Data ──────────────────────────────────────────────────────
+
+    def refresh(self):
+        """Re-read pending/ directory and update the list.
+
+        Preserves selection if the selected ID still exists. Updates
+        action-button enablement based on whether anything is selected.
+        """
+        from sentinel.growth import list_pending
+        try:
+            self._pending_cache = list_pending()
+        except Exception as e:
+            log.warning("refresh pending failed: %s", e)
+            self._pending_cache = []
+
+        # Remember which ID was selected, to re-select after rebuild
+        remember_id = self._current_id
+
+        self.list_widget.blockSignals(True)
+        self.list_widget.clear()
+        for p in self._pending_cache:
+            label = self._format_list_label(p)
+            item = QListWidgetItem(label)
+            item.setData(Qt.UserRole, p.id)
+            self.list_widget.addItem(item)
+        self.list_widget.blockSignals(False)
+
+        # Restore selection
+        restored = False
+        if remember_id is not None:
+            for i in range(self.list_widget.count()):
+                it = self.list_widget.item(i)
+                if it.data(Qt.UserRole) == remember_id:
+                    self.list_widget.setCurrentRow(i)
+                    restored = True
+                    break
+        if not restored and self.list_widget.count() > 0:
+            self.list_widget.setCurrentRow(0)
+        elif self.list_widget.count() == 0:
+            self._current_id = None
+            self._render_empty()
+
+        self._update_action_state()
+
+    @staticmethod
+    def _format_list_label(approval) -> str:
+        kind_zh = t("approval_kind_skill") if approval.kind == "skill_gen" else t("approval_kind_selfmod")
+        title = approval.title or "(no title)"
+        if len(title) > 40:
+            title = title[:40] + "…"
+        warn_badge = f" ⚠{len(approval.safety_findings)}" if approval.safety_findings else ""
+        return f"[{approval.id}] {kind_zh}  {title}{warn_badge}"
+
+    # ── Selection / rendering ─────────────────────────────────────
+
+    def _on_selection_changed(self, current, _previous):
+        if current is None:
+            self._current_id = None
+            self._render_empty()
+            self._update_action_state()
+            return
+        approval_id = current.data(Qt.UserRole)
+        self._current_id = approval_id
+        approval = next((p for p in self._pending_cache if p.id == approval_id), None)
+        if approval is None:
+            self._render_empty()
+        else:
+            self._render_detail(approval)
+        self._update_action_state()
+
+    def _render_empty(self):
+        self.empty_lbl.setVisible(True)
+        self.detail_text.setVisible(False)
+
+    def _render_detail(self, approval):
+        self.empty_lbl.setVisible(False)
+        self.detail_text.setVisible(True)
+
+        kind_label = (
+            t("approval_kind_skill") if approval.kind == "skill_gen"
+            else t("approval_kind_selfmod")
+        )
+
+        lines: list[str] = []
+        # Heading
+        lines.append(f"<h3 style='color:#00dcff; margin:0 0 8px 0;'>[{approval.id}] {self._html_escape(approval.title)}</h3>")
+
+        # Meta
+        lines.append(f"<p><b>{t('approval_kind')}:</b> {kind_label}</p>")
+        lines.append(f"<p><b>{t('approval_proposer_tier')}:</b> {self._html_escape(approval.proposer_tier or '—')}</p>")
+        lines.append(f"<p><b>{t('approval_target')}:</b> <code>{self._html_escape(approval.target_path)}</code></p>")
+        if approval.reason:
+            lines.append(f"<p><b>{t('approval_reason')}:</b> {self._html_escape(approval.reason)}</p>")
+
+        # Safety findings — highlighted amber
+        if approval.safety_findings:
+            lines.append(f"<h4 style='color:#ffa502; margin-top:12px;'>⚠ {t('approval_safety_findings')} ({len(approval.safety_findings)})</h4>")
+            lines.append("<ul>")
+            for f in approval.safety_findings:
+                rule = f.get("rule", "?")
+                msg = f.get("message", "")
+                loc = f.get("location", "")
+                sev = f.get("severity", "")
+                lines.append(
+                    f"<li><b>[{self._html_escape(sev)}] {self._html_escape(rule)}</b>"
+                    f" — {self._html_escape(msg)}"
+                    f" <span style='color:#888;'>({self._html_escape(loc)})</span></li>"
+                )
+            lines.append("</ul>")
+
+        # Source (proposed)
+        lines.append(f"<h4 style='margin-top:12px;'>{t('approval_source')}</h4>")
+        lines.append(f"<pre style='background-color:#1a1a1a; padding:10px; "
+                     f"border-left:3px solid #00dcff; color:#ddd; white-space:pre-wrap;'>"
+                     f"{self._html_escape(approval.source)}</pre>")
+
+        # Previous source (for SELF_MOD only)
+        if approval.previous_source:
+            lines.append(f"<h4 style='margin-top:12px; color:#888;'>{t('approval_previous')}</h4>")
+            lines.append(f"<pre style='background-color:#1a1a1a; padding:10px; "
+                         f"border-left:3px solid #666; color:#888; white-space:pre-wrap;'>"
+                         f"{self._html_escape(approval.previous_source)}</pre>")
+
+        self.detail_text.setHtml("".join(lines))
+
+    @staticmethod
+    def _html_escape(s: str) -> str:
+        return (str(s or "")
+                .replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;"))
+
+    def _update_action_state(self):
+        has_selection = self._current_id is not None and self.list_widget.count() > 0
+        self.approve_btn.setEnabled(has_selection)
+        self.reject_btn.setEnabled(has_selection)
+
+    # ── Actions ───────────────────────────────────────────────────
+
+    def _on_approve(self):
+        if self._current_id is None:
+            return
+        ans = QMessageBox.question(
+            self, t("approval_approve"), t("approval_confirm_approve"),
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if ans != QMessageBox.Yes:
+            return
+        from sentinel.growth import approve
+        ok = approve(self._current_id, approver="user_via_gui")
+        if not ok:
+            QMessageBox.warning(self, t("approval_approve"),
+                                f"Approve failed for {self._current_id}. See log.")
+            return
+        self._current_id = None
+        self.refresh()
+        self.proposals_changed.emit()
+
+    def _on_reject(self):
+        if self._current_id is None:
+            return
+        ans = QMessageBox.question(
+            self, t("approval_reject"), t("approval_confirm_reject"),
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if ans != QMessageBox.Yes:
+            return
+        reason, _ok = QInputDialog.getText(
+            self, t("approval_reject"), t("approval_reject_reason"),
+        )
+        from sentinel.growth import reject as reject_proposal
+        ok = reject_proposal(self._current_id, reason=reason or "", approver="user_via_gui")
+        if not ok:
+            QMessageBox.warning(self, t("approval_reject"),
+                                f"Reject failed for {self._current_id}. See log.")
+            return
+        self._current_id = None
+        self.refresh()
+        self.proposals_changed.emit()
+
+    # ── Introspection for tab badge ───────────────────────────────
+
+    def pending_count(self) -> int:
+        return len(self._pending_cache)
+
+
 # ─── Setup Wizard (新手引導) ──────────────────────────────────────────────
 
 class SetupWizard(QWidget):
@@ -3145,6 +3431,7 @@ class MainWindow(QMainWindow):
         self.evolution_tab = EvolutionTab()
         self.equipment_tab = EquipmentTab()
         self.market_tab = MarketTab()
+        self.approval_tab = ApprovalTab()
         self.settings_tab = SettingsTab()
 
         # 裝備變更時刷新形象
@@ -3156,7 +3443,13 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.chat_tab, t("tab_chat"))
         self.tabs.addTab(self.memory_tab, t("tab_memory"))
         self.tabs.addTab(self.market_tab, t("tab_market"))
+        self._approval_tab_index = self.tabs.addTab(self.approval_tab, t("tab_approval"))
         self.tabs.addTab(self.settings_tab, t("tab_settings"))
+
+        # 待同意頁籤：切過去時主動刷新；動作後刷新 evolution + 標籤計數
+        self.tabs.currentChanged.connect(self._on_approval_tab_changed)
+        self.approval_tab.proposals_changed.connect(self.evolution_tab.refresh)
+        self.approval_tab.proposals_changed.connect(self._refresh_approval_tab_label)
 
         main_layout.addWidget(self.tabs)
 
@@ -3223,6 +3516,8 @@ class MainWindow(QMainWindow):
         self.evo_timer = QTimer()
         self.evo_timer.timeout.connect(self.evolution_tab.refresh)
         self.evo_timer.timeout.connect(self.equipment_tab.refresh)
+        self.evo_timer.timeout.connect(self.approval_tab.refresh)
+        self.evo_timer.timeout.connect(self._refresh_approval_tab_label)
         self.evo_timer.timeout.connect(self.home_tab.refresh)
         self.evo_timer.timeout.connect(self._sync_overlay_state)
         self.evo_timer.start(30000)  # 每 30 秒刷新進化、裝備、首頁
@@ -3233,6 +3528,14 @@ class MainWindow(QMainWindow):
         # Daemon state - auto awaken on launch
         self.daemon_thread = None
         self.daemon_running = False
+        # 註冊 approval submit callback — self_evolution 丟新 proposal 時
+        # 這個 callback 會立刻重新整理 UI + 發 Telegram 通知
+        try:
+            from sentinel.growth import register_on_submit
+            register_on_submit(self._on_approval_submitted)
+        except Exception as e:
+            log.warning("register approval callback failed: %s", e)
+
         QTimer.singleShot(500, self.toggle_daemon)  # Awaken after GUI is ready
 
     def _load_settings(self):
@@ -3275,7 +3578,7 @@ class MainWindow(QMainWindow):
         tray_menu.addAction(show_action)
 
         settings_action = QAction(t("tab_settings"), self)
-        settings_action.triggered.connect(lambda: (self._show_window(), self.tabs.setCurrentIndex(6)))
+        settings_action.triggered.connect(lambda: (self._show_window(), self.tabs.setCurrentIndex(7)))
         tray_menu.addAction(settings_action)
 
         overlay_action = QAction("顯示/隱藏浮窗", self)
@@ -3369,6 +3672,49 @@ class MainWindow(QMainWindow):
                 QSystemTrayIcon.Information,
                 2000,
             )
+
+    def _on_approval_tab_changed(self, index: int):
+        """切到待同意分頁時立刻刷新，不用等 30s timer。"""
+        if getattr(self, "_approval_tab_index", None) is not None and index == self._approval_tab_index:
+            self.approval_tab.refresh()
+            self._refresh_approval_tab_label()
+
+    def _refresh_approval_tab_label(self):
+        """在待同意頁籤標題後面顯示 pending 數量，像 `待同意 (3)`。"""
+        idx = getattr(self, "_approval_tab_index", None)
+        if idx is None:
+            return
+        n = self.approval_tab.pending_count()
+        base = t("tab_approval")
+        label = f"{base} ({n})" if n > 0 else base
+        self.tabs.setTabText(idx, label)
+
+    def _on_approval_submitted(self, approval):
+        """Fires from sentinel.growth.approval.submit_for_approval.
+
+        Marshals refresh back onto the GUI thread (caller may be a
+        background/daemon thread) and best-effort fires a Telegram
+        notification. Notifier itself has cooldown + credential fallback.
+        """
+        QTimer.singleShot(0, self.approval_tab.refresh)
+        QTimer.singleShot(0, self._refresh_approval_tab_label)
+        try:
+            from sentinel.notifier import send_notification
+            kind_zh = "新技能" if approval.kind == "skill_gen" else "自我改良"
+            raw_title = approval.title or "(無標題)"
+            title = raw_title[:60]
+            warn_str = ""
+            if approval.safety_findings:
+                warn_str = "（%d 警告）" % len(approval.safety_findings)
+            parts = [
+                "🧬 *AI Slime 提議：" + kind_zh + "*",
+                "「" + title + "」" + warn_str,
+                "ID: `" + approval.id + "`",
+                "打開視窗到「待同意」分頁審閱。",
+            ]
+            send_notification(chr(10).join(parts), category="approval_submit")
+        except Exception as e:
+            log.warning("approval telegram notify failed: %s", e)
 
     def toggle_daemon(self):
         if self.daemon_running:
@@ -3860,7 +4206,10 @@ class MainWindow(QMainWindow):
         self.tabs.setTabText(3, t("tab_chat"))
         self.tabs.setTabText(4, t("tab_memory"))
         self.tabs.setTabText(5, t("tab_market"))
-        self.tabs.setTabText(6, t("tab_settings"))
+        self.tabs.setTabText(6, t("tab_approval"))
+        self.tabs.setTabText(7, t("tab_settings"))
+        self._refresh_approval_tab_label()
+        self.approval_tab.retranslate()
         self.home_tab.retranslate()
         self.chat_tab.retranslate()
         self.memory_tab.retranslate()
