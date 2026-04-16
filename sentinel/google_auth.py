@@ -181,11 +181,29 @@ def exchange_code_for_tokens(auth_code: str, client_id: str,
     )
 
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with urllib.request.urlopen(req, timeout=30) as resp:
             return json.loads(resp.read())
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"Google token exchange failed (HTTP {e.code}): {body}")
+
+
+def _warmup_relay(relay_url: str, timeout: float = 60) -> None:
+    """Ping relay / to wake Render free-tier dyno from sleep.
+
+    Render spins down idle services; cold start can take 30–60s.
+    We hit the cheap / endpoint so the expensive /auth/login call
+    arrives on a warm server.
+    """
+    try:
+        req = urllib.request.Request(
+            f"{relay_url.rstrip('/')}/",
+            method="GET",
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            resp.read()
+    except Exception as e:
+        log.debug("Relay warmup ping failed (non-fatal): %s", e)
 
 
 def send_token_to_relay(id_token: str, relay_url: str) -> dict:
@@ -202,12 +220,15 @@ def send_token_to_relay(id_token: str, relay_url: str) -> dict:
         method="POST",
     )
 
+    # Render free-tier cold start can take 30-60s; 15s timeout was too short.
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with urllib.request.urlopen(req, timeout=90) as resp:
             return json.loads(resp.read())
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"中繼伺服器拒絕登入 (HTTP {e.code}): {body}")
+    except Exception as e:
+        raise RuntimeError(f"中繼伺服器連線失敗：{type(e).__name__}: {e}")
 
 
 def save_auth(auth_data: dict):
@@ -237,6 +258,15 @@ def full_login_flow(client_id: str, relay_url: str,
         on_status("正在準備登入...")
 
     auth_url, port, code_verifier, state, result = start_oauth_flow(client_id)
+
+    # Kick off relay warmup in parallel — Render free-tier cold start
+    # takes 30–60s. By firing this while the user is still on Google's
+    # consent screen, /auth/login lands on a warm server.
+    threading.Thread(
+        target=_warmup_relay,
+        args=(relay_url,),
+        daemon=True,
+    ).start()
 
     if on_status:
         on_status("已開啟瀏覽器，請完成 Google 登入...")

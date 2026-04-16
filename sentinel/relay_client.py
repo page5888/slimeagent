@@ -59,8 +59,10 @@ def _request(method: str, endpoint: str, body: dict | None = None,
         f"{url}/{endpoint}", data=data, headers=headers, method=method,
     )
 
+    # Render free-tier cold start can take 30–60s on the first call
+    # after idle. Use a generous timeout so refresh/list don't time out.
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with urllib.request.urlopen(req, timeout=90) as resp:
             return json.loads(resp.read())
     except urllib.error.HTTPError as e:
         error_body = e.read().decode("utf-8", errors="replace")
