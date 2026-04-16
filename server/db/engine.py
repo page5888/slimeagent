@@ -60,19 +60,26 @@ class _PgAdapter:
 
         asyncpg does not support multiple statements in one execute(),
         so we split by semicolons and run each individually.
+
+        Strip line comments BEFORE splitting — otherwise a statement
+        preceded by `-- Comment\n` would look like it starts with `--`
+        and the whole CREATE TABLE gets skipped.
         """
+        # Remove `-- ...` to end of line, preserve newlines for readability
+        sql_clean = re.sub(r"--[^\n]*", "", sql)
         async with self._pool.acquire() as conn:
-            for stmt in sql.split(";"):
+            for stmt in sql_clean.split(";"):
                 stmt = stmt.strip()
-                if stmt and not stmt.startswith("--"):
-                    try:
-                        await conn.execute(stmt)
-                    except Exception as e:
-                        # Skip "already exists" errors during migration
-                        err_msg = str(e).lower()
-                        if "already exists" in err_msg or "duplicate" in err_msg:
-                            continue
-                        raise
+                if not stmt:
+                    continue
+                try:
+                    await conn.execute(stmt)
+                except Exception as e:
+                    # Skip "already exists" errors during migration
+                    err_msg = str(e).lower()
+                    if "already exists" in err_msg or "duplicate" in err_msg:
+                        continue
+                    raise
 
     async def commit(self):
         pass  # Postgres auto-commits; transactions handled per-query
@@ -156,15 +163,19 @@ async def init_db():
         await conn.execute("PRAGMA foreign_keys=ON")
         _db = _SqliteAdapter(conn)
 
-    # Run migrations
+    # Run migrations — if one fails, crash loudly rather than letting
+    # the server come up with a broken schema (e.g. missing `users`
+    # table, which then causes HTTP 500 on every /auth/login).
     migrations_dir = Path(__file__).parent / "migrations"
     for sql_file in sorted(migrations_dir.glob("*.sql")):
         sql = sql_file.read_text(encoding="utf-8")
         try:
             await _db.executescript(sql)
             await _db.commit()
-        except Exception as e:
-            log.warning(f"Migration {sql_file.name}: {e}")
+            log.info(f"Migration applied: {sql_file.name}")
+        except Exception:
+            log.exception(f"Migration FAILED: {sql_file.name}")
+            raise
 
     log.info("Migrations done")
 
