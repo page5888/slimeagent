@@ -2304,6 +2304,45 @@ class EvolutionTab(QWidget):
 
 # ─── Settings Tab ────────────────────────────────────────────────────────
 
+def _make_password_field(initial_text: str = "", placeholder: str = "") -> tuple:
+    """Password-style QLineEdit with an eye-icon visibility toggle.
+
+    Returns (line_edit, container_widget). Add the container to the parent
+    layout; use line_edit to read/write the value.
+
+    Rationale: users can't tell whether a pre-filled password field is empty
+    or masked, so they re-type it unnecessarily. The toggle lets them peek
+    to verify the stored value is still there.
+    """
+    line_edit = QLineEdit(initial_text)
+    line_edit.setEchoMode(QLineEdit.Password)
+    if placeholder:
+        line_edit.setPlaceholderText(placeholder)
+
+    toggle_btn = QPushButton("👁")
+    toggle_btn.setCheckable(True)
+    toggle_btn.setFixedWidth(32)
+    toggle_btn.setToolTip("顯示 / 隱藏")
+
+    def _on_toggle(checked: bool):
+        if checked:
+            line_edit.setEchoMode(QLineEdit.Normal)
+            toggle_btn.setText("🙈")
+        else:
+            line_edit.setEchoMode(QLineEdit.Password)
+            toggle_btn.setText("👁")
+
+    toggle_btn.toggled.connect(_on_toggle)
+
+    container = QWidget()
+    hlayout = QHBoxLayout(container)
+    hlayout.setContentsMargins(0, 0, 0, 0)
+    hlayout.addWidget(line_edit)
+    hlayout.addWidget(toggle_btn)
+
+    return line_edit, container
+
+
 class ProviderRow(QGroupBox):
     """A single LLM provider config row."""
     def __init__(self, provider: dict):
@@ -2320,10 +2359,10 @@ class ProviderRow(QGroupBox):
         self.enabled_combo.currentIndexChanged.connect(self._update_title)
         layout.addRow("狀態", self.enabled_combo)
 
-        self.apikey_input = QLineEdit(provider.get("api_key", ""))
-        self.apikey_input.setEchoMode(QLineEdit.Password)
-        self.apikey_input.setPlaceholderText("sk-... / AIza...")
-        layout.addRow("金鑰", self.apikey_input)
+        self.apikey_input, apikey_container = _make_password_field(
+            provider.get("api_key", ""), placeholder="sk-... / AIza...",
+        )
+        layout.addRow("金鑰", apikey_container)
 
         self.models_input = QLineEdit(", ".join(provider.get("models", [])))
         self.models_input.setPlaceholderText("模型1, 模型2（依序嘗試）")
@@ -2501,9 +2540,10 @@ class SettingsTab(QWidget):
         # Telegram
         tg_group = QGroupBox(t("settings_telegram"))
         tg_layout = QFormLayout()
-        self.token_input = QLineEdit(config.TELEGRAM_BOT_TOKEN)
-        self.token_input.setEchoMode(QLineEdit.Password)
-        tg_layout.addRow(t("settings_bot_token"), self.token_input)
+        self.token_input, token_container = _make_password_field(
+            config.TELEGRAM_BOT_TOKEN,
+        )
+        tg_layout.addRow(t("settings_bot_token"), token_container)
         self.chatid_input = QLineEdit(str(config.TELEGRAM_CHAT_ID))
         tg_layout.addRow(t("settings_chat_id"), self.chatid_input)
         tg_group.setLayout(tg_layout)
@@ -2775,37 +2815,71 @@ class SettingsTab(QWidget):
         QMessageBox.information(self, "登出", "已登出，需要重新登入才能使用市場功能。")
 
     def save_settings(self):
-        """Save settings to a JSON config file."""
-        # Build updated providers list
+        """Save settings to a JSON config file.
+
+        Merge-safe: reads the existing file first and only overwrites the
+        fields this tab knows about. Prevents one UI with empty fields
+        from wiping out unrelated settings (e.g. wizard_completed).
+
+        Also guards against empty telegram_chat_id crashing int() — the
+        old version would write the file, then crash on the config
+        update, leaving runtime in a half-applied state.
+        """
+        # Build updated providers list. For each provider row, start from
+        # the saved-on-disk provider (not config.LLM_PROVIDERS, which may
+        # have been mutated in memory) so any field the row doesn't
+        # expose (e.g. base_url defaults) is preserved.
+        settings_file = Path.home() / ".hermes" / "sentinel_settings.json"
+        settings_file.parent.mkdir(parents=True, exist_ok=True)
+
+        existing: dict = {}
+        if settings_file.exists():
+            try:
+                existing = json.loads(settings_file.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+
         updated_providers = []
         for row, original in zip(self.provider_rows, config.LLM_PROVIDERS):
             updated_providers.append(row.to_dict(original))
 
-        settings = {
+        # Parse chat_id defensively — empty string or non-numeric falls
+        # back to 0 rather than crashing.
+        chat_id_text = self.chatid_input.text().strip()
+        try:
+            chat_id_int = int(chat_id_text) if chat_id_text else 0
+        except ValueError:
+            chat_id_int = 0
+
+        # Merge: start from existing, overwrite only the fields we own.
+        settings = dict(existing)
+        settings.update({
             "language": self.lang_combo.currentData(),
             "theme": self.theme_combo.currentData(),
             "user_mode": self.mode_combo.currentData(),
             "chat_model_pref": self.chat_pref_combo.currentData(),
             "analysis_model_pref": self.analysis_pref_combo.currentData(),
             "telegram_bot_token": self.token_input.text(),
-            "telegram_chat_id": self.chatid_input.text(),
+            "telegram_chat_id": chat_id_text,
             "llm_providers": updated_providers,
             "check_interval": self.interval_spin.value(),
             "idle_report_interval": self.idle_spin.value(),
             "watch_dirs": [
                 d.strip() for d in self.dirs_input.toPlainText().split("\n") if d.strip()
             ],
-        }
+        })
 
-        settings_file = Path.home() / ".hermes" / "sentinel_settings.json"
-        settings_file.parent.mkdir(parents=True, exist_ok=True)
-        settings_file.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
+        settings_file.write_text(
+            json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8",
+        )
 
-        # Apply to runtime config
+        # Apply to runtime config (all-or-nothing — any exception past
+        # this point leaves disk + runtime consistent since the write
+        # above succeeded).
         config.CHAT_MODEL_PREF = settings["chat_model_pref"]
         config.ANALYSIS_MODEL_PREF = settings["analysis_model_pref"]
         config.TELEGRAM_BOT_TOKEN = settings["telegram_bot_token"]
-        config.TELEGRAM_CHAT_ID = int(settings["telegram_chat_id"])
+        config.TELEGRAM_CHAT_ID = chat_id_int
         config.LLM_PROVIDERS = updated_providers
         config.SYSTEM_CHECK_INTERVAL = settings["check_interval"]
         config.IDLE_REPORT_INTERVAL = settings["idle_report_interval"]
