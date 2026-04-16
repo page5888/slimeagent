@@ -47,11 +47,21 @@ AI Slime Agent 是一個**背景常駐**的桌面 AI 夥伴。
 
 ### 前置需求
 
-- **Windows 10/11**（目前主要支援平台）
-- **Python 3.10+**
+- **Windows 10/11**
 - **至少一個 LLM provider API Key**（Gemini 免費，[這裡申請](https://aistudio.google.com/apikey)）
 
-### 安裝
+### 安裝（一般使用者）
+
+1. 從 [Releases](https://github.com/page5888/slimeagent/releases/latest) 下載 `AISlime-Windows.zip`
+2. 解壓縮到喜歡的資料夾（例如 `C:\AISlime\`）
+3. 雙擊 `AISlime.exe`
+4. 進入「設定」分頁，填入 API Key，按「儲存設定」
+
+> 如果防毒軟體跳通知，請選「允許執行」。PyInstaller 打包的程式有時會被誤判，原始碼公開可審閱。
+
+### 從原始碼安裝（開發者）
+
+需要 **Python 3.10+**。
 
 ```bash
 # 1. Clone
@@ -69,7 +79,17 @@ pip install -r sentinel/requirements.txt
 start.bat
 ```
 
-第一次啟動會打開 GUI，在「設定」分頁填入 API Key，按儲存即可。
+### 自己打包 .exe
+
+```bash
+# 額外安裝 PyInstaller
+venv\Scripts\python.exe -m pip install pyinstaller
+
+# 跑打包腳本（會清理 → 打包 → 壓縮成 zip）
+build_exe.bat
+```
+
+成品在 `dist\AISlime\AISlime.exe`，發行用的壓縮檔在 `AISlime-Windows.zip`。
 
 ### 自動開機啟動
 
