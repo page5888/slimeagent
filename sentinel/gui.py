@@ -346,31 +346,105 @@ class HomeTab(QWidget):
             lines.append("⚠️ 未設定任何 LLM provider，請到魔法陣設定")
         self.llm_status.setText("  |  ".join(lines))
 
-        # Wallet status
+        # Wallet / auth status
         try:
-            from sentinel.wallet.quota import QuotaManager
-            qm = QuotaManager(config.RELAY_SERVER_URL)
-            if qm.is_logged_in():
-                self.wallet_status.setText(f"模式：點數制  |  UID: {qm.uid()}")
-                balance = qm.get_balance()
-                if balance is not None:
+            from sentinel.relay_client import AUTH_FILE
+            if AUTH_FILE.exists():
+                data = json.loads(AUTH_FILE.read_text(encoding="utf-8"))
+                name = data.get("display_name", data.get("email", "?"))
+                balance = data.get("balance", 0)
+                self.wallet_status.setText(f"已登入：{name}")
+                self.login_btn.setText("登出")
+                if balance:
                     self.balance_label.setText(f"餘額：{balance:,} 點")
                 else:
-                    self.balance_label.setText("餘額：查詢中...")
+                    self.balance_label.setText("")
             else:
-                self.wallet_status.setText("模式：自備金鑰（BYOK）")
+                self.wallet_status.setText("尚未登入")
                 self.balance_label.setText("")
+                self.login_btn.setText(t("wallet_login"))
         except Exception:
-            self.wallet_status.setText("模式：自備金鑰（BYOK）")
+            self.wallet_status.setText("尚未登入")
 
     def _on_login(self):
-        QMessageBox.information(self, "AI Slime", "Google 登入功能尚在開發中。\n目前請使用自備金鑰（BYOK）模式。")
+        """Google OAuth login from home page."""
+        from sentinel.relay_client import AUTH_FILE
+        if AUTH_FILE.exists():
+            # Already logged in — offer logout
+            reply = QMessageBox.question(
+                self, "帳號",
+                "已登入，是否要登出？",
+                QMessageBox.Yes | QMessageBox.No,
+            )
+            if reply == QMessageBox.Yes:
+                from sentinel.google_auth import clear_auth
+                clear_auth()
+                self.refresh()
+                QMessageBox.information(self, "登出", "已登出。")
+            return
+
+        client_id = config.GOOGLE_CLIENT_ID
+        relay_url = config.RELAY_SERVER_URL
+        if not client_id:
+            QMessageBox.warning(self, "登入", "Google Client ID 未設定，請到魔法陣設定。")
+            return
+
+        self.login_btn.setEnabled(False)
+        self.login_btn.setText("登入中...")
+
+        import threading
+
+        def _do():
+            try:
+                from sentinel.google_auth import full_login_flow
+                auth_data = full_login_flow(client_id, relay_url)
+                from PySide6.QtCore import QMetaObject, Qt, Q_ARG
+                QMetaObject.invokeMethod(
+                    self, "_login_done",
+                    Qt.ConnectionType.QueuedConnection,
+                    Q_ARG(str, auth_data.get("display_name", "?")),
+                    Q_ARG(str, ""),
+                )
+            except Exception as e:
+                from PySide6.QtCore import QMetaObject, Qt, Q_ARG
+                QMetaObject.invokeMethod(
+                    self, "_login_done",
+                    Qt.ConnectionType.QueuedConnection,
+                    Q_ARG(str, ""),
+                    Q_ARG(str, str(e)),
+                )
+
+        threading.Thread(target=_do, daemon=True).start()
+
+    @Slot(str, str)
+    def _login_done(self, name: str, error: str):
+        self.login_btn.setEnabled(True)
+        self.login_btn.setText(t("wallet_login"))
+        if error:
+            QMessageBox.warning(self, "登入失敗", error)
+        else:
+            self.refresh()
+            QMessageBox.information(self, "登入成功", f"歡迎，{name}！")
 
     def _on_topup(self):
-        QMessageBox.information(self, "AI Slime", "儲值功能尚在開發中。")
+        """Open 5888 wallet top-up page."""
+        import webbrowser
+        webbrowser.open("https://wallet-5888.web.app/index.html")
 
     def _on_wallet_link(self):
-        QMessageBox.information(self, "AI Slime", "錢包頁面尚在開發中。")
+        """Open 5888 wallet page."""
+        import webbrowser
+        from sentinel.relay_client import AUTH_FILE
+        if AUTH_FILE.exists():
+            try:
+                data = json.loads(AUTH_FILE.read_text(encoding="utf-8"))
+                uid = data.get("uid", "")
+                if uid:
+                    webbrowser.open(f"https://wallet-5888.web.app/index.html")
+                    return
+            except Exception:
+                pass
+        webbrowser.open("https://wallet-5888.web.app/index.html")
 
     def retranslate(self):
         self.login_btn.setText(t("wallet_login"))
@@ -3119,7 +3193,7 @@ class MainWindow(QMainWindow):
                 set_language(s.get("language", "zh"))
                 if "theme" in s:
                     set_theme(s["theme"])
-                config.RELAY_SERVER_URL = s.get("relay_server_url", config.RELAY_SERVER_URL)
+                # RELAY_SERVER_URL is hardcoded — don't load from settings
                 config.CHAT_MODEL_PREF = s.get("chat_model_pref", config.CHAT_MODEL_PREF)
                 config.ANALYSIS_MODEL_PREF = s.get("analysis_model_pref", config.ANALYSIS_MODEL_PREF)
                 config.TELEGRAM_BOT_TOKEN = s.get("telegram_bot_token", "") or ""
