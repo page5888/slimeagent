@@ -352,12 +352,15 @@ class HomeTab(QWidget):
             if AUTH_FILE.exists():
                 data = json.loads(AUTH_FILE.read_text(encoding="utf-8"))
                 name = data.get("display_name", data.get("email", "?"))
-                balance = data.get("balance", 0)
                 self.wallet_status.setText(f"已登入：{name}")
                 self.login_btn.setText("登出")
-                if balance:
-                    self.balance_label.setText(f"餘額：{balance:,} 點")
-                else:
+                # Try fetching live balance from relay
+                try:
+                    from sentinel import relay_client
+                    result = relay_client._request("POST", "wallet/balance")
+                    bal = result.get("balance", 0)
+                    self.balance_label.setText(f"餘額：{bal:,} 點")
+                except Exception:
                     self.balance_label.setText("")
             else:
                 self.wallet_status.setText("尚未登入")
@@ -1330,6 +1333,18 @@ class EquipmentTab(QWidget):
         """Put an item up for sale on the marketplace (local + relay)."""
         from sentinel.wallet.equipment import load_equipment, list_for_sale
         from sentinel import relay_client
+        from sentinel.relay_client import AUTH_FILE
+
+        # Check login first
+        if not AUTH_FILE.exists():
+            reply = QMessageBox.question(
+                self, "上架",
+                "上架需要先登入 Google 帳號。\n現在要登入嗎？",
+                QMessageBox.Yes | QMessageBox.No,
+            )
+            if reply == QMessageBox.Yes:
+                self._trigger_google_login()
+            return
 
         # Suggested price by rarity (seller can override with any value ≥ 10)
         SUGGESTED = {
@@ -1398,6 +1413,45 @@ class EquipmentTab(QWidget):
         else:
             QMessageBox.warning(self, "AI Slime",
                                 "無法上架（道具狀態異常）")
+
+    def _trigger_google_login(self):
+        """Start Google OAuth login from equipment tab."""
+        client_id = config.GOOGLE_CLIENT_ID
+        relay_url = config.RELAY_SERVER_URL
+        if not client_id:
+            QMessageBox.warning(self, "登入", "Google Client ID 未設定，請到魔法陣設定。")
+            return
+
+        import threading
+
+        def _do():
+            try:
+                from sentinel.google_auth import full_login_flow
+                auth_data = full_login_flow(client_id, relay_url)
+                from PySide6.QtCore import QMetaObject, Qt, Q_ARG
+                QMetaObject.invokeMethod(
+                    self, "_on_login_result",
+                    Qt.ConnectionType.QueuedConnection,
+                    Q_ARG(str, auth_data.get("display_name", "")),
+                    Q_ARG(str, ""),
+                )
+            except Exception as e:
+                from PySide6.QtCore import QMetaObject, Qt, Q_ARG
+                QMetaObject.invokeMethod(
+                    self, "_on_login_result",
+                    Qt.ConnectionType.QueuedConnection,
+                    Q_ARG(str, ""),
+                    Q_ARG(str, str(e)),
+                )
+
+        threading.Thread(target=_do, daemon=True).start()
+
+    @Slot(str, str)
+    def _on_login_result(self, name: str, error: str):
+        if error:
+            QMessageBox.warning(self, "登入失敗", error)
+        else:
+            QMessageBox.information(self, "登入成功", f"已登入為 {name}，現在可以上架了！")
 
     def _do_delist(self, item_id: str):
         """Cancel a listing (local + relay)."""
