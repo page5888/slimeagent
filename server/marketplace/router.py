@@ -1,4 +1,18 @@
-"""Marketplace endpoints — P2P equipment trading."""
+"""Marketplace endpoints — P2P equipment trading.
+
+Economic rules (min/max price, tiered listing fee, daily cap) are
+imported from sentinel/wallet/market_rules.py — same source of truth
+as the desktop side.
+
+5888 wallet integration:
+  - Listing fee deducted via s2sSpend(reason=slime_list_fee) before
+    the listing row is created. If the spend fails, no listing is
+    written and the user sees an error.
+  - Purchase flow (/buy) is being rewritten to use 5888's new
+    marketSaleSettle atomic S2S — tracked in project_marketplace.md.
+    Until that ships, the existing split-on-our-side logic below is
+    documented as STALE but left intact so trades don't break.
+"""
 import uuid
 import json
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -8,6 +22,13 @@ from server.db.engine import get_db
 from server.wallet.service import spend_points, grant_points
 from server import config
 from sentinel.wallet.client import WalletError
+from sentinel.wallet.market_rules import (
+    MIN_LIST_PRICE,
+    MAX_LIST_PRICE,
+    DAILY_LIST_CAP,
+    SPEND_TYPE_LIST_FEE,
+    listing_fee,
+)
 
 router = APIRouter(prefix="/marketplace", tags=["marketplace"])
 
@@ -24,18 +45,36 @@ class BuyRequest(BaseModel):
     listing_id: str
 
 
-MIN_LIST_PRICE = 10  # Flat minimum — no per-rarity floor
-
-
 @router.post("/list")
 async def list_item(req: ListRequest, user: dict = Depends(get_current_user)):
-    """List an item for sale. Sellers set any price ≥ 10 pt."""
+    """List an item for sale.
+
+    Order of operations (failing any step aborts the listing cleanly):
+      1. Validate price range (50 ≤ price ≤ 10,000).
+      2. Reject if item already has an active listing.
+      3. Check daily listing cap (5 per user per 24h rolling window).
+      4. Deduct tiered listing fee via 5888 spendPoints. Non-refundable.
+      5. Insert listing row.
+
+    Listing fee tiers (see sentinel/wallet/market_rules.py):
+      50–99    → 2 pts
+      100–999  → 10 pts
+      1k–4.9k  → 20 pts
+      5k+      → 30 pts
+    """
+    # 1. Price bounds
     if req.price < MIN_LIST_PRICE:
-        raise HTTPException(400, f"Price must be at least {MIN_LIST_PRICE} points")
+        raise HTTPException(
+            400, f"Price must be at least {MIN_LIST_PRICE} points"
+        )
+    if req.price > MAX_LIST_PRICE:
+        raise HTTPException(
+            400, f"Price must be at most {MAX_LIST_PRICE} points"
+        )
 
     db = await get_db()
 
-    # Check not already listed
+    # 2. Not already listed
     existing = await db.execute_fetchone(
         "SELECT 1 FROM marketplace_listings WHERE item_id = ? AND status = 'active'",
         (req.item_id,),
@@ -43,7 +82,41 @@ async def list_item(req: ListRequest, user: dict = Depends(get_current_user)):
     if existing:
         raise HTTPException(409, "Item already listed")
 
+    # 3. Daily listing cap (5 per rolling 24h)
+    cap_row = await db.execute_fetchone(
+        "SELECT COUNT(*) AS c FROM marketplace_listings "
+        "WHERE seller_id = ? AND created_at > datetime('now', '-1 day')",
+        (user["user_id"],),
+    )
+    if cap_row and cap_row["c"] >= DAILY_LIST_CAP:
+        raise HTTPException(
+            429,
+            f"Daily listing cap reached ({DAILY_LIST_CAP}/day). "
+            f"Wait until earlier listings are more than 24h old."
+        )
+
+    # 4. Deduct tiered listing fee via 5888. Non-refundable.
+    #    Idempotency key is scoped per-listing-attempt (new uuid every
+    #    request), so retries from the client are treated as new spend.
+    #    This is acceptable because listing fee is small and the API is
+    #    only callable by authenticated user, not anonymous retry loops.
     listing_id = str(uuid.uuid4())
+    fee = listing_fee(req.price)
+    fee_key = f"list_fee:{listing_id}"
+    try:
+        await spend_points(
+            user["user_id"], fee, SPEND_TYPE_LIST_FEE, fee_key,
+        )
+    except WalletError as e:
+        if e.is_insufficient_balance:
+            raise HTTPException(
+                402,
+                f"Insufficient balance for {fee}-point listing fee "
+                f"(price tier: {req.price} pts)."
+            )
+        raise HTTPException(502, f"Wallet error: {e.message}")
+
+    # 5. Record the listing. Listing fee already deducted + non-refundable.
     await db.execute(
         "INSERT INTO marketplace_listings "
         "(id, seller_id, item_id, template_name, slot, rarity, price) "
@@ -53,7 +126,11 @@ async def list_item(req: ListRequest, user: dict = Depends(get_current_user)):
     )
     await db.commit()
 
-    return {"listing_id": listing_id, "price": req.price}
+    return {
+        "listing_id": listing_id,
+        "price": req.price,
+        "listing_fee_paid": fee,
+    }
 
 
 @router.post("/delist")

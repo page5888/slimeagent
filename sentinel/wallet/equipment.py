@@ -616,21 +616,30 @@ def get_trade_fee_percent(state: EquipmentState) -> float:
 
 
 # ── Marketplace Helpers ──────────────────────────────────────────────
+# Economic rules (min/max price, tiered fee, cap) live in
+# sentinel/wallet/market_rules.py — single source of truth shared
+# with the server router. Do not re-declare here.
 
-MIN_LIST_PRICE = 10  # Flat minimum — no per-rarity floor
+from sentinel.wallet.market_rules import (
+    MIN_LIST_PRICE,
+    MAX_LIST_PRICE,
+    listing_fee,
+)
 
 
 def list_for_sale(state: EquipmentState, item_id: str, price: int) -> bool:
-    """List an item for sale at a given price (in 5888 points).
+    """List an item locally (no 5888 fee deduction — desktop offline path).
 
-    Sellers set any price they want (≥ 10 pt) — the market decides value.
+    For cross-user listings that move actual points, use the server
+    marketplace router (/marketplace/list). This function only flips
+    local state, used for single-user preview / offline mode.
     """
     item = next((i for i in state.inventory if i["item_id"] == item_id), None)
     if not item:
         return False
     if item.get("equipped"):
         return False  # Must unequip first
-    if price < MIN_LIST_PRICE:
+    if price < MIN_LIST_PRICE or price > MAX_LIST_PRICE:
         return False
 
     item["listed_price"] = price
