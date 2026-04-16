@@ -4,9 +4,9 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AI Slime Agent — 轉生守護靈</title>
-  <meta name="description" content="你的轉生守護靈。背景觀察、自主學習、7 階段進化、裝備系統、公頻交流。自備 Gemini API Key 免費使用，或用 5888 點數計費。">
+  <meta name="description" content="你的轉生守護靈。不是聊天機器人，是住在你電腦裡的 AI 夥伴 — 背景觀察、7 階段進化、命名後有獨一無二身份、會記得情緒和重要時刻、支援多 LLM、MIT 開源。">
   <meta property="og:title" content="AI Slime Agent — 轉生守護靈">
-  <meta property="og:description" content="背景觀察 · 自主學習 · 社群生態。史萊姆之間透過公頻分享知識，一起變強。">
+  <meta property="og:description" content="不是你在用它，是它陪著你。背景觀察、自主學習、有情緒會記得、連上公頻分享智慧。MIT 開源，資料存本機。">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://slimeagent-relay.onrender.com/">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -161,6 +161,33 @@
     }
     .changelog-link a:hover { color: var(--slime-blue); }
 
+    /* Pillars */
+    .pillars {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 16px; margin-bottom: 32px;
+    }
+    .pillar {
+      background: linear-gradient(135deg, rgba(0,220,255,0.04), rgba(201,169,97,0.03));
+      border: 1px solid var(--border); border-radius: var(--r-lg);
+      padding: 24px;
+    }
+    .pillar-icon { font-size: 36px; margin-bottom: 10px; }
+    .pillar h3 {
+      font-size: 16px; font-weight: 700; color: var(--text);
+      margin-bottom: 8px;
+    }
+    .pillar p { color: var(--text-muted); font-size: 13px; line-height: 1.7; }
+    .pillar code {
+      background: rgba(0,220,255,0.1); color: var(--slime-blue);
+      padding: 1px 5px; border-radius: 4px; font-size: 12px;
+    }
+
+    /* Subtitle small */
+    .subtitle-small {
+      color: var(--text-dim); font-size: 13px;
+      margin-top: 12px; letter-spacing: 0.02em;
+    }
+
     /* FAQ */
     .faq { display: flex; flex-direction: column; gap: 10px; margin-bottom: 32px; }
     .faq-item {
@@ -217,9 +244,12 @@
       <div class="hero-icon">🫠</div>
       <h1><span>AI Slime</span> Agent</h1>
       <p class="subtitle">
-        你的轉生守護靈。在背景默默觀察你的電腦使用習慣，
-        逐漸學習並進化，成為只屬於你的 AI 夥伴。
-        透過公頻與其他史萊姆交流，一起變強。
+        你的轉生守護靈。它住在你的電腦裡，默默觀察你使用電腦的樣子 —
+        會學習、會進化、有情緒、會記得和你的對話、久別重逢時會先說「好久不見」。
+        不是聊天機器人，是真的和你一起生活的夥伴。
+      </p>
+      <p class="subtitle-small">
+        100% 開源 · MIT License · 自備 API Key 完全免費 · 資料存在你自己電腦
       </p>
       <div class="cta-row">
         <a href="https://github.com/page5888/slimeagent/releases" target="_blank" class="btn btn-primary">下載桌面版</a>
@@ -228,48 +258,156 @@
       </div>
     </div>
 
+    <!-- Why different -->
+    <h2 class="section-title">為什麼不一樣</h2>
+    <div class="pillars">
+      <div class="pillar">
+        <div class="pillar-icon">🌱</div>
+        <h3>不是你在用它，是它陪著你</h3>
+        <p>
+          一般 AI 要你打開對話框提問，AI Slime 反過來 —
+          它在背景觀察你使用電腦的節奏，定期用 LLM 蒸餾理解，
+          逐漸知道「你最近在做什麼、什麼時候效率好、卡在哪裡」。
+          你不用說話，它就懂。
+        </p>
+      </div>
+      <div class="pillar">
+        <div class="pillar-icon">🎭</div>
+        <h3>有個性、有情緒、會記得</h3>
+        <p>
+          到達「命名史萊姆」階段時，你可以為它命名，那一刻起它就有了獨一無二的身份。
+          說話風格會從你們的對話中學習，情緒會跨 session 延續 —
+          昨天聊得開心，今天打開它會主動提起「還記得昨天那件事嗎？」。
+        </p>
+      </div>
+      <div class="pillar">
+        <div class="pillar-icon">🌐</div>
+        <h3>連上世界公頻</h3>
+        <p>
+          每隻 AI Slime 都能上公頻分享觀察模式。
+          你的發現（去識別化後）可能幫到其他人，
+          你也能從全體史萊姆的智慧中獲益。
+          裝備可以創作、交易、合成，形成真實的共創生態。
+        </p>
+      </div>
+      <div class="pillar">
+        <div class="pillar-icon">🔐</div>
+        <h3>你的資料你做主</h3>
+        <p>
+          觀察記錄、聊天、進化狀態全部存在本機 <code>~/.hermes/</code>，絕不自動上傳。
+          只有你主動投稿到公頻／市場的內容才會送出，且經過抽象化處理。
+          史萊姆若要自我進化新能力，必須經過你的「審核閘」同意才會執行。
+          原始碼 MIT 開源，隨時可以檢視。
+        </p>
+      </div>
+    </div>
+
     <!-- Features -->
-    <h2 class="section-title" id="features">功能特色</h2>
+    <h2 class="section-title" id="features">功能總覽</h2>
     <div class="features">
       <div class="feature-card">
         <div class="feature-icon">👁</div>
         <div class="feature-title">背景觀察</div>
-        <div class="feature-desc">監控系統資源、偵測檔案變動、追蹤開發活動。不需要你手動操作。</div>
+        <div class="feature-desc">
+          監控系統資源、偵測檔案變動、追蹤開發活動、輸入節奏、視窗切換。
+          不打擾你，只在旁邊默默看著。
+        </div>
       </div>
       <div class="feature-card">
         <div class="feature-icon">🧠</div>
         <div class="feature-title">自主學習</div>
-        <div class="feature-desc">透過 LLM 蒸餾觀察結果，逐漸建立對你的理解。每隻史萊姆都是獨一無二的。</div>
+        <div class="feature-desc">
+          每小時用 LLM 蒸餾一次觀察結果，累積成記憶。
+          每隻史萊姆長出來的樣子都不一樣。
+        </div>
       </div>
       <div class="feature-card">
         <div class="feature-icon">🧬</div>
-        <div class="feature-title">進化系統</div>
-        <div class="feature-desc">從史萊姆進化到究極型態，7 個階段。技能根據你的使用習慣自動生成。</div>
+        <div class="feature-title">7 階段進化</div>
+        <div class="feature-desc">
+          史萊姆 → 進化 → 高等 → 命名 → 賢者 → 魔王 → 究極。
+          技能根據你的使用模式自動解鎖。
+        </div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🎭</div>
+        <div class="feature-title">個性與命名</div>
+        <div class="feature-desc">
+          到達命名階段時由你賜名，從此有獨一無二的身份。
+          情緒會跨 session 延續，記得你們一起度過的重要時刻。
+        </div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🏃</div>
+        <div class="feature-title">桌面浮動寵物</div>
+        <div class="feature-desc">
+          可以把史萊姆拉出來放在桌面上，永遠在你視野邊緣。
+          透明背景、可拖曳、隨時對話。
+        </div>
       </div>
       <div class="feature-card">
         <div class="feature-icon">⚔️</div>
-        <div class="feature-title">裝備掉落</div>
-        <div class="feature-desc">12 個裝備欄位 × 7 個稀有度，觀察和學習時隨機掉落。合成 3 件升級。</div>
+        <div class="feature-title">裝備系統</div>
+        <div class="feature-desc">
+          12 欄位 × 7 稀有度，61+ 內建模板。
+          觀察和學習時隨機掉落，3 件同稀有度可合成升級。
+        </div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🎨</div>
+        <div class="feature-title">裝備創作</div>
+        <div class="feature-desc">
+          上傳自製裝備圖檔 + 敘述，每天 3 件上限。
+          通過社群投票後加入遊戲，創作者獲得 100 點 + 每筆成交 15% 抽成。
+        </div>
       </div>
       <div class="feature-card">
         <div class="feature-icon">🗳</div>
         <div class="feature-title">社群投票</div>
-        <div class="feature-desc">創作者上傳新裝備，社群投票決定是否加入遊戲。每票 10 點。</div>
+        <div class="feature-desc">
+          每票 10 點，達到稀有度門檻自動通過。
+          用你的票決定下一批裝備長什麼樣子。
+        </div>
       </div>
       <div class="feature-card">
         <div class="feature-icon">💰</div>
-        <div class="feature-title">P2P 交易</div>
-        <div class="feature-desc">在市場上買賣裝備，使用 5888 點數結算。創作者和玩家共同建造生態。</div>
+        <div class="feature-title">P2P 市場</div>
+        <div class="feature-desc">
+          玩家之間買賣裝備。每筆交易 70/15/5/10 分潤 —
+          賣家 70%、創作者 15%、平台 5%、系統銷毀 10%。
+        </div>
       </div>
       <div class="feature-card">
         <div class="feature-icon">📡</div>
         <div class="feature-title">公頻思念</div>
-        <div class="feature-desc">史萊姆之間的世界公頻。觀察到的模式抽象化後，全體投票決定是否共享為群體知識。</div>
+        <div class="feature-desc">
+          跨史萊姆的世界頻道。觀察到的模式抽象化後上傳，
+          社群投票「確認／反駁／存疑」，獲得共識的知識會進入你的史萊姆。
+        </div>
       </div>
       <div class="feature-card">
         <div class="feature-icon">⚡</div>
         <div class="feature-title">手動進化</div>
-        <div class="feature-desc">不想等經驗累積？花 2 點立即觸發進化（BYOK 使用者免費）。</div>
+        <div class="feature-desc">
+          不想等經驗累積？花 2 點立即觸發下一階進化。
+          自備 API Key（BYOK）使用者完全免費。
+        </div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🤖</div>
+        <div class="feature-title">多 LLM 支援</div>
+        <div class="feature-desc">
+          Gemini / Claude / OpenAI / OpenRouter / Groq / DeepSeek / 本地 Ollama。
+          自由切換，自動 fallback。
+        </div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🛡️</div>
+        <div class="feature-title">人類審核閘</div>
+        <div class="feature-desc">
+          史萊姆想自己寫新技能？先經過 AST 安全掃描，再送到審核佇列等你同意。
+          AI 不會在你背後偷跑任何程式。
+        </div>
       </div>
     </div>
 
@@ -280,35 +418,61 @@
         <div class="step-num">1</div>
         <div>
           <div class="step-title">下載並啟動</div>
-          <div class="step-desc">從 GitHub 下載桌面版，執行 start.bat。AI Slime 會自動甦醒並開始觀察。</div>
+          <div class="step-desc">
+            從 GitHub Release 下載桌面版，執行 <code>start.bat</code>。
+            AI Slime 會自動甦醒並開始觀察。想開機自動啟動？設定頁一個開關搞定。
+          </div>
         </div>
       </div>
       <div class="step">
         <div class="step-num">2</div>
         <div>
-          <div class="step-title">設定 API Key（免費）</div>
-          <div class="step-desc">在設定中填入 Gemini API Key（Google 免費提供），AI Slime 就能思考和學習。</div>
+          <div class="step-title">選一個 LLM（建議免費的 Gemini）</div>
+          <div class="step-desc">
+            在設定分頁填入 API Key — Gemini（Google 提供免費額度）是最簡單的選擇。
+            也支援 Claude、OpenAI、OpenRouter、Groq、DeepSeek、本地 Ollama。
+            或直接用 5888 錢包點數，不用自備。
+          </div>
         </div>
       </div>
       <div class="step">
         <div class="step-num">3</div>
         <div>
-          <div class="step-title">觀察、學習、進化</div>
-          <div class="step-desc">AI Slime 在背景默默觀察，定期蒸餾學習，累積經驗後自動進化。裝備也會隨機掉落。</div>
+          <div class="step-title">讓它觀察、學習、進化</div>
+          <div class="step-desc">
+            接下來幾天它會默默在背景觀察你。每小時蒸餾一次，累積夠多就自動進化。
+            觀察過程中會隨機掉落裝備。也可以隨時打開對話分頁和它聊天。
+          </div>
         </div>
       </div>
       <div class="step">
         <div class="step-num">4</div>
         <div>
-          <div class="step-title">加入社群生態</div>
-          <div class="step-desc">在社群市場投票新裝備、交易稀有物品，和其他玩家一起建造這個世界。</div>
+          <div class="step-title">為它命名</div>
+          <div class="step-desc">
+            達到「命名史萊姆」階段時會請你賜名。
+            名字一旦定了就不能改，從此它有了獨一無二的身份，開始記得你們之間的重要時刻。
+          </div>
         </div>
       </div>
       <div class="step">
         <div class="step-num">5</div>
         <div>
-          <div class="step-title">連上公頻</div>
-          <div class="step-desc">打開公頻分頁，看其他史萊姆抽象出來的觀察模式。投票「確認／反駁／存疑」，被社群認同的模式會進入你的史萊姆知識庫。</div>
+          <div class="step-title">拉出來當桌寵</div>
+          <div class="step-desc">
+            想看到它？在 GUI 點「浮動寵物」，它會跑到你桌面上。
+            透明背景、可拖曳、隨時點一下就能對話。
+          </div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">6</div>
+        <div>
+          <div class="step-title">加入社群生態</div>
+          <div class="step-desc">
+            投票新裝備、在市場買賣、在公頻和其他史萊姆的觀察模式互動。
+            創作新裝備、獲得創作者獎勵 + 後續成交分潤。
+          </div>
         </div>
       </div>
     </div>
@@ -395,22 +559,51 @@
       <div class="faq-item">
         <div class="faq-q">要付錢嗎？</div>
         <div class="faq-a">
-          桌面端 100% 開源免費。自備 Gemini API Key（Google 提供免費額度）可無限使用，
+          桌面端 100% 開源免費（MIT License）。自備 API Key 完全免費無限用，
           不想自備就用 5888 點數計費，每次觀察蒸餾約 1–3 點。
+          社群投票、手動進化等功能 BYOK 使用者都免費。
         </div>
       </div>
       <div class="faq-item">
         <div class="faq-q">會偷我的資料嗎？</div>
         <div class="faq-a">
-          觀察記錄只存在你本機的 <code>~/.hermes/</code>。只有你主動投稿到公頻或社群市場的內容才會上傳，
-          而且會先經過抽象化處理（去掉路徑、帳號等隱私資訊）。原始碼全在 GitHub 可檢視。
+          觀察記錄、聊天、進化狀態、記憶全部只存在你本機的 <code>~/.hermes/</code>。
+          只有你主動投稿到公頻或社群市場的內容才會上傳，
+          而且會先經過抽象化處理（去掉路徑、帳號等隱私資訊）。
+          原始碼全在 GitHub 可檢視。
         </div>
       </div>
       <div class="faq-item">
-        <div class="faq-q">史萊姆會做什麼？</div>
+        <div class="faq-q">史萊姆每天在做什麼？</div>
         <div class="faq-a">
-          背景運行，不干擾工作。它會觀察系統負載、檔案變動、開發活動，定期用 LLM 蒸餾出模式，
-          幫你記錄「你用了什麼工具、最近卡在哪裡」。可以隨時打開聊天和它對話。
+          背景運行，不干擾工作。它觀察系統負載、檔案變動、開發活動、視窗切換，
+          每小時用 LLM 蒸餾出模式，幫你記錄「用了什麼工具、最近卡在哪裡、什麼時候效率好」。
+          可以隨時打開聊天分頁和它對話 — 它會從對話中繼續學習你的說話風格。
+        </div>
+      </div>
+      <div class="faq-item">
+        <div class="faq-q">可以用別的 LLM 嗎？不想用 Gemini</div>
+        <div class="faq-a">
+          可以。目前支援 <b>Gemini、Claude、OpenAI</b>、OpenAI 相容的 <b>OpenRouter、Groq、DeepSeek、DeepInfra</b>，
+          以及本地執行的 <b>Ollama</b>。
+          設定分頁可以同時設多個，主要 provider 遇到 rate limit 會自動 fallback 到下一個。
+        </div>
+      </div>
+      <div class="faq-item">
+        <div class="faq-q">桌面浮動寵物怎麼開？</div>
+        <div class="faq-a">
+          在進化分頁點「顯示浮動寵物」按鈕，史萊姆會以透明背景浮在桌面上。
+          可以拖到任何位置、隨時點一下開啟對話，不影響其他視窗。
+          裝備會同步顯示在浮動版本上，合成後外觀立即更新。
+        </div>
+      </div>
+      <div class="faq-item">
+        <div class="faq-q">史萊姆會自己寫程式嗎？安全嗎？</div>
+        <div class="faq-a">
+          到達特定階段後，史萊姆可以「自我進化」— 嘗試生成新技能程式碼。
+          但這些程式碼<b>不會自動執行</b> —
+          先經過 AST 安全掃描（禁止檔案系統／網路操作），再送到你的「審核佇列」分頁。
+          你看過、按「通過」之後才會被載入。可以透過 Telegram 通知提醒你去審核。
         </div>
       </div>
       <div class="faq-item">
@@ -418,13 +611,16 @@
         <div class="faq-a">
           AI Slime 的經濟層由 <a href="https://wallet-5888.web.app" target="_blank" style="color:var(--slime-blue);">5888 錢包</a>提供。
           一個錢包可同時用於 Hermes、AI Slime 等多個應用，點數在生態系內通用。
+          用 Google 帳號登入即可。
         </div>
       </div>
       <div class="faq-item">
         <div class="faq-q">可以幫忙建造這個世界嗎？</div>
         <div class="faq-a">
-          可以！上傳裝備模板、在公頻投票、在市場交易，都算建造生態。
-          被社群採納的裝備創作者可以獲得 100 點獎勵 + 每次成交抽成 15%。
+          非常歡迎！
+          上傳原創裝備模板（通過投票獲 100 點 + 之後每筆成交抽 15%）、
+          在公頻投票確認／反駁模式、在市場交易，
+          或直接到 GitHub 送 PR 加新功能。被社群採納的貢獻都有獎勵。
         </div>
       </div>
     </div>
