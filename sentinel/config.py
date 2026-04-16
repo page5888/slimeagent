@@ -109,7 +109,7 @@ RELAY_SERVER_URL = "https://slimeagent-relay.onrender.com"
 # Google OAuth Client ID — needed for marketplace login.
 # Create at https://console.cloud.google.com/apis/credentials
 # Type: "Web application", add http://127.0.0.1:18510 to redirect URIs.
-GOOGLE_CLIENT_ID = "942074052009-fo2itqu5skv22u00fl0dnhkardeb3d8s.apps.googleusercontent.com"
+GOOGLE_CLIENT_ID = "942074052009-bpso1jl3rptcm0023d9ac5ct4po9ud09.apps.googleusercontent.com"
 
 # User mode: "byok" (self-provided API keys) or "quota" (5888 wallet points)
 # Saved per-user in ~/.hermes/aislime_auth.json, this is just the default.
