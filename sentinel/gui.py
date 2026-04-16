@@ -2663,14 +2663,24 @@ class EvolutionTab(QWidget):
 
         p.end()
 
-        # Render slime widget onto card
-        slime_pixmap = QPixmap(280, 280)
-        slime_pixmap.fill(QColor(0, 0, 0, 0))
-        self.slime_widget.render(slime_pixmap)
+        # Render slime widget onto card.
+        # Use grab() to capture the whole widget at its current size, then
+        # scale to 280x280. An earlier version used render() into a fixed
+        # 280x280 pixmap, which clipped the widget (cy = h*0.58 fell outside
+        # the canvas) and only the background survived into the share card.
+        full_grab = self.slime_widget.grab()
+        slime_pixmap = full_grab.scaled(
+            280, 280,
+            Qt.KeepAspectRatio,
+            Qt.SmoothTransformation,
+        )
 
         p = QPainter(pixmap)
         p.setRenderHint(QPainter.Antialiasing)
-        p.drawPixmap(100, 80, slime_pixmap)
+        # Center the scaled slime within its 280x280 slot
+        offset_x = 100 + (280 - slime_pixmap.width()) // 2
+        offset_y = 80 + (280 - slime_pixmap.height()) // 2
+        p.drawPixmap(offset_x, offset_y, slime_pixmap)
 
         # Title and form
         title_font = QFont("Microsoft JhengHei", 20, QFont.Bold)
