@@ -11,6 +11,11 @@ from server.equipment.models import (
 
 log = logging.getLogger("server.equipment")
 
+# Pending submissions that don't reach their vote threshold within this
+# many days are auto-expired. Keeps the queue fresh and prevents stale
+# cards from crowding the vote tab forever.
+SUBMISSION_EXPIRY_DAYS = 14
+
 
 def validate_submission(name: str, slot: str, rarity: str,
                         buff: dict | None) -> str | None:
@@ -77,6 +82,40 @@ async def check_daily_limit(user_id: str) -> bool:
         (user_id, cutoff),
     )
     return row["cnt"] < config.MAX_SUBMISSIONS_PER_DAY
+
+
+async def expire_stale_submissions() -> int:
+    """Mark pending submissions older than SUBMISSION_EXPIRY_DAYS as expired.
+
+    Called lazily from the /submissions listing endpoint so we don't need
+    a separate cron job. Returns the number of submissions expired on
+    this call (0 most of the time).
+    """
+    from datetime import datetime, timedelta, timezone
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(days=SUBMISSION_EXPIRY_DAYS)
+    ).isoformat()
+    db = await get_db()
+
+    # Count first so we can log and return an accurate number.
+    row = await db.execute_fetchone(
+        "SELECT COUNT(*) as cnt FROM equipment_submissions "
+        "WHERE status = 'pending' AND created_at < ?",
+        (cutoff,),
+    )
+    count = row["cnt"] if row else 0
+    if count == 0:
+        return 0
+
+    await db.execute(
+        "UPDATE equipment_submissions SET status = 'expired' "
+        "WHERE status = 'pending' AND created_at < ?",
+        (cutoff,),
+    )
+    await db.commit()
+    log.info("Expired %d stale submissions (older than %d days)",
+             count, SUBMISSION_EXPIRY_DAYS)
+    return count
 
 
 async def create_submission(user_id: str, name: str, slot: str, rarity: str,

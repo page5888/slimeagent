@@ -40,7 +40,21 @@ async def list_submissions(
     per_page: int = Query(20, ge=1, le=50),
     user: dict | None = Depends(get_current_user),
 ):
-    """List equipment submissions with optional filters."""
+    """List equipment submissions with optional filters.
+
+    Lazily expires any pending submissions older than 14 days before
+    querying, so callers never see stale cards.
+    """
+    # Lazy cleanup — fast no-op if nothing is stale.
+    try:
+        await service.expire_stale_submissions()
+    except Exception as e:
+        # Don't fail the request if cleanup hits a snag.
+        import logging
+        logging.getLogger("server.equipment").warning(
+            "expire_stale_submissions failed: %s", e
+        )
+
     db = await get_db()
 
     conditions = ["s.status = ?"]

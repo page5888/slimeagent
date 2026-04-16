@@ -475,8 +475,10 @@ class MarketTab(QWidget):
 
         self.vote_tab = self._build_vote_tab()
         self.trade_tab = self._build_trade_tab()
+        self.creator_tab = self._build_creator_tab()
         self.sub_tabs.addTab(self.vote_tab, "🗳 社群投票")
         self.sub_tabs.addTab(self.trade_tab, "💰 裝備交易")
+        self.sub_tabs.addTab(self.creator_tab, "✏ 投稿創作")
 
         # Status bar
         self.status_label = QLabel("")
@@ -600,6 +602,240 @@ class MarketTab(QWidget):
         layout.addLayout(page_row)
 
         return w
+
+    # ── Creator Tab (投稿) ──────────────────────────────────────────
+
+    _CREATOR_SLOTS = [
+        ("helmet", "頭盔"), ("eyes", "眼睛"), ("mouth", "嘴巴"),
+        ("skin", "皮膚"), ("background", "背景"), ("core", "晶核"),
+        ("left_hand", "左手"), ("right_hand", "右手"),
+        ("mount", "載具"), ("vfx", "特效"), ("drone", "精靈"), ("title", "稱號"),
+    ]
+    _CREATOR_RARITIES = [
+        ("common", "普通"), ("uncommon", "優良"), ("rare", "稀有"),
+        ("epic", "史詩"), ("legendary", "傳說"), ("mythic", "神話"),
+        ("ultimate", "究極"),
+    ]
+
+    def _build_creator_tab(self) -> QWidget:
+        w = QWidget()
+        layout = QVBoxLayout(w)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
+
+        # Description header
+        desc = QLabel(
+            "<span style='color:#aaa; font-size:12px;'>"
+            "上傳你設計的裝備圖（PNG / GIF，≤512KB，≤256×256），"
+            "提交後會進入社群投票審核。通過稀有度門檻可獲得 100 點獎勵，"
+            "每天最多投稿 3 件。"
+            "</span>"
+        )
+        desc.setWordWrap(True)
+        layout.addWidget(desc)
+
+        # Form layout
+        form = QFormLayout()
+        form.setSpacing(6)
+        form.setLabelAlignment(Qt.AlignRight)
+
+        # Name
+        self.creator_name_input = QLineEdit()
+        self.creator_name_input.setMaxLength(30)
+        self.creator_name_input.setPlaceholderText("1–30 字，例如「星屑賢者的權杖」")
+        form.addRow("作品名稱：", self.creator_name_input)
+
+        # Slot + rarity (same row)
+        slot_rar_row = QHBoxLayout()
+        self.creator_slot_combo = QComboBox()
+        for slot_id, slot_zh in self._CREATOR_SLOTS:
+            self.creator_slot_combo.addItem(slot_zh, slot_id)
+        slot_rar_row.addWidget(self.creator_slot_combo, stretch=1)
+
+        slot_rar_row.addWidget(QLabel("稀有度："))
+        self.creator_rarity_combo = QComboBox()
+        for r_id, r_zh in self._CREATOR_RARITIES:
+            self.creator_rarity_combo.addItem(r_zh, r_id)
+        slot_rar_row.addWidget(self.creator_rarity_combo, stretch=1)
+        slot_rar_wrapper = QWidget()
+        slot_rar_wrapper.setLayout(slot_rar_row)
+        form.addRow("欄位：", slot_rar_wrapper)
+
+        # Description
+        self.creator_desc_input = QPlainTextEdit()
+        self.creator_desc_input.setFixedHeight(60)
+        self.creator_desc_input.setPlaceholderText(
+            "簡短介紹這件裝備（選填）— 例如背景故事、使用情境"
+        )
+        form.addRow("作品說明：", self.creator_desc_input)
+
+        # Image picker
+        img_row = QHBoxLayout()
+        self.creator_image_path_label = QLabel("（尚未選擇圖檔）")
+        self.creator_image_path_label.setStyleSheet("color: #888; font-size: 12px;")
+        self.creator_image_path_label.setWordWrap(True)
+        img_row.addWidget(self.creator_image_path_label, stretch=1)
+        self.creator_pick_image_btn = QPushButton("選擇圖檔…")
+        self.creator_pick_image_btn.clicked.connect(self._creator_pick_image)
+        img_row.addWidget(self.creator_pick_image_btn)
+        img_wrapper = QWidget()
+        img_wrapper.setLayout(img_row)
+        form.addRow("裝備圖：", img_wrapper)
+
+        # Image preview
+        self.creator_image_preview = QLabel("")
+        self.creator_image_preview.setFixedSize(96, 96)
+        self.creator_image_preview.setStyleSheet(
+            "QLabel { border: 1px dashed #444; background: rgba(0,0,0,0.15); }"
+        )
+        self.creator_image_preview.setAlignment(Qt.AlignCenter)
+        form.addRow("預覽：", self.creator_image_preview)
+
+        layout.addLayout(form)
+
+        # Submit button + status
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        self.creator_submit_btn = QPushButton("送出投稿")
+        self.creator_submit_btn.setStyleSheet(
+            "QPushButton { background: #00dcff; color: #000; "
+            "border-radius: 4px; padding: 8px 24px; font-weight: bold; }"
+            "QPushButton:hover { background: #00b8d4; }"
+            "QPushButton:disabled { background: #444; color: #888; }"
+        )
+        self.creator_submit_btn.clicked.connect(self._creator_submit)
+        btn_row.addWidget(self.creator_submit_btn)
+        layout.addLayout(btn_row)
+
+        self.creator_status_label = QLabel("")
+        self.creator_status_label.setStyleSheet(
+            "color: #888; font-size: 12px; padding: 4px;"
+        )
+        self.creator_status_label.setWordWrap(True)
+        layout.addWidget(self.creator_status_label)
+
+        layout.addStretch()
+
+        # State
+        self._creator_image_path = ""
+
+        return w
+
+    def _creator_pick_image(self):
+        from PySide6.QtWidgets import QFileDialog
+        from PySide6.QtGui import QPixmap
+
+        fp, _filter = QFileDialog.getOpenFileName(
+            self, "選擇裝備圖", "",
+            "圖像檔案 (*.png *.gif)",
+        )
+        if not fp:
+            return
+
+        # Basic size check — match server limit
+        from pathlib import Path
+        size_bytes = Path(fp).stat().st_size
+        if size_bytes > 512 * 1024:
+            QMessageBox.warning(
+                self, "檔案太大",
+                f"檔案大小 {size_bytes // 1024} KB 超過 512 KB 上限",
+            )
+            return
+
+        pm = QPixmap(fp)
+        if pm.isNull():
+            QMessageBox.warning(self, "無法讀取", "無法讀取這個圖檔")
+            return
+
+        # Check dimensions
+        if pm.width() > 256 or pm.height() > 256:
+            QMessageBox.warning(
+                self, "圖片太大",
+                f"圖片尺寸 {pm.width()}×{pm.height()} 超過 256×256",
+            )
+            return
+
+        self._creator_image_path = fp
+        self.creator_image_path_label.setText(Path(fp).name)
+        self.creator_image_path_label.setStyleSheet("color: #2ed573; font-size: 12px;")
+
+        # Preview — scale to fit 96×96 square
+        scaled = pm.scaled(
+            96, 96, Qt.KeepAspectRatio, Qt.SmoothTransformation,
+        )
+        self.creator_image_preview.setPixmap(scaled)
+
+    def _creator_submit(self):
+        from sentinel import relay_client
+
+        name = self.creator_name_input.text().strip()
+        slot = self.creator_slot_combo.currentData()
+        rarity = self.creator_rarity_combo.currentData()
+        description = self.creator_desc_input.toPlainText().strip()
+        image_path = self._creator_image_path
+
+        # Client-side validation
+        if not name:
+            QMessageBox.warning(self, "缺少名稱", "請填寫作品名稱")
+            return
+        if len(name) > 30:
+            QMessageBox.warning(self, "名稱太長", "作品名稱最多 30 字")
+            return
+        if not image_path:
+            QMessageBox.warning(self, "缺少圖檔", "請選擇裝備圖檔")
+            return
+
+        self.creator_submit_btn.setEnabled(False)
+        self.creator_status_label.setText("上傳圖片中…")
+        QApplication.processEvents()
+
+        try:
+            # Step 1: upload image
+            img_resp = relay_client.upload_image(image_path)
+            image_id = img_resp.get("image_id", "")
+
+            # Step 2: submit equipment
+            self.creator_status_label.setText("送出投稿中…")
+            QApplication.processEvents()
+
+            result = relay_client.submit_equipment(
+                name=name, slot=slot, rarity=rarity,
+                description=description, image_id=image_id,
+            )
+
+            threshold = result.get("vote_threshold", "?")
+            QMessageBox.information(
+                self, "投稿成功",
+                f"作品「{name}」已送出！\n"
+                f"需要 {threshold} 票通過，通過後獲得 100 點獎勵。\n"
+                f"可以到「社群投票」分頁查看投票進度。",
+            )
+
+            # Reset form
+            self.creator_name_input.clear()
+            self.creator_desc_input.clear()
+            self._creator_image_path = ""
+            self.creator_image_path_label.setText("（尚未選擇圖檔）")
+            self.creator_image_path_label.setStyleSheet("color: #888; font-size: 12px;")
+            self.creator_image_preview.clear()
+            self.creator_status_label.setText("投稿成功！")
+            # Refresh vote list if user switches back
+            self._load_submissions()
+        except relay_client.RelayError as e:
+            msg = e.message or "未知錯誤"
+            if e.code == "429":
+                msg = "今日投稿次數已達上限（每日 3 件）"
+            elif e.code == "409":
+                msg = f"名稱已被使用：{msg}"
+            elif e.code == "402":
+                msg = "點數不足"
+            QMessageBox.warning(self, "投稿失敗", msg)
+            self.creator_status_label.setText(f"失敗：{msg}")
+        except Exception as e:
+            QMessageBox.warning(self, "投稿失敗", str(e))
+            self.creator_status_label.setText(f"錯誤：{e}")
+        finally:
+            self.creator_submit_btn.setEnabled(True)
 
     # ── Data Loading ─────────────────────────────────────────────────
 
@@ -920,6 +1156,7 @@ class MarketTab(QWidget):
     def retranslate(self):
         self.sub_tabs.setTabText(0, "🗳 社群投票")
         self.sub_tabs.setTabText(1, "💰 裝備交易")
+        self.sub_tabs.setTabText(2, "✏ 投稿創作")
 
     def refresh(self):
         pass  # Don't auto-refresh network calls on timer
@@ -1926,6 +2163,15 @@ class EvolutionTab(QWidget):
         self.slime_widget.setMinimumHeight(260)
         avatar_layout.addWidget(self.slime_widget)
 
+        # Sacred name (only shown after master names the slime at Named tier)
+        self.name_label = QLabel()
+        self.name_label.setStyleSheet(
+            "font-size: 18px; color: #ffa502; font-weight: bold; font-style: italic;"
+        )
+        self.name_label.setAlignment(Qt.AlignCenter)
+        self.name_label.hide()
+        avatar_layout.addWidget(self.name_label)
+
         self.form_label = QLabel()
         self.form_label.setStyleSheet("font-size: 22px; color: #00dcff; font-weight: bold;")
         self.form_label.setAlignment(Qt.AlignCenter)
@@ -2066,6 +2312,12 @@ class EvolutionTab(QWidget):
 
         state = load_evolution()
 
+        # If a previous session evolved to Named Slime but was closed before
+        # naming, the flag is still set on disk — resurface the ceremony on
+        # the next tick so this refresh() returns quickly.
+        if getattr(state, "naming_pending", False) and not getattr(state, "slime_name", ""):
+            QTimer.singleShot(200, self._maybe_prompt_for_name)
+
         # 形象頁
         unlocked_skills = [s for s in state.skills if s.unlocked]
         self.slime_widget.set_state(state.form, state.title,
@@ -2078,6 +2330,14 @@ class EvolutionTab(QWidget):
             self.slime_widget.set_equipment(eq_state.equipped, eq_state.inventory)
         except Exception:
             pass
+
+        # Show the given name if we have one, otherwise hide the row
+        slime_name = getattr(state, "slime_name", "") or ""
+        if slime_name:
+            self.name_label.setText(f"「{slime_name}」")
+            self.name_label.show()
+        else:
+            self.name_label.hide()
 
         self.form_label.setText(state.title)
         self.title_label.setText(state.form)
@@ -2304,12 +2564,62 @@ class EvolutionTab(QWidget):
                     frm=result["from"], to=result["to"], title=result["title"],
                 ),
             )
+            # Record evolution as a memorable moment
+            try:
+                from sentinel import identity as _id
+                _id.record_evolution_moment(result["from"], result["to"], result["title"])
+            except Exception:
+                pass
+            # If entering Named Slime tier, trigger the naming ceremony
+            self._maybe_prompt_for_name()
         else:
             # Shouldn't happen — eligibility was just checked — but handle it.
             QMessageBox.warning(self, t("evolve_dialog_title"),
                                 result.get("reason", "進化失敗"))
 
         self.refresh()
+
+    def _maybe_prompt_for_name(self):
+        """If the slime just became Named Slime without a name, ceremony time."""
+        try:
+            from sentinel import identity
+        except ImportError:
+            return
+        if not identity.consume_naming_prompt():
+            return
+
+        # Loop until we get a valid name or user explicitly cancels twice.
+        # Naming is a one-shot ceremony; if they truly skip, the flag stays
+        # cleared but slime_name is empty — they can never name it again.
+        # We warn them on skip.
+        intro = t("naming_intro")
+        prompt = t("naming_prompt")
+        name, ok = QInputDialog.getText(self, t("naming_title"),
+                                         f"{intro}\n\n{prompt}")
+        name = (name or "").strip()
+        if not ok or not name:
+            confirm = QMessageBox.question(
+                self, t("naming_title"),
+                t("naming_skip_confirm"),
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+            )
+            if confirm == QMessageBox.Yes:
+                return  # They chose to skip permanently
+            # Retry once
+            name, ok = QInputDialog.getText(self, t("naming_title"), prompt)
+            name = (name or "").strip()
+            if not ok or not name:
+                return
+
+        if len(name) > 24:
+            QMessageBox.warning(self, t("naming_title"), t("naming_too_long"))
+            return
+
+        if identity.set_slime_name(name):
+            QMessageBox.information(
+                self, t("naming_title"),
+                t("naming_success").format(name=name),
+            )
 
     def _share_slime(self):
         """Generate a share card with the slime avatar and stats."""
@@ -4104,6 +4414,12 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'overlay'):
             self.overlay.hide()
         self.tray.hide()
+        # Before quitting, stamp last_seen so reunion detection works on next launch
+        try:
+            from sentinel import identity
+            identity.touch_last_seen()
+        except Exception:
+            pass
         QApplication.quit()
         # 強制結束 Python process，確保 CMD 也會關閉
         import os

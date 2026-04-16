@@ -95,6 +95,89 @@ def vote(submission_id: str) -> dict:
     return _request("POST", f"equipment/submissions/{submission_id}/vote")
 
 
+def submit_equipment(name: str, slot: str, rarity: str,
+                     visual: str = "", buff: dict | None = None,
+                     description: str = "",
+                     image_id: str | None = None) -> dict:
+    """Submit a new community equipment template.
+
+    Returns {"id": str, "name": str, "slot": str, "rarity": str,
+             "vote_threshold": int, "status": "pending"}.
+
+    Raises RelayError(400) on validation errors, RelayError(409) if
+    name is taken, RelayError(429) if the user hit the daily limit.
+    """
+    body: dict = {
+        "name": name,
+        "slot": slot,
+        "rarity": rarity,
+        "visual": visual,
+        "description": description,
+    }
+    if buff is not None:
+        body["buff"] = buff
+    if image_id is not None:
+        body["image_id"] = image_id
+    return _request("POST", "equipment/submit", body, auth=True)
+
+
+def upload_image(file_path: str) -> dict:
+    """Upload a PNG/GIF sprite image. Max 512KB, 256x256.
+
+    Returns {"image_id": str, "url": str}. Uses multipart/form-data
+    encoded manually so we don't depend on `requests`.
+    """
+    import mimetypes
+    import uuid as _uuid
+    from pathlib import Path
+
+    path = Path(file_path)
+    if not path.exists():
+        raise RelayError("NOT_FOUND", f"File not found: {file_path}")
+
+    content = path.read_bytes()
+    content_type, _ = mimetypes.guess_type(str(path))
+    if content_type not in ("image/png", "image/gif"):
+        raise RelayError("400", "Only PNG and GIF allowed")
+
+    boundary = f"----AiSlimeBoundary{_uuid.uuid4().hex}"
+    filename = path.name
+    body = (
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+        f"Content-Type: {content_type}\r\n\r\n"
+    ).encode("utf-8") + content + f"\r\n--{boundary}--\r\n".encode("utf-8")
+
+    url = _relay_url()
+    if not url:
+        raise RelayError("NOT_CONFIGURED", "Relay server URL not set")
+
+    headers = {
+        "Content-Type": f"multipart/form-data; boundary={boundary}",
+    }
+    token = _get_token()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    req = urllib.request.Request(
+        f"{url}/images/upload", data=body, headers=headers, method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=90) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        error_body = e.read().decode("utf-8", errors="replace")
+        try:
+            err = json.loads(error_body)
+        except json.JSONDecodeError:
+            err = {"detail": error_body[:200]}
+        raise RelayError(
+            str(e.code), err.get("detail", err.get("message", str(err)))
+        ) from e
+    except Exception as e:
+        raise RelayError("NETWORK", str(e)) from e
+
+
 def get_pool_version() -> dict:
     return _request("GET", "equipment/pool/version", auth=False)
 
