@@ -2043,12 +2043,13 @@ class EvolutionTab(QWidget):
             p.setPen(QColor(255, 165, 2))
             p.drawText(QRect(0, stats_y + 65, card_w, 25), Qt.AlignCenter, f"特質：{trait_text}")
 
-        # Footer
+        # Footer — 帶上 GitHub 專案 URL，讓看到圖的人知道去哪找原始碼
         p.setPen(QColor(80, 80, 80))
         small_font = QFont("Segoe UI", 9)
         p.setFont(small_font)
         now = datetime.datetime.now().strftime("%Y/%m/%d")
-        p.drawText(QRect(0, card_h - 35, card_w, 20), Qt.AlignCenter, f"AI Slime Agent  {now}")
+        p.drawText(QRect(0, card_h - 45, card_w, 20), Qt.AlignCenter, f"AI Slime Agent  {now}")
+        p.drawText(QRect(0, card_h - 25, card_w, 18), Qt.AlignCenter, "github.com/page5888/slimeagent")
 
         p.end()
 
@@ -2084,8 +2085,8 @@ class EvolutionTab(QWidget):
         from sentinel.evolution import load_evolution
         state = load_evolution()
 
-        # 未來上架後改成官網 URL（不是 GitHub，一般人不知道 GitHub）
-        SITE_URL = "https://slime.5888.tw"
+        # 指向 GitHub 專案頁面，讓好奇的人可以看原始碼、issue、release
+        SITE_URL = "https://github.com/page5888/slimeagent"
 
         # 組裝分享文字
         share_text = (
