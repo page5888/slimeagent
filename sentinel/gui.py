@@ -1691,6 +1691,217 @@ class MemoryTab(QWidget):
         self.speech_group.setTitle(t("memory_speech_style"))
 
 
+# ─── Federation Tab (公頻 / Slime-to-Slime Knowledge Pool) ──────────────
+# Layer 3 of the federation design (sentinel/growth/federation.py):
+# other slimes' abstracted observations arrive here as "patterns", and
+# this tab lets the user vote whether the statement also fits them.
+# Submission (layer 2) is a later PR.
+
+class FederationTab(QWidget):
+    """Voting UI for community patterns."""
+
+    def __init__(self):
+        super().__init__()
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
+
+        # Header + description
+        self.header_lbl = QLabel(f"<b style='color:#00dcff;'>{t('fed_header')}</b>")
+        self.header_lbl.setStyleSheet("font-size: 14px;")
+        layout.addWidget(self.header_lbl)
+
+        self.desc_lbl = QLabel(t("fed_desc"))
+        self.desc_lbl.setWordWrap(True)
+        self.desc_lbl.setStyleSheet("color:#aaa; font-size: 11px;")
+        layout.addWidget(self.desc_lbl)
+
+        # Status line (shown when loading / empty / error)
+        self.status_lbl = QLabel(t("fed_loading"))
+        self.status_lbl.setStyleSheet("color:#888; padding: 8px;")
+        layout.addWidget(self.status_lbl)
+
+        # Scrollable list of pattern cards
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.list_container = QWidget()
+        self.list_layout = QVBoxLayout(self.list_container)
+        self.list_layout.setContentsMargins(0, 0, 0, 0)
+        self.list_layout.setSpacing(6)
+        self.list_layout.addStretch()
+        self.scroll.setWidget(self.list_container)
+        layout.addWidget(self.scroll, 1)
+
+        # Refresh button
+        self.refresh_btn = QPushButton(t("fed_refresh"))
+        self.refresh_btn.clicked.connect(self.refresh)
+        self.refresh_btn.setStyleSheet(
+            "QPushButton { background:#1e90ff; color:#fff; font-weight:bold;"
+            " padding:6px 16px; border-radius:4px; border:none; }"
+            "QPushButton:hover { background:#3aa0ff; }"
+        )
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        btn_row.addWidget(self.refresh_btn)
+        layout.addLayout(btn_row)
+
+        self._patterns: list[dict] = []
+        self.refresh()
+
+    # ── Data ──────────────────────────────────────────────────────────
+    def refresh(self):
+        """Fetch patterns from the relay and rebuild the card list.
+
+        Runs synchronously — the list is small (≤20 items) and the
+        endpoint returns fast. A background thread would be nice but
+        isn't worth the complexity at this scale.
+        """
+        self.status_lbl.setText(t("fed_loading"))
+        self.status_lbl.setVisible(True)
+        # Clear old cards but keep the trailing stretch
+        while self.list_layout.count() > 1:
+            item = self.list_layout.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+
+        try:
+            from sentinel import relay_client
+            resp = relay_client.list_patterns(limit=20)
+        except Exception as e:
+            self.status_lbl.setText(t("fed_network_err").format(err=str(e)))
+            self._patterns = []
+            return
+
+        self._patterns = resp.get("items", []) or []
+
+        if not self._patterns:
+            self.status_lbl.setText(t("fed_empty"))
+            return
+
+        self.status_lbl.setVisible(False)
+        for pat in self._patterns:
+            card = self._build_card(pat)
+            self.list_layout.insertWidget(self.list_layout.count() - 1, card)
+
+    def _build_card(self, pat: dict) -> QWidget:
+        """Render a single pattern as a card with vote buttons."""
+        card = QFrame()
+        card.setStyleSheet(
+            "QFrame { background: rgba(255,255,255,0.04); "
+            "border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; "
+            "padding: 8px; }"
+        )
+        v = QVBoxLayout(card)
+        v.setContentsMargins(10, 8, 10, 8)
+        v.setSpacing(4)
+
+        # Top row: category + status + sample_n
+        top = QHBoxLayout()
+        cat_key = f"fed_cat_{pat.get('category', '')}"
+        cat_text = t(cat_key)
+        # Fall back to raw category if the i18n key wasn't found
+        if cat_text == cat_key:
+            cat_text = pat.get("category", "")
+        cat_lbl = QLabel(f"<b style='color:#00dcff;'>{cat_text}</b>")
+        top.addWidget(cat_lbl)
+
+        status = pat.get("status", "pending")
+        status_key = "fed_status_community" if status == "community" else "fed_status_pending"
+        status_color = "#2ed573" if status == "community" else "#ffa502"
+        status_lbl = QLabel(
+            f"<span style='color:{status_color}; font-size:10px;'>"
+            f"[{t(status_key)}]</span>"
+        )
+        top.addWidget(status_lbl)
+        top.addStretch()
+
+        sample = pat.get("sample_n", 0)
+        conf = pat.get("confidence", 0.0)
+        meta_lbl = QLabel(
+            f"<span style='color:#888; font-size:10px;'>"
+            f"樣本 {sample} · 信心 {conf:.0%}</span>"
+        )
+        top.addWidget(meta_lbl)
+        v.addLayout(top)
+
+        # Statement
+        stmt_lbl = QLabel(pat.get("statement", ""))
+        stmt_lbl.setWordWrap(True)
+        stmt_lbl.setStyleSheet("color: #e0e0e0; font-size: 13px; padding: 4px 0;")
+        v.addWidget(stmt_lbl)
+
+        # Vote counts
+        vc = pat.get("votes_confirm", 0)
+        vr = pat.get("votes_refute", 0)
+        vu = pat.get("votes_unclear", 0)
+        counts_lbl = QLabel(
+            f"<span style='color:#2ed573;'>✓ {vc}</span> · "
+            f"<span style='color:#e74c3c;'>✗ {vr}</span> · "
+            f"<span style='color:#888;'>? {vu}</span>"
+        )
+        counts_lbl.setStyleSheet("font-size: 11px;")
+        v.addWidget(counts_lbl)
+
+        # Buttons row — disabled if user already voted
+        btn_row = QHBoxLayout()
+        user_voted = pat.get("user_voted")
+
+        if user_voted:
+            voted_key = f"fed_voted_{user_voted}"
+            voted_lbl = QLabel(f"<i style='color:#888;'>{t(voted_key)}</i>")
+            btn_row.addWidget(voted_lbl)
+            btn_row.addStretch()
+        else:
+            pattern_id = pat["id"]
+            for vote_type, label_key, bg in [
+                ("confirm", "fed_btn_confirm", "#2ed573"),
+                ("refute",  "fed_btn_refute",  "#e74c3c"),
+                ("unclear", "fed_btn_unclear", "#7f8c8d"),
+            ]:
+                btn = QPushButton(t(label_key))
+                btn.setStyleSheet(
+                    f"QPushButton {{ background:{bg}; color:#fff; "
+                    f"padding:4px 10px; border-radius:4px; border:none; "
+                    f"font-size: 11px; }}"
+                    f"QPushButton:hover {{ opacity: 0.85; }}"
+                    f"QPushButton:disabled {{ background:#444; color:#888; }}"
+                )
+                # Capture pattern_id + vote_type in default args so the
+                # lambda doesn't close over the loop variable.
+                btn.clicked.connect(
+                    lambda _checked, pid=pattern_id, v=vote_type: self._on_vote(pid, v)
+                )
+                btn_row.addWidget(btn)
+            btn_row.addStretch()
+
+        v.addLayout(btn_row)
+        return card
+
+    def _on_vote(self, pattern_id: str, vote: str):
+        """Handle a vote click. Refreshes the list after success."""
+        from sentinel import relay_client
+        try:
+            resp = relay_client.vote_pattern(pattern_id, vote)
+        except Exception as e:
+            QMessageBox.warning(self, "AI Slime",
+                                t("fed_network_err").format(err=str(e)))
+            return
+
+        if resp.get("promoted"):
+            QMessageBox.information(self, "AI Slime", t("fed_vote_promoted"))
+        # Re-fetch — the card state (buttons → "已投", counts) changes
+        # based on the new data.
+        self.refresh()
+
+    # ── i18n ──────────────────────────────────────────────────────────
+    def retranslate(self):
+        self.header_lbl.setText(f"<b style='color:#00dcff;'>{t('fed_header')}</b>")
+        self.desc_lbl.setText(t("fed_desc"))
+        self.refresh_btn.setText(t("fed_refresh"))
+        self.refresh()
+
+
 # ─── Evolution Tab (子頁籤版) ────────────────────────────────────────────
 
 class EvolutionTab(QWidget):
@@ -3660,6 +3871,7 @@ class MainWindow(QMainWindow):
         self.home_tab = HomeTab()
         self.chat_tab = ChatTab(self.bridge)
         self.memory_tab = MemoryTab()
+        self.federation_tab = FederationTab()
         self.evolution_tab = EvolutionTab()
         self.equipment_tab = EquipmentTab()
         self.market_tab = MarketTab()
@@ -3674,6 +3886,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.equipment_tab, t("tab_equipment"))
         self.tabs.addTab(self.chat_tab, t("tab_chat"))
         self.tabs.addTab(self.memory_tab, t("tab_memory"))
+        self.tabs.addTab(self.federation_tab, t("tab_federation"))
         self.tabs.addTab(self.market_tab, t("tab_market"))
         self._approval_tab_index = self.tabs.addTab(self.approval_tab, t("tab_approval"))
         self.tabs.addTab(self.settings_tab, t("tab_settings"))
@@ -4437,14 +4650,16 @@ class MainWindow(QMainWindow):
         self.tabs.setTabText(2, t("tab_equipment"))
         self.tabs.setTabText(3, t("tab_chat"))
         self.tabs.setTabText(4, t("tab_memory"))
-        self.tabs.setTabText(5, t("tab_market"))
-        self.tabs.setTabText(6, t("tab_approval"))
-        self.tabs.setTabText(7, t("tab_settings"))
+        self.tabs.setTabText(5, t("tab_federation"))
+        self.tabs.setTabText(6, t("tab_market"))
+        self.tabs.setTabText(7, t("tab_approval"))
+        self.tabs.setTabText(8, t("tab_settings"))
         self._refresh_approval_tab_label()
         self.approval_tab.retranslate()
         self.home_tab.retranslate()
         self.chat_tab.retranslate()
         self.memory_tab.retranslate()
+        self.federation_tab.retranslate()
         self.evolution_tab.retranslate()
         self.equipment_tab.retranslate()
         self.settings_tab.retranslate()

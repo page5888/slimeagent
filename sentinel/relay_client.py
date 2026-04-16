@@ -150,3 +150,30 @@ def evolve(idempotency_key: str | None = None) -> dict:
     if idempotency_key:
         body["idempotency_key"] = idempotency_key
     return _request("POST", "evolution/evolve", body)
+
+
+# ── Federation (公頻) ────────────────────────────────────────────────
+
+def list_patterns(limit: int = 20, category: str | None = None) -> dict:
+    """Fetch recent community patterns for the 公頻 tab.
+
+    Returns {"items": [...], "count": int}. Each item includes a
+    `user_voted` field — null if the caller hasn't voted, else one of
+    'confirm' / 'refute' / 'unclear'. The GUI uses this to disable vote
+    buttons on patterns the user has already scored.
+    """
+    params = f"?limit={limit}"
+    if category:
+        params += f"&category={category}"
+    return _request("GET", f"federation/patterns{params}", auth=True)
+
+
+def vote_pattern(pattern_id: str, vote: str) -> dict:
+    """Cast a vote on a pattern. `vote` is 'confirm', 'refute', or 'unclear'.
+
+    Raises RelayError(400) if the user already voted or the pattern is
+    no longer accepting votes, RelayError(404) if the pattern was
+    deleted between list and vote.
+    """
+    return _request("POST", f"federation/patterns/{pattern_id}/vote",
+                    {"vote": vote}, auth=True)

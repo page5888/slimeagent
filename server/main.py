@@ -47,6 +47,7 @@ from server.images.router import router as images_router
 from server.equipment.router import router as equipment_router
 from server.marketplace.router import router as marketplace_router
 from server.evolution.router import router as evolution_router
+from server.federation.router import router as federation_router
 
 app.include_router(auth_router)
 app.include_router(wallet_router)
@@ -54,6 +55,7 @@ app.include_router(images_router)
 app.include_router(equipment_router)
 app.include_router(marketplace_router)
 app.include_router(evolution_router)
+app.include_router(federation_router)
 
 
 # Serve web frontend
