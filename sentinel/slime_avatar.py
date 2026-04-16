@@ -116,19 +116,19 @@ class SlimeWidget(QWidget):
                 if not item_id:
                     continue
                 # Find the item in inventory
-                item = next((i for i in state.inventory if i.item_id == item_id), None)
+                item = next((i for i in state.inventory if i["item_id"] == item_id), None)
                 if not item:
                     continue
                 # Find the template
                 template = next(
-                    (t for t in EQUIPMENT_POOL if t["name"] == item.template_name),
+                    (t for t in EQUIPMENT_POOL if t["name"] == item["template_name"]),
                     None,
                 )
                 if template and template.get("visual"):
                     visuals[slot] = {
                         "visual": template["visual"],
-                        "rarity": item.rarity,
-                        "name": item.template_name,
+                        "rarity": item["rarity"],
+                        "name": item["template_name"],
                     }
             self._equipped_visuals = visuals
         except Exception:

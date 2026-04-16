@@ -7,8 +7,8 @@ CREATE TABLE IF NOT EXISTS users (
     photo_url       TEXT NOT NULL DEFAULT '',
     wallet_uid      TEXT NOT NULL DEFAULT '',
     referral_code   TEXT NOT NULL DEFAULT '',
-    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
-    last_login_at   TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_login_at   TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_users_google_sub ON users(google_sub);
 
@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS equipment_submissions (
     vote_count      INTEGER NOT NULL DEFAULT 0,
     vote_threshold  INTEGER NOT NULL DEFAULT 10,
     approved_at     TEXT,
-    created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_submissions_status ON equipment_submissions(status);
 CREATE INDEX IF NOT EXISTS idx_submissions_creator ON equipment_submissions(creator_id);
@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS votes (
     id              TEXT PRIMARY KEY,
     user_id         TEXT NOT NULL REFERENCES users(id),
     submission_id   TEXT NOT NULL REFERENCES equipment_submissions(id),
-    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(user_id, submission_id)
 );
 CREATE INDEX IF NOT EXISTS idx_votes_submission ON votes(submission_id);
@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS community_equipment (
     description     TEXT NOT NULL DEFAULT '',
     image_url       TEXT NOT NULL DEFAULT '',
     creator_id      TEXT NOT NULL REFERENCES users(id),
-    approved_at     TEXT NOT NULL DEFAULT (datetime('now')),
+    approved_at     TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     version         INTEGER NOT NULL DEFAULT 1
 );
 CREATE INDEX IF NOT EXISTS idx_community_equip_slot ON community_equipment(slot);
@@ -68,7 +68,7 @@ CREATE TABLE IF NOT EXISTS marketplace_listings (
     rarity          TEXT NOT NULL,
     price           INTEGER NOT NULL,
     status          TEXT NOT NULL DEFAULT 'active',
-    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     sold_at         TEXT,
     buyer_id        TEXT REFERENCES users(id)
 );
@@ -85,7 +85,7 @@ CREATE TABLE IF NOT EXISTS trade_history (
     price           INTEGER NOT NULL,
     fee             INTEGER NOT NULL,
     seller_received INTEGER NOT NULL,
-    completed_at    TEXT NOT NULL DEFAULT (datetime('now'))
+    completed_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Uploaded images
@@ -95,13 +95,13 @@ CREATE TABLE IF NOT EXISTS images (
     filename        TEXT NOT NULL,
     content_type    TEXT NOT NULL DEFAULT 'image/png',
     size_bytes      INTEGER NOT NULL DEFAULT 0,
-    created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Pool sync version tracker
 CREATE TABLE IF NOT EXISTS pool_sync (
     id              INTEGER PRIMARY KEY CHECK (id = 1),
     current_version INTEGER NOT NULL DEFAULT 0,
-    updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+    updated_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-INSERT OR IGNORE INTO pool_sync (id, current_version) VALUES (1, 0);
+INSERT INTO pool_sync (id, current_version) VALUES (1, 0) ON CONFLICT (id) DO NOTHING;

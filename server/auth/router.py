@@ -55,7 +55,7 @@ async def login(req: LoginRequest):
     if row:
         user_id = row["id"]
         await db.execute(
-            "UPDATE users SET last_login_at = datetime('now'), "
+            "UPDATE users SET last_login_at = CURRENT_TIMESTAMP, "
             "display_name = ?, photo_url = ? WHERE id = ?",
             (google_info["name"], google_info["picture"], user_id),
         )
@@ -122,3 +122,47 @@ async def me(user: dict = Depends(get_current_user)):
     if not row:
         raise HTTPException(404, "User not found")
     return dict(row)
+
+
+# ── Dev Login (DEBUG mode only) ──────────────────────────────────────────
+
+class DevLoginRequest(BaseModel):
+    display_name: str = "Dev User"
+    email: str = "dev@localhost"
+
+
+@router.post("/dev-login", response_model=LoginResponse)
+async def dev_login(req: DevLoginRequest):
+    """Quick login without Google OAuth — only available when RELAY_DEBUG=1."""
+    if not config.DEBUG:
+        raise HTTPException(403, "Dev login only available in debug mode")
+
+    db = await get_db()
+    google_sub = f"dev_{req.email}"
+
+    row = await db.execute_fetchone(
+        "SELECT id, wallet_uid, referral_code FROM users WHERE google_sub = ?",
+        (google_sub,),
+    )
+
+    if row:
+        user_id = row["id"]
+    else:
+        user_id = str(uuid.uuid4())
+        await db.execute(
+            "INSERT INTO users (id, google_sub, email, display_name) "
+            "VALUES (?, ?, ?, ?)",
+            (user_id, google_sub, req.email, req.display_name),
+        )
+        await db.commit()
+
+    token = _make_jwt(user_id, google_sub, req.email)
+
+    return LoginResponse(
+        token=token,
+        uid=user_id,
+        email=req.email,
+        display_name=req.display_name,
+        referral_code="",
+        balance=0,
+    )

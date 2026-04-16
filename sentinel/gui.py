@@ -10,9 +10,10 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QTabWidget, QVBoxLayout, QHBoxLayout,
     QTextEdit, QLineEdit, QPushButton, QLabel, QProgressBar, QGroupBox,
     QFormLayout, QComboBox, QPlainTextEdit, QSystemTrayIcon, QMenu,
-    QScrollArea, QFrame, QSpinBox, QMessageBox,
+    QScrollArea, QFrame, QSpinBox, QMessageBox, QInputDialog,
 )
-from PySide6.QtCore import Qt, QTimer, Signal, QObject, QThread
+from PySide6.QtCore import Qt, QTimer, Signal, QObject, QThread, QSize, QRect, QPoint
+from PySide6.QtWidgets import QLayout, QSizePolicy
 from PySide6.QtGui import QFont, QColor, QTextCursor, QAction
 
 from sentinel.i18n import t, set_language, get_language
@@ -24,6 +25,90 @@ log = logging.getLogger("sentinel.gui")
 # ─── Style (loaded from themes.py) ───────────────────────────────────────
 
 from sentinel.themes import get_theme_style, get_theme_info, set_theme, get_theme, list_themes, THEMES
+
+
+# ─── FlowLayout (reflows items left-to-right, wrapping as width shrinks) ─
+
+class FlowLayout(QLayout):
+    """Qt's classic FlowLayout — reflows children like inline-block.
+
+    Ported from the Qt flow layout example. Used so equipment cards
+    reflow into multiple columns when the window is wide.
+    """
+
+    def __init__(self, parent=None, margin=0, h_spacing=8, v_spacing=8):
+        super().__init__(parent)
+        if parent is not None:
+            self.setContentsMargins(margin, margin, margin, margin)
+        self._items: list = []
+        self._h_space = h_spacing
+        self._v_space = v_spacing
+
+    def addItem(self, item):
+        self._items.append(item)
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, index):
+        if 0 <= index < len(self._items):
+            return self._items[index]
+        return None
+
+    def takeAt(self, index):
+        if 0 <= index < len(self._items):
+            return self._items.pop(index)
+        return None
+
+    def expandingDirections(self):
+        return Qt.Orientations(Qt.Orientation(0))
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, width):
+        return self._do_layout(QRect(0, 0, width, 0), True)
+
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        self._do_layout(rect, False)
+
+    def sizeHint(self):
+        return self.minimumSize()
+
+    def minimumSize(self):
+        size = QSize()
+        for item in self._items:
+            size = size.expandedTo(item.minimumSize())
+        m = self.contentsMargins()
+        size += QSize(m.left() + m.right(), m.top() + m.bottom())
+        return size
+
+    def _do_layout(self, rect, test_only):
+        m = self.contentsMargins()
+        effective = rect.adjusted(m.left(), m.top(), -m.right(), -m.bottom())
+        x = effective.x()
+        y = effective.y()
+        line_height = 0
+
+        for item in self._items:
+            wid = item.widget()
+            space_x = self._h_space
+            space_y = self._v_space
+            next_x = x + item.sizeHint().width() + space_x
+            if next_x - space_x > effective.right() and line_height > 0:
+                x = effective.x()
+                y = y + line_height + space_y
+                next_x = x + item.sizeHint().width() + space_x
+                line_height = 0
+
+            if not test_only:
+                item.setGeometry(QRect(QPoint(x, y), item.sizeHint()))
+
+            x = next_x
+            line_height = max(line_height, item.sizeHint().height())
+
+        return y + line_height - rect.y() + m.bottom()
 
 
 # ─── Signal Bridge (thread-safe GUI updates) ─────────────────────────────
@@ -416,9 +501,8 @@ class MarketTab(QWidget):
         scroll.setWidgetResizable(True)
         scroll.setStyleSheet("QScrollArea { border: none; }")
         self.trade_list_widget = QWidget()
-        self.trade_list_layout = QVBoxLayout(self.trade_list_widget)
-        self.trade_list_layout.setSpacing(8)
-        self.trade_list_layout.addStretch()
+        self.trade_list_layout = FlowLayout(self.trade_list_widget, margin=4,
+                                            h_spacing=8, v_spacing=8)
         scroll.setWidget(self.trade_list_widget)
         layout.addWidget(scroll)
 
@@ -597,67 +681,104 @@ class MarketTab(QWidget):
         for item in items:
             card = self._make_listing_card(item)
             self.trade_list_layout.addWidget(card)
-        self.trade_list_layout.addStretch()
 
         total_pages = max(1, (total + 19) // 20)
         self.trade_page_label.setText(f"第 {self.trade_page} / {total_pages} 頁")
         self.trade_prev_btn.setEnabled(self.trade_page > 1)
         self.trade_next_btn.setEnabled(self.trade_page < total_pages)
 
+    _MKT_TINT = {
+        "common": "rgba(170,170,170,0.12)",
+        "uncommon": "rgba(46,213,115,0.15)",
+        "rare": "rgba(30,144,255,0.18)",
+        "epic": "rgba(168,85,247,0.20)",
+        "legendary": "rgba(255,165,2,0.22)",
+        "mythic": "rgba(255,71,87,0.25)",
+        "ultimate": "rgba(255,215,0,0.30)",
+    }
+
+    _SLOT_ZH = {
+        "helmet": "頭盔", "eyes": "眼睛", "mouth": "嘴巴",
+        "left_hand": "左手", "right_hand": "右手", "skin": "皮膚",
+        "background": "背景", "core": "晶核", "mount": "載具",
+        "vfx": "特效", "drone": "精靈", "title": "稱號",
+    }
+
     def _make_listing_card(self, item: dict) -> QFrame:
-        card = QFrame()
+        from sentinel.equipment_visuals import EquipmentIcon
+        from sentinel.wallet.equipment import EQUIPMENT_POOL
+
         rarity = item.get("rarity", "common")
         color = self.RARITY_COLORS.get(rarity, "#aaa")
-        card.setStyleSheet(
-            f"QFrame {{ background: rgba(255,255,255,0.04); "
-            f"border: 1px solid {color}; border-radius: 6px; padding: 8px; }}"
-        )
-        layout = QHBoxLayout(card)
+        tint = self._MKT_TINT.get(rarity, "rgba(170,170,170,0.12)")
 
-        # Info
-        info = QVBoxLayout()
-        name_lbl = QLabel(
-            f"<b style='color:{color};'>[{rarity}]</b> "
-            f"<b>{item.get('template_name', '?')}</b>"
+        card = QFrame()
+        card.setFixedSize(240, 128)
+        card.setStyleSheet(
+            f"QFrame {{ background: {tint}; "
+            f"border: 1px solid rgba(255,255,255,0.06); "
+            f"border-left: 3px solid {color}; "
+            f"border-radius: 6px; }}"
         )
+        outer = QVBoxLayout(card)
+        outer.setContentsMargins(8, 6, 8, 6)
+        outer.setSpacing(4)
+
+        # Top: icon + name/meta
+        top = QHBoxLayout()
+        top.setSpacing(8)
+        template = next(
+            (t for t in EQUIPMENT_POOL if t["name"] == item.get("template_name")),
+            None,
+        )
+        visual_key = template.get("visual", "") if template else ""
+        icon = EquipmentIcon(visual_key, rarity, item.get("slot", ""), size=56)
+        top.addWidget(icon)
+
+        info = QVBoxLayout()
+        info.setSpacing(2)
+        info.setContentsMargins(0, 0, 0, 0)
+        name_lbl = QLabel(
+            f"<b style='color:#eee;'>{item.get('template_name', '?')}</b>"
+        )
+        name_lbl.setWordWrap(True)
         info.addWidget(name_lbl)
 
-        slot_zh = {
-            "helmet": "頭盔", "eyes": "眼睛", "mouth": "嘴巴",
-            "left_hand": "左手", "right_hand": "右手", "skin": "皮膚",
-            "background": "背景", "core": "晶核", "mount": "載具",
-            "vfx": "特效", "drone": "精靈", "title": "稱號",
-        }
-        detail_lbl = QLabel(
-            f"<span style='color:#888;'>"
-            f"欄位: {slot_zh.get(item.get('slot', ''), '?')} | "
-            f"賣家: {item.get('seller_name', '?')}"
-            f"</span>"
+        slot_zh = self._SLOT_ZH.get(item.get("slot", ""), "?")
+        seller = item.get("seller_name", "?")
+        meta_lbl = QLabel(
+            f"<span style='color:#888; font-size:11px;'>"
+            f"{slot_zh} · 賣家 {seller}</span>"
         )
-        info.addWidget(detail_lbl)
-        layout.addLayout(info, stretch=1)
+        info.addWidget(meta_lbl)
+        info.addStretch()
+        top.addLayout(info, stretch=1)
+        outer.addLayout(top)
 
-        # Price + buy
-        buy_box = QVBoxLayout()
+        # Bottom: price + buy button side by side
+        bottom = QHBoxLayout()
+        bottom.setSpacing(6)
+        bottom.setContentsMargins(0, 0, 0, 0)
         price_lbl = QLabel(
-            f"<b style='color:#ffd700; font-size:16px;'>"
-            f"{item.get('price', 0):,} 點</b>"
+            f"<b style='color:#ffd700; font-size:14px;'>"
+            f"{item.get('price', 0):,} pt</b>"
         )
-        price_lbl.setAlignment(Qt.AlignCenter)
-        buy_box.addWidget(price_lbl)
+        bottom.addWidget(price_lbl)
+        bottom.addStretch()
 
         buy_btn = QPushButton("購買")
         buy_btn.setStyleSheet(
             "QPushButton { background: #2ed573; color: #000; "
-            "border-radius: 4px; padding: 4px 16px; font-weight: bold; }"
+            "border: none; border-radius: 4px; padding: 5px 16px; "
+            "font-weight: bold; font-size: 12px; }"
             "QPushButton:hover { background: #26b863; }"
         )
         listing_id = item.get("id", "")
         buy_btn.clicked.connect(
-            lambda checked, lid=listing_id: self._do_buy(lid)
+            lambda _, lid=listing_id: self._do_buy(lid)
         )
-        buy_box.addWidget(buy_btn)
-        layout.addLayout(buy_box)
+        bottom.addWidget(buy_btn)
+        outer.addLayout(bottom)
 
         return card
 
@@ -708,7 +829,6 @@ class MarketTab(QWidget):
         lbl = QLabel(f"<span style='color:#888; font-size:13px;'>{msg}</span>")
         lbl.setAlignment(Qt.AlignCenter)
         self.trade_list_layout.addWidget(lbl)
-        self.trade_list_layout.addStretch()
 
     def _change_vote_page(self, delta: int):
         self.vote_page = max(1, self.vote_page + delta)
@@ -784,14 +904,13 @@ class EquipmentTab(QWidget):
         filter_row.addStretch()
         inv_layout.addLayout(filter_row)
 
-        # 背包滾動區域（用按鈕卡片取代 HTML）
+        # 背包滾動區域（用磚塊卡片取代 HTML 長條）
         inv_scroll = QScrollArea()
         inv_scroll.setWidgetResizable(True)
         inv_scroll.setStyleSheet("QScrollArea { border: none; }")
         self.inv_list_widget = QWidget()
-        self.inv_list_layout = QVBoxLayout(self.inv_list_widget)
-        self.inv_list_layout.setSpacing(4)
-        self.inv_list_layout.addStretch()
+        self.inv_list_layout = FlowLayout(self.inv_list_widget, margin=4,
+                                          h_spacing=8, v_spacing=8)
         inv_scroll.setWidget(self.inv_list_widget)
         inv_layout.addWidget(inv_scroll)
 
@@ -950,7 +1069,6 @@ class EquipmentTab(QWidget):
             )
             empty.setAlignment(Qt.AlignCenter)
             self.inv_list_layout.addWidget(empty)
-        self.inv_list_layout.addStretch()
 
         # 合成候選
         self._refresh_synth_candidates()
@@ -993,64 +1111,124 @@ class EquipmentTab(QWidget):
                 "還沒有掉落紀錄</p>"
             )
 
+    # Rarity glow colors for hover / accent (hex with alpha via rgba)
+    _RARITY_TINT = {
+        "common": "rgba(170,170,170,0.12)",
+        "uncommon": "rgba(46,213,115,0.15)",
+        "rare": "rgba(30,144,255,0.18)",
+        "epic": "rgba(168,85,247,0.20)",
+        "legendary": "rgba(255,165,2,0.22)",
+        "mythic": "rgba(255,71,87,0.25)",
+        "ultimate": "rgba(255,215,0,0.30)",
+    }
+
     def _make_inv_card(self, item, state, pool, slot_zh_map, colors, stars_map, floor_map):
-        """為每件背包物品建立一張可操作的卡片。"""
-        card = QFrame()
+        """為每件背包物品建立一張緊湊磚塊卡片（可流動重排）。"""
+        from sentinel.equipment_visuals import EquipmentIcon
+
         rarity = item.get("rarity", "common")
         color = colors.get(rarity, "#aaa")
+        tint = self._RARITY_TINT.get(rarity, "rgba(170,170,170,0.12)")
         is_equipped = item.get("equipped", False)
-        border_color = "#2ed573" if is_equipped else color
+        listed_price = item.get("listed_price", 0)
+        is_listed = listed_price > 0
 
+        card = QFrame()
+        card.setFixedSize(240, 128)
+        if is_equipped:
+            accent = "#2ed573"
+        elif is_listed:
+            accent = "#ffa502"
+        else:
+            accent = color
+
+        # Card uses a rarity tint as background wash with a thin left accent bar.
         card.setStyleSheet(
-            f"QFrame {{ background: rgba(255,255,255,0.03); "
-            f"border: 1px solid {border_color}; border-radius: 6px; "
-            f"padding: 6px 10px; }}"
+            f"QFrame {{ background: {tint}; "
+            f"border: 1px solid rgba(255,255,255,0.06); "
+            f"border-left: 3px solid {accent}; "
+            f"border-radius: 6px; }}"
         )
-        row = QHBoxLayout(card)
-        row.setContentsMargins(4, 4, 4, 4)
-        row.setSpacing(8)
+        outer = QVBoxLayout(card)
+        outer.setContentsMargins(8, 6, 8, 6)
+        outer.setSpacing(4)
 
-        # Info
+        # Top row: icon + (name + slot/status)
+        top = QHBoxLayout()
+        top.setSpacing(8)
+        template = next((t for t in pool if t["name"] == item["template_name"]), None)
+        visual_key = template.get("visual", "") if template else ""
+        slot_key = item.get("slot", "")
+        icon = EquipmentIcon(visual_key, rarity, slot_key, size=56)
+        top.addWidget(icon)
+
         info = QVBoxLayout()
-        info.setSpacing(1)
+        info.setSpacing(2)
+        info.setContentsMargins(0, 0, 0, 0)
         stars = stars_map.get(rarity, "★")
-        slot_zh = slot_zh_map.get(item.get("slot", ""), "?")
-        eq_tag = " <span style='color:#2ed573;'>[已裝備]</span>" if is_equipped else ""
         name_lbl = QLabel(
             f"<span style='color:{color};'>{stars}</span> "
-            f"<b>{item['template_name']}</b> "
-            f"<span style='color:#888;'>({slot_zh})</span>{eq_tag}"
+            f"<b style='color:#eee;'>{item['template_name']}</b>"
         )
+        name_lbl.setWordWrap(True)
         info.addWidget(name_lbl)
 
-        template = next((t for t in pool if t["name"] == item["template_name"]), None)
-        desc = template["desc"] if template else ""
-        floor = floor_map.get(rarity, 5)
-        detail = QLabel(
-            f"<span style='color:#666; font-size:11px;'>{desc}　|　保底 {floor} 點</span>"
-        )
-        info.addWidget(detail)
-        row.addLayout(info, stretch=1)
-
-        # Action button
-        item_id = item["item_id"]
+        slot_zh = slot_zh_map.get(slot_key, "?")
         if is_equipped:
-            btn = QPushButton("卸下")
-            btn.setStyleSheet(
-                "QPushButton { background: #555; color: #fff; border-radius: 4px; "
-                "padding: 4px 14px; font-size: 12px; }"
-                "QPushButton:hover { background: #666; }"
-            )
-            btn.clicked.connect(lambda checked, iid=item_id: self._do_unequip(iid))
+            status_html = f"<span style='color:#2ed573;'>● 已裝備</span> · {slot_zh}"
+        elif is_listed:
+            status_html = (f"<span style='color:#ffa502;'>▲ {listed_price}pt</span> · "
+                           f"{slot_zh}")
         else:
-            btn = QPushButton("裝備")
-            btn.setStyleSheet(
-                f"QPushButton {{ background: {color}; color: #000; border-radius: 4px; "
-                f"padding: 4px 14px; font-weight: bold; font-size: 12px; }}"
-                f"QPushButton:hover {{ opacity: 0.9; }}"
+            status_html = f"<span style='color:#888;'>{slot_zh}</span>"
+        status_lbl = QLabel(f"<span style='font-size:11px;'>{status_html}</span>")
+        info.addWidget(status_lbl)
+        info.addStretch()
+        top.addLayout(info, stretch=1)
+        outer.addLayout(top)
+
+        # Bottom row: action buttons (compact, equal-sized)
+        item_id = item["item_id"]
+        btns = QHBoxLayout()
+        btns.setSpacing(4)
+        btns.setContentsMargins(0, 0, 0, 0)
+
+        def _style_btn(bg, fg):
+            return (f"QPushButton {{ background: {bg}; color: {fg}; "
+                    f"border: none; border-radius: 4px; "
+                    f"padding: 5px 0; font-size: 12px; font-weight: bold; }}"
+                    f"QPushButton:hover {{ background: {bg}; border: 1px solid #fff; }}")
+
+        if is_equipped:
+            b = QPushButton("卸下")
+            b.setStyleSheet(_style_btn("#555", "#fff"))
+            b.clicked.connect(lambda _, iid=item_id: self._do_unequip(iid))
+            btns.addWidget(b)
+        elif is_listed:
+            b = QPushButton("取消上架")
+            b.setStyleSheet(_style_btn("#ffa502", "#000"))
+            b.clicked.connect(lambda _, iid=item_id: self._do_delist(iid))
+            btns.addWidget(b)
+        else:
+            b_eq = QPushButton("裝備")
+            b_eq.setStyleSheet(_style_btn(color, "#000"))
+            b_eq.clicked.connect(lambda _, iid=item_id: self._do_equip(iid))
+            btns.addWidget(b_eq)
+
+            b_ls = QPushButton("上架")
+            b_ls.setStyleSheet(_style_btn("#1e90ff", "#fff"))
+            b_ls.clicked.connect(
+                lambda _, iid=item_id, r=rarity, nm=item["template_name"]:
+                self._do_list(iid, r, nm)
             )
-            btn.clicked.connect(lambda checked, iid=item_id: self._do_equip(iid))
-        row.addWidget(btn)
+            btns.addWidget(b_ls)
+
+        outer.addLayout(btns)
+
+        # Tooltip shows the full description
+        desc = template["desc"] if template else ""
+        if desc:
+            card.setToolTip(f"{item['template_name']}\n{desc}")
 
         return card
 
@@ -1073,6 +1251,114 @@ class EquipmentTab(QWidget):
             self.equipment_changed.emit()
         else:
             QMessageBox.warning(self, "AI Slime", "這件道具沒有被裝備")
+
+    def _do_list(self, item_id: str, rarity: str, template_name: str):
+        """Put an item up for sale on the marketplace (local + relay)."""
+        from sentinel.wallet.equipment import load_equipment, list_for_sale
+        from sentinel import relay_client
+
+        # Suggested price by rarity (seller can override with any value ≥ 10)
+        SUGGESTED = {
+            "common": 10, "uncommon": 30, "rare": 100,
+            "epic": 400, "legendary": 2000, "mythic": 10000,
+            "ultimate": 50000,
+        }
+        suggested = SUGGESTED.get(rarity, 10)
+
+        price, ok = QInputDialog.getInt(
+            self, "上架販售",
+            f"為「{template_name}」設定售價\n"
+            f"（建議 {suggested} 點，最低 10 點，由市場決定價格）",
+            suggested, 10, 10_000_000, 1,
+        )
+        if not ok:
+            return
+
+        state = load_equipment()
+        item = next((i for i in state.inventory if i["item_id"] == item_id), None)
+        if not item:
+            QMessageBox.warning(self, "AI Slime", "找不到這件道具")
+            return
+        if item.get("equipped"):
+            QMessageBox.warning(self, "AI Slime",
+                                "已裝備中的道具無法上架，請先卸下")
+            return
+
+        slot = item.get("slot", "")
+
+        # Try relay first so we don't end up with out-of-sync state
+        relay_ok = False
+        relay_err = None
+        try:
+            relay_client.list_item(item_id, template_name, slot, rarity, price)
+            relay_ok = True
+        except relay_client.RelayError as e:
+            relay_err = f"{e.code}: {e.message}"
+        except Exception as e:
+            relay_err = str(e)
+
+        if not relay_ok:
+            reply = QMessageBox.question(
+                self, "上架",
+                f"無法連線到市場伺服器：{relay_err}\n\n"
+                f"是否僅在本機標記為上架？（之後可重試同步）",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                return
+
+        if list_for_sale(state, item_id, price):
+            self.refresh()
+            self.equipment_changed.emit()
+            if relay_ok:
+                QMessageBox.information(
+                    self, "上架成功",
+                    f"「{template_name}」已上架至市場，售價 {price} 點。",
+                )
+            else:
+                QMessageBox.information(
+                    self, "本機已標記",
+                    "道具已在本機標記為上架中，但尚未同步至市場。",
+                )
+        else:
+            QMessageBox.warning(self, "AI Slime",
+                                "無法上架（道具狀態異常）")
+
+    def _do_delist(self, item_id: str):
+        """Cancel a listing (local + relay)."""
+        from sentinel.wallet.equipment import load_equipment, delist
+        from sentinel import relay_client
+
+        reply = QMessageBox.question(
+            self, "取消上架", "確定要將這件道具從市場下架？",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        # Remove from relay market (listing_id == item_id in our schema)
+        relay_err = None
+        try:
+            relay_client.delist_item(item_id)
+        except relay_client.RelayError as e:
+            # 404 = already not listed remotely, treat as success
+            if e.code != "404":
+                relay_err = f"{e.code}: {e.message}"
+        except Exception as e:
+            relay_err = str(e)
+
+        state = load_equipment()
+        if delist(state, item_id):
+            self.refresh()
+            self.equipment_changed.emit()
+            if relay_err:
+                QMessageBox.warning(
+                    self, "已下架（部分）",
+                    f"本機已下架，但市場同步失敗：{relay_err}",
+                )
+        else:
+            QMessageBox.warning(self, "AI Slime", "無法下架")
 
     def _refresh_synth_candidates(self):
         """顯示可合成的同級裝備。"""
@@ -2978,7 +3264,8 @@ class MainWindow(QMainWindow):
                     if screen_act:
                         exp_sources["screen"] = 1
                     obs_count = sum(exp_sources.values())
-                    # Apply equipment EXP buff
+                    # Apply equipment EXP buff (reload so GUI equip changes take effect)
+                    equip_state = load_equipment()
                     exp_mult = get_exp_multiplier(equip_state)
                     if exp_mult > 1.0:
                         obs_count = int(obs_count * exp_mult)
@@ -2990,6 +3277,8 @@ class MainWindow(QMainWindow):
                     obs_since_drop += obs_count
                     if obs_since_drop >= 100:
                         obs_since_drop = 0
+                        # Reload from disk to pick up GUI-side equip/unequip changes
+                        equip_state = load_equipment()
                         drop = try_drop(equip_state, "observation_100")
                         if drop:
                             drop_msg = (f"🎁 *裝備掉落！*\n"
@@ -3061,6 +3350,8 @@ class MainWindow(QMainWindow):
                             )
 
                             # 學習完成 → 嘗試裝備掉落
+                            # Reload from disk to pick up GUI-side equip/unequip changes
+                            equip_state = load_equipment()
                             drop = try_drop(equip_state, "learning")
                             if drop:
                                 drop_msg = (f"🎁 *學習獎勵！*\n"

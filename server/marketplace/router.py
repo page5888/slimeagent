@@ -24,19 +24,14 @@ class BuyRequest(BaseModel):
     listing_id: str
 
 
-# Floor prices (same as desktop client)
-RARITY_FLOOR = {
-    "common": 5, "uncommon": 15, "rare": 50, "epic": 200,
-    "legendary": 1000, "mythic": 5000, "ultimate": 25000,
-}
+MIN_LIST_PRICE = 10  # Flat minimum — no per-rarity floor
 
 
 @router.post("/list")
 async def list_item(req: ListRequest, user: dict = Depends(get_current_user)):
-    """List an item for sale."""
-    floor = RARITY_FLOOR.get(req.rarity, 5)
-    if req.price < floor:
-        raise HTTPException(400, f"Price must be at least {floor} (floor for {req.rarity})")
+    """List an item for sale. Sellers set any price ≥ 10 pt."""
+    if req.price < MIN_LIST_PRICE:
+        raise HTTPException(400, f"Price must be at least {MIN_LIST_PRICE} points")
 
     db = await get_db()
 
@@ -169,7 +164,7 @@ async def buy(req: BuyRequest, user: dict = Depends(get_current_user)):
     # Mark listing as sold
     await db.execute(
         "UPDATE marketplace_listings SET status = 'sold', "
-        "sold_at = datetime('now'), buyer_id = ? WHERE id = ?",
+        "sold_at = CURRENT_TIMESTAMP, buyer_id = ? WHERE id = ?",
         (user["user_id"], req.listing_id),
     )
 
@@ -178,7 +173,7 @@ async def buy(req: BuyRequest, user: dict = Depends(get_current_user)):
         "INSERT INTO trade_history "
         "(id, listing_id, seller_id, buyer_id, template_name, price, fee, "
         "seller_received, completed_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
         (trade_id, req.listing_id, listing["seller_id"], user["user_id"],
          listing["template_name"], price, fee, seller_receives),
     )

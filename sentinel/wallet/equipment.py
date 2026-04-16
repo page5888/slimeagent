@@ -617,17 +617,21 @@ def get_trade_fee_percent(state: EquipmentState) -> float:
 
 # ── Marketplace Helpers ──────────────────────────────────────────────
 
+MIN_LIST_PRICE = 10  # Flat minimum — no per-rarity floor
+
+
 def list_for_sale(state: EquipmentState, item_id: str, price: int) -> bool:
-    """List an item for sale at a given price (in 5888 points)."""
+    """List an item for sale at a given price (in 5888 points).
+
+    Sellers set any price they want (≥ 10 pt) — the market decides value.
+    """
     item = next((i for i in state.inventory if i["item_id"] == item_id), None)
     if not item:
         return False
     if item.get("equipped"):
         return False  # Must unequip first
-
-    floor = RARITY_FLOOR_PRICE.get(item["rarity"], 5)
-    if price < floor:
-        return False  # Can't sell below floor price
+    if price < MIN_LIST_PRICE:
+        return False
 
     item["listed_price"] = price
     save_equipment(state)

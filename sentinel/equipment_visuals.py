@@ -1093,3 +1093,112 @@ def render_equipment(painter, equipped_visuals: dict, ctx: dict):
 def get_skin_override(visual_key: str) -> dict | None:
     """Return body color override for a skin visual, or None."""
     return SKIN_COLORS.get(visual_key)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  EQUIPMENT ICON WIDGET
+# ═══════════════════════════════════════════════════════════════════════════
+
+def render_equipment_icon(painter, size: int, visual_key: str,
+                          rarity: str, slot: str):
+    """Render a small preview of an equipment's visual onto `painter`.
+
+    Used for inventory / market card thumbnails. Draws a neutral mini-slime
+    body as backdrop and overlays the equipment.
+    """
+    painter.setRenderHint(QPainter.Antialiasing)
+
+    cx = size // 2
+    cy = int(size * 0.55)
+    body_w = int(size * 0.32)
+    body_h = int(size * 0.26)
+    scale = size / 120.0  # Scale factor relative to main avatar (~200px)
+
+    # Rarity-tinted background
+    glow = RARITY_GLOW.get(rarity, RARITY_GLOW["common"])
+    bg = QColor(glow)
+    bg.setAlpha(40)
+    painter.setBrush(QBrush(bg))
+    painter.setPen(Qt.NoPen)
+    painter.drawRoundedRect(0, 0, size, size, 4, 4)
+
+    # Slime body colors (can be overridden by skin)
+    body_color = QColor(0, 180, 255, 200)
+    highlight_color = QColor(150, 230, 255, 180)
+
+    skin_override = get_skin_override(visual_key) if slot == "skin" else None
+    if skin_override:
+        body_color = QColor(skin_override["body"])
+        highlight_color = QColor(skin_override["highlight"])
+
+    ctx = {
+        "p": painter, "cx": cx, "cy": cy,
+        "body_w": body_w, "body_h": body_h,
+        "bounce": 0, "phase": 0.0,
+        "w": size, "h": size,
+        "tier_index": 2, "scale": scale,
+        "rarity": rarity,
+    }
+
+    # Draw background equipment first (so slime sits on top)
+    if slot == "background":
+        draw_fn = VISUAL_REGISTRY.get(visual_key)
+        if draw_fn:
+            draw_fn(ctx)
+
+    # Mini slime body (so equipment has context to attach to)
+    gradient = QRadialGradient(cx - body_w * 0.2, cy - body_h * 0.3, body_w * 1.2)
+    gradient.setColorAt(0, highlight_color)
+    gradient.setColorAt(1, body_color)
+    painter.setBrush(QBrush(gradient))
+    outline = QColor(body_color)
+    outline.setAlpha(180)
+    painter.setPen(QPen(outline, 1))
+    painter.drawEllipse(QRect(cx - body_w, cy - body_h, body_w * 2, body_h * 2))
+
+    # Draw equipment on top (unless it's background or skin, already handled)
+    if slot == "title":
+        # Title: just render the name in rarity color
+        from PySide6.QtGui import QFont
+        color = {
+            "common": QColor(170, 170, 170), "uncommon": QColor(46, 213, 115),
+            "rare": QColor(30, 144, 255), "epic": QColor(168, 85, 247),
+            "legendary": QColor(255, 165, 2), "mythic": QColor(255, 71, 87),
+            "ultimate": QColor(255, 215, 0),
+        }.get(rarity, QColor(200, 200, 200))
+        painter.setPen(QPen(color))
+        f = QFont("Segoe UI Emoji", max(10, int(size * 0.22)), QFont.Bold)
+        painter.setFont(f)
+        painter.drawText(QRect(0, 0, size, size), Qt.AlignCenter, "【稱】")
+    elif slot not in ("background", "skin"):
+        draw_fn = VISUAL_REGISTRY.get(visual_key)
+        if draw_fn:
+            draw_fn(ctx)
+
+
+# Lightweight QWidget wrapper for use in inventory/market cards.
+try:
+    from PySide6.QtWidgets import QWidget
+
+    class EquipmentIcon(QWidget):
+        """Small square widget showing a preview of one equipment visual."""
+
+        def __init__(self, visual_key: str, rarity: str, slot: str,
+                     size: int = 44, parent=None):
+            super().__init__(parent)
+            self._visual = visual_key or ""
+            self._rarity = rarity or "common"
+            self._slot = slot or ""
+            self._size = size
+            self.setFixedSize(size, size)
+
+        def paintEvent(self, event):
+            p = QPainter(self)
+            try:
+                render_equipment_icon(
+                    p, self._size, self._visual, self._rarity, self._slot,
+                )
+            finally:
+                p.end()
+except ImportError:
+    pass

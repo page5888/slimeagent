@@ -7,6 +7,9 @@ echo [AI Slime] Working dir: %CD%
 echo [AI Slime] Python:
 where python
 python -m sentinel
-echo.
-echo === If you see this, the program exited ===
-pause
+rem Only pause if the program crashed (non-zero exit), so normal quit closes CMD
+if errorlevel 1 (
+    echo.
+    echo === Program exited with error ===
+    pause
+)

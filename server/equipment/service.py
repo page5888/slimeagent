@@ -68,11 +68,13 @@ async def check_name_unique(name: str) -> bool:
 
 async def check_daily_limit(user_id: str) -> bool:
     """Check if user hasn't exceeded daily submission limit."""
+    from datetime import datetime, timedelta, timezone
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
     db = await get_db()
     row = await db.execute_fetchone(
         "SELECT COUNT(*) as cnt FROM equipment_submissions "
-        "WHERE creator_id = ? AND created_at > datetime('now', '-1 day')",
-        (user_id,),
+        "WHERE creator_id = ? AND created_at > ?",
+        (user_id, cutoff),
     )
     return row["cnt"] < config.MAX_SUBMISSIONS_PER_DAY
 
@@ -173,7 +175,7 @@ async def _approve_submission(db, sub) -> bool:
     # Update status
     await db.execute(
         "UPDATE equipment_submissions SET status = 'approved', "
-        "approved_at = datetime('now') WHERE id = ?",
+        "approved_at = CURRENT_TIMESTAMP WHERE id = ?",
         (submission_id,),
     )
 
@@ -197,7 +199,7 @@ async def _approve_submission(db, sub) -> bool:
     )
 
     await db.execute(
-        "UPDATE pool_sync SET current_version = ?, updated_at = datetime('now') "
+        "UPDATE pool_sync SET current_version = ?, updated_at = CURRENT_TIMESTAMP "
         "WHERE id = 1",
         (new_version,),
     )
