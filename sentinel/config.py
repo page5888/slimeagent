@@ -104,7 +104,7 @@ ANALYSIS_MODEL_PREF = "local_first"
 # ─── Commercial Layer (5888 Wallet) ─────────────────────────────────
 # Relay server URL — handles LLM proxy + wallet billing for quota users.
 # BYOK users don't need this; it's only for paid point-pack mode.
-RELAY_SERVER_URL = ""
+RELAY_SERVER_URL = "https://slimeagent-relay.onrender.com"
 
 # Google OAuth Client ID — needed for marketplace login.
 # Create at https://console.cloud.google.com/apis/credentials
