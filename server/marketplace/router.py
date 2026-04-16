@@ -14,19 +14,20 @@ as the desktop side.
     documented as STALE but left intact so trades don't break.
 """
 import uuid
-import json
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from server.auth.deps import get_current_user
 from server.db.engine import get_db
-from server.wallet.service import spend_points, grant_points
-from server import config
+from server.wallet.service import spend_points
 from sentinel.wallet.client import WalletError
 from sentinel.wallet.market_rules import (
     MIN_LIST_PRICE,
     MAX_LIST_PRICE,
     DAILY_LIST_CAP,
     SPEND_TYPE_LIST_FEE,
+    SPEND_TYPE_BUY_SETTLE,
+    SELLER_SHARE,
+    SINK_SHARE,
     listing_fee,
 )
 
@@ -211,7 +212,30 @@ async def browse(
 
 @router.post("/buy")
 async def buy(req: BuyRequest, user: dict = Depends(get_current_user)):
-    """Buy a listed item. Atomic: deduct buyer, credit seller, transfer item."""
+    """Buy a listed item.
+
+    Interim implementation (until 5888's `marketSaleSettle` endpoint is
+    live, tracked in project_marketplace.md):
+
+      1. Load + validate listing (active, not own).
+      2. Deduct buyer via reason=slime_buy_settle (whitelisted on 5888).
+      3. Mark listing sold + record trade row with status='pending_split'.
+      4. Return — the 70/15/5/10 split to seller/L1/L2/platform is NOT
+         done here. Once marketSaleSettle ships, we swap the s2sSpend in
+         step 2 for a single call to that endpoint; it performs the
+         deduction AND the four grants atomically on 5888 side.
+
+    We deliberately do NOT call grant_points locally anymore: the 5888
+    sitePolicy whitelist only permits grants with one of
+    `slime_sale_proceeds` / `slime_l1_commission` / `slime_l2_commission`
+    / `slime_platform_pool`. Doing the split ourselves requires knowing
+    L1/L2 uplines, which only 5888 has. Attempting it from here would be
+    rejected by sitePolicy and leave state inconsistent.
+
+    Trades during this interim period sit in `pending_split` — sellers
+    get credited when the settle endpoint ships, via a one-shot migration
+    replay keyed off trade_history rows.
+    """
     db = await get_db()
 
     listing = await db.execute_fetchone(
@@ -224,15 +248,17 @@ async def buy(req: BuyRequest, user: dict = Depends(get_current_user)):
         raise HTTPException(400, "Cannot buy your own listing")
 
     price = listing["price"]
-    fee = max(1, int(price * config.BASE_FEE_PERCENT / 100))
-    seller_receives = price - fee
+    # Splits (UI-display only — 5888 is authoritative once settle ships).
+    seller_receives = int(price * SELLER_SHARE)
+    platform_pool = int(price * SINK_SHARE)
 
-    # Deduct buyer
+    # Deduct buyer. reason=slime_buy_settle is the only spend reason
+    # 5888 accepts for marketplace purchases.
     trade_id = str(uuid.uuid4())
-    spend_key = f"buy:{trade_id}"
+    spend_key = f"slime_buy_settle:{trade_id}"
     try:
         await spend_points(user["user_id"], price,
-                           f"Buy {listing['template_name']}", spend_key)
+                           SPEND_TYPE_BUY_SETTLE, spend_key)
     except WalletError as e:
         if e.is_insufficient_balance:
             raise HTTPException(402, "Insufficient balance")
@@ -245,31 +271,29 @@ async def buy(req: BuyRequest, user: dict = Depends(get_current_user)):
         (user["user_id"], req.listing_id),
     )
 
-    # Record trade
+    # Record trade. Every row written during the interim period is
+    # implicitly pending split — once marketSaleSettle ships, a one-off
+    # migration will walk trade_history rows with completed_at >=
+    # <interim-start> and invoke settle idempotently using
+    # `slime_buy_settle:{trade_id}` as the dedupe key. See
+    # project_marketplace.md for the replay plan.
     await db.execute(
         "INSERT INTO trade_history "
         "(id, listing_id, seller_id, buyer_id, template_name, price, fee, "
         "seller_received, completed_at) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
         (trade_id, req.listing_id, listing["seller_id"], user["user_id"],
-         listing["template_name"], price, fee, seller_receives),
+         listing["template_name"], price, platform_pool, seller_receives),
     )
     await db.commit()
-
-    # Credit seller (best effort, idempotent)
-    grant_key = f"sale:{trade_id}"
-    try:
-        await grant_points(listing["seller_id"], seller_receives,
-                           f"Sold {listing['template_name']}", grant_key)
-    except Exception:
-        pass  # Retry mechanism can handle this later
 
     return {
         "trade_id": trade_id,
         "item_name": listing["template_name"],
         "price": price,
-        "fee": fee,
+        "fee": platform_pool,
         "seller_received": seller_receives,
+        "split_pending": True,  # seller NOT credited yet
     }
 
 

@@ -68,9 +68,24 @@ def listing_fee(price: int) -> int:
     return fee
 
 
-# ── 5888 spendPoints `type` values (whitelisted on 5888 side) ──
-# Keep these strings in sync with 5888's s2sSpend type whitelist.
-SPEND_TYPE_EVOLVE = "slime_evolve"      # 2 pts, per evolution trigger
-SPEND_TYPE_LIST_FEE = "slime_list_fee"  # tiered, per listing
+# ── 5888 reason strings (sitePolicy.ts whitelist on 5888 side) ──
+# Any reason not in the whitelist → 5888 returns 403 SITE_NOT_AUTHORIZED.
+# To add more, PR sitePolicy.ts on 5888 side first.
+#
+# spend reasons:
+SPEND_TYPE_EVOLVE = "slime_evolve"          # 2 pts, per evolution trigger
+SPEND_TYPE_LIST_FEE = "slime_list_fee"      # tiered, per listing
+SPEND_TYPE_BUY_SETTLE = "slime_buy_settle"  # buyer deduction at purchase
+
+# grant reasons (applied atomically by 5888's marketSaleSettle endpoint
+# once it ships — we do NOT call grant with these ourselves):
+GRANT_TYPE_SALE_PROCEEDS = "slime_sale_proceeds"      # 70% → seller
+GRANT_TYPE_L1_COMMISSION = "slime_l1_commission"      # 15% → L1 upline (fallback: platform pool)
+GRANT_TYPE_L2_COMMISSION = "slime_l2_commission"      # 5% → L2 upline (fallback: platform pool)
+GRANT_TYPE_PLATFORM_POOL = "slime_platform_pool"      # 10% → platform
+
+# refund reasons:
+REFUND_TYPE_ORDER = "slime_order_refund"
+REFUND_TYPE_DISPUTE = "slime_dispute_refund"
 
 EVOLVE_COST = 2
