@@ -83,6 +83,13 @@ SYSTEM_CHECK_INTERVAL = 30
 # How often to send a heartbeat summary if idle (seconds)
 IDLE_REPORT_INTERVAL = 1800  # 30 min
 
+# How often to run LLM distillation on accumulated observations (seconds)
+DISTILL_INTERVAL = 300  # 5 min
+
+# Screenshot capture: random interval between MIN and MAX (seconds)
+SCREEN_CAPTURE_MIN = 120   # 2 min
+SCREEN_CAPTURE_MAX = 600   # 10 min
+
 # Event buffer - collect events before asking LLM to analyze
 EVENT_BUFFER_SECONDS = 10
 
@@ -144,6 +151,7 @@ def _load_persisted_settings():
     global TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, LLM_PROVIDERS
     global CHAT_MODEL_PREF, ANALYSIS_MODEL_PREF
     global SYSTEM_CHECK_INTERVAL, IDLE_REPORT_INTERVAL, WATCH_DIRS
+    global DISTILL_INTERVAL, SCREEN_CAPTURE_MIN, SCREEN_CAPTURE_MAX
 
     settings_file = Path.home() / ".hermes" / "sentinel_settings.json"
     if not settings_file.exists():
@@ -162,6 +170,10 @@ def _load_persisted_settings():
         # RELAY_SERVER_URL and GOOGLE_CLIENT_ID are loaded separately
         SYSTEM_CHECK_INTERVAL = s.get("check_interval", SYSTEM_CHECK_INTERVAL)
         IDLE_REPORT_INTERVAL = s.get("idle_report_interval", IDLE_REPORT_INTERVAL)
+        DISTILL_INTERVAL = max(60, int(s.get("distill_interval", DISTILL_INTERVAL)))
+        SCREEN_CAPTURE_MIN = max(30, int(s.get("screen_capture_min", SCREEN_CAPTURE_MIN)))
+        SCREEN_CAPTURE_MAX = max(SCREEN_CAPTURE_MIN + 30,
+                                 int(s.get("screen_capture_max", SCREEN_CAPTURE_MAX)))
         if "watch_dirs" in s:
             WATCH_DIRS = [Path(d) for d in s["watch_dirs"]]
         _log.debug("Settings loaded from %s", settings_file)

@@ -13,11 +13,9 @@ import tempfile
 import re
 from pathlib import Path
 
-log = logging.getLogger("sentinel.screen")
+from sentinel import config as _cfg
 
-# Minimum seconds between screenshots (don't spam)
-MIN_INTERVAL = 120   # 2 minutes
-MAX_INTERVAL = 600   # 10 minutes
+log = logging.getLogger("sentinel.screen")
 
 # Sensitive patterns - if the LLM mentions these, discard the learning
 SENSITIVE_PATTERNS = [
@@ -60,7 +58,7 @@ VISION_PROMPT = """你是 AI Slime，正在透過「千里眼」技能觀察使�
 class ScreenWatcher:
     def __init__(self):
         self._last_capture = 0.0
-        self._next_interval = MIN_INTERVAL
+        self._next_interval = _cfg.SCREEN_CAPTURE_MIN
         self._observations: list[dict] = []  # Recent screen observations
         self._enabled = True
 
@@ -83,7 +81,8 @@ class ScreenWatcher:
         """
         self._last_capture = time.time()
         # Randomize next interval so it's not predictable
-        self._next_interval = random.randint(MIN_INTERVAL, MAX_INTERVAL)
+        self._next_interval = random.randint(_cfg.SCREEN_CAPTURE_MIN,
+                                                  _cfg.SCREEN_CAPTURE_MAX)
 
         # Check if current window is blocked
         if self._is_blocked_window():

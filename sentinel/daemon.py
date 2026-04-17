@@ -12,6 +12,7 @@ from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, fil
 from sentinel.config import (
     SYSTEM_CHECK_INTERVAL, WATCH_DIRS, IDLE_REPORT_INTERVAL,
     TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, NOTIFICATION_COOLDOWN,
+    DISTILL_INTERVAL,
 )
 from sentinel.system_monitor import take_snapshot
 from sentinel.file_watcher import FileWatcher
@@ -156,8 +157,8 @@ def monitor_loop(bot_send_fn):
                 if snapshot.warnings:
                     log.warning(f"Warnings: {snapshot.warnings}")
 
-            # Learning cycle (every 10 min)
-            if now - last_distill >= 600 and activity_buffer:
+            # Learning cycle (configurable interval)
+            if now - last_distill >= DISTILL_INTERVAL and activity_buffer:
                 last_distill = now
                 combined = "\n---\n".join(activity_buffer[-10:])
                 result = distill_from_activity(combined)

@@ -3135,6 +3135,28 @@ class SettingsTab(QWidget):
         self.idle_spin.setRange(60, 7200)
         self.idle_spin.setValue(config.IDLE_REPORT_INTERVAL)
         mon_layout.addRow(t("settings_idle_report"), self.idle_spin)
+
+        self.distill_spin = QSpinBox()
+        self.distill_spin.setRange(60, 3600)
+        self.distill_spin.setSuffix(" 秒")
+        self.distill_spin.setValue(config.DISTILL_INTERVAL)
+        self.distill_spin.setToolTip("LLM 蒸餾間隔：值越大越省 API 呼叫。預設 300 秒（5 分鐘）")
+        mon_layout.addRow(t("settings_distill_interval"), self.distill_spin)
+
+        self.screen_min_spin = QSpinBox()
+        self.screen_min_spin.setRange(30, 3600)
+        self.screen_min_spin.setSuffix(" 秒")
+        self.screen_min_spin.setValue(config.SCREEN_CAPTURE_MIN)
+        self.screen_min_spin.setToolTip("截圖最短間隔。值越大截圖越少，省 API。預設 120 秒")
+        mon_layout.addRow(t("settings_screen_min"), self.screen_min_spin)
+
+        self.screen_max_spin = QSpinBox()
+        self.screen_max_spin.setRange(60, 7200)
+        self.screen_max_spin.setSuffix(" 秒")
+        self.screen_max_spin.setValue(config.SCREEN_CAPTURE_MAX)
+        self.screen_max_spin.setToolTip("截圖最長間隔。每次截圖在 MIN 和 MAX 之間隨機。預設 600 秒")
+        mon_layout.addRow(t("settings_screen_max"), self.screen_max_spin)
+
         self.dirs_input = QPlainTextEdit()
         self.dirs_input.setMaximumHeight(80)
         self.dirs_input.setPlainText("\n".join(str(d) for d in config.WATCH_DIRS))
@@ -3428,6 +3450,12 @@ class SettingsTab(QWidget):
             "llm_providers": updated_providers,
             "check_interval": self.interval_spin.value(),
             "idle_report_interval": self.idle_spin.value(),
+            "distill_interval": self.distill_spin.value(),
+            "screen_capture_min": self.screen_min_spin.value(),
+            "screen_capture_max": max(
+                self.screen_max_spin.value(),
+                self.screen_min_spin.value() + 30,
+            ),
             "watch_dirs": [
                 d.strip() for d in self.dirs_input.toPlainText().split("\n") if d.strip()
             ],
@@ -3447,6 +3475,9 @@ class SettingsTab(QWidget):
         config.LLM_PROVIDERS = updated_providers
         config.SYSTEM_CHECK_INTERVAL = settings["check_interval"]
         config.IDLE_REPORT_INTERVAL = settings["idle_report_interval"]
+        config.DISTILL_INTERVAL = settings["distill_interval"]
+        config.SCREEN_CAPTURE_MIN = settings["screen_capture_min"]
+        config.SCREEN_CAPTURE_MAX = settings["screen_capture_max"]
         config.WATCH_DIRS = [Path(d) for d in settings["watch_dirs"]]
 
         # Handle autostart
@@ -4906,7 +4937,7 @@ class MainWindow(QMainWindow):
                     import datetime as _dt
                     _now_str = _dt.datetime.now().strftime("%H:%M:%S")
                     _next_sense = config.SYSTEM_CHECK_INTERVAL
-                    _next_distill = max(0, int(300 - (now - last_distill)))
+                    _next_distill = max(0, int(config.DISTILL_INTERVAL - (now - last_distill)))
                     _next_report = max(0, int(config.IDLE_REPORT_INTERVAL - (now - last_idle)))
                     _buf_count = len(activity_buf)
                     _status = (
@@ -5020,7 +5051,7 @@ class MainWindow(QMainWindow):
                                     send_notification(f"{emoji} *AI Slime*\n{decision['message']}", category=cat)
                                     last_notify[cat] = now
 
-                    if now - last_distill >= 300 and activity_buf:
+                    if now - last_distill >= config.DISTILL_INTERVAL and activity_buf:
                         last_distill = now
                         combined = "\n---\n".join(activity_buf[-10:])
                         self.bridge.status_update.emit(
