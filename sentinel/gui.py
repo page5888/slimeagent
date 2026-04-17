@@ -3467,65 +3467,71 @@ class SettingsTab(QWidget):
 # 真正落檔發生在 approve()，真正歸檔發生在 reject()。
 
 class ApprovalTab(QWidget):
-    """Pending-approval queue UI.
+    """Pending-approval queue + skill history UI.
 
-    Left: QListWidget of pending proposals (newest first).
-    Right: detail panel — title, reason, target, safety warnings, source.
-    Bottom: [Approve & deploy] [Reject] buttons.
+    Two sub-tabs:
+      1. 待審核 — pending proposals (approve / reject)
+      2. 技能歷史 — all proposals ever (pending + approved + rejected)
 
     Refresh happens on MainWindow's 30s timer + when the user clicks
     the tab + after every approve/reject action.
     """
 
-    # 其他分頁想在人類動作完成後重新整理時可以 connect 這個 signal
     proposals_changed = Signal()
 
     def __init__(self):
         super().__init__()
         self._current_id: str | None = None
-        self._pending_cache: list = []  # list[PendingApproval]
+        self._pending_cache: list = []
+        self._history_cache: list[dict] = []
+        self._history_selected: dict | None = None
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(8, 8, 8, 8)
+        root.setContentsMargins(4, 4, 4, 4)
 
-        # Header row: title + refresh button
+        self.sub_tabs = QTabWidget()
+        self.sub_tabs.setStyleSheet(
+            "QTabWidget::pane { border: 1px solid #333; }"
+            "QTabBar::tab { padding: 6px 16px; }"
+        )
+
+        # ── Sub-tab 1: Pending ───────────────────────────────────
+        pending_page = QWidget()
+        pending_layout = QVBoxLayout(pending_page)
+        pending_layout.setContentsMargins(8, 8, 8, 8)
+
         header = QHBoxLayout()
-        self.title_lbl = QLabel("")  # set in retranslate()
+        self.title_lbl = QLabel("")
         self.title_lbl.setStyleSheet("font-weight: bold; font-size: 14px;")
         header.addWidget(self.title_lbl)
         header.addStretch()
         self.refresh_btn = QPushButton("")
         self.refresh_btn.clicked.connect(self.refresh)
         header.addWidget(self.refresh_btn)
-        root.addLayout(header)
+        pending_layout.addLayout(header)
 
-        # Main split: list | detail
         split = QSplitter(Qt.Horizontal)
 
-        # Left: list
         self.list_widget = QListWidget()
         self.list_widget.currentItemChanged.connect(self._on_selection_changed)
         split.addWidget(self.list_widget)
 
-        # Right: detail
         detail_box = QWidget()
         detail_layout = QVBoxLayout(detail_box)
         detail_layout.setContentsMargins(8, 0, 0, 0)
 
-        self.empty_lbl = QLabel("")  # shown when list is empty
+        self.empty_lbl = QLabel("")
         self.empty_lbl.setAlignment(Qt.AlignCenter)
         self.empty_lbl.setStyleSheet("color: #888; padding: 40px;")
         detail_layout.addWidget(self.empty_lbl)
 
         self.detail_text = QTextEdit()
         self.detail_text.setReadOnly(True)
-        # Mono font for code blocks — Qt will fall back gracefully
         mono = QFont("Consolas", 10)
         mono.setStyleHint(QFont.Monospace)
         self.detail_text.setFont(mono)
         detail_layout.addWidget(self.detail_text, stretch=1)
 
-        # Action buttons
         btn_row = QHBoxLayout()
         self.approve_btn = QPushButton("")
         self.approve_btn.setStyleSheet(
@@ -3549,26 +3555,76 @@ class ApprovalTab(QWidget):
         split.addWidget(detail_box)
         split.setStretchFactor(0, 1)
         split.setStretchFactor(1, 2)
-        root.addWidget(split, stretch=1)
+        pending_layout.addWidget(split, stretch=1)
+
+        self.sub_tabs.addTab(pending_page, "")
+
+        # ── Sub-tab 2: History ───────────────────────────────────
+        history_page = QWidget()
+        history_layout = QVBoxLayout(history_page)
+        history_layout.setContentsMargins(8, 8, 8, 8)
+
+        hist_header = QHBoxLayout()
+        self.hist_title_lbl = QLabel("")
+        self.hist_title_lbl.setStyleSheet("font-weight: bold; font-size: 14px;")
+        hist_header.addWidget(self.hist_title_lbl)
+        hist_header.addStretch()
+        self.hist_refresh_btn = QPushButton("")
+        self.hist_refresh_btn.clicked.connect(self._refresh_history)
+        hist_header.addWidget(self.hist_refresh_btn)
+        history_layout.addLayout(hist_header)
+
+        hist_split = QSplitter(Qt.Horizontal)
+
+        self.hist_list = QListWidget()
+        self.hist_list.currentItemChanged.connect(self._on_hist_selection)
+        hist_split.addWidget(self.hist_list)
+
+        hist_detail_box = QWidget()
+        hist_detail_layout = QVBoxLayout(hist_detail_box)
+        hist_detail_layout.setContentsMargins(8, 0, 0, 0)
+
+        self.hist_empty_lbl = QLabel("")
+        self.hist_empty_lbl.setAlignment(Qt.AlignCenter)
+        self.hist_empty_lbl.setStyleSheet("color: #888; padding: 40px;")
+        hist_detail_layout.addWidget(self.hist_empty_lbl)
+
+        self.hist_detail_text = QTextEdit()
+        self.hist_detail_text.setReadOnly(True)
+        self.hist_detail_text.setFont(mono)
+        hist_detail_layout.addWidget(self.hist_detail_text, stretch=1)
+
+        hist_split.addWidget(hist_detail_box)
+        hist_split.setStretchFactor(0, 1)
+        hist_split.setStretchFactor(1, 2)
+        history_layout.addWidget(hist_split, stretch=1)
+
+        self.sub_tabs.addTab(history_page, "")
+
+        root.addWidget(self.sub_tabs)
+
+        # Wire sub-tab change to auto-refresh history on first visit
+        self.sub_tabs.currentChanged.connect(self._on_subtab_changed)
 
         self.retranslate()
         self.refresh()
 
     def retranslate(self):
+        self.sub_tabs.setTabText(0, t("approval_tab_pending"))
+        self.sub_tabs.setTabText(1, t("approval_tab_history"))
         self.title_lbl.setText(t("approval_list_header"))
         self.refresh_btn.setText(t("approval_refresh"))
         self.empty_lbl.setText(t("approval_empty"))
         self.approve_btn.setText(t("approval_approve"))
         self.reject_btn.setText(t("approval_reject"))
+        self.hist_title_lbl.setText(t("approval_tab_history"))
+        self.hist_refresh_btn.setText(t("approval_refresh"))
+        self.hist_empty_lbl.setText(t("approval_history_empty"))
 
-    # ── Data ──────────────────────────────────────────────────────
+    # ── Pending sub-tab data ─────────────────────────────────────
 
     def refresh(self):
-        """Re-read pending/ directory and update the list.
-
-        Preserves selection if the selected ID still exists. Updates
-        action-button enablement based on whether anything is selected.
-        """
+        """Re-read pending/ directory and update the list."""
         from sentinel.growth import list_pending
         try:
             self._pending_cache = list_pending()
@@ -3576,7 +3632,6 @@ class ApprovalTab(QWidget):
             log.warning("refresh pending failed: %s", e)
             self._pending_cache = []
 
-        # Remember which ID was selected, to re-select after rebuild
         remember_id = self._current_id
 
         self.list_widget.blockSignals(True)
@@ -3588,7 +3643,6 @@ class ApprovalTab(QWidget):
             self.list_widget.addItem(item)
         self.list_widget.blockSignals(False)
 
-        # Restore selection
         restored = False
         if remember_id is not None:
             for i in range(self.list_widget.count()):
@@ -3614,7 +3668,7 @@ class ApprovalTab(QWidget):
         warn_badge = f" ⚠{len(approval.safety_findings)}" if approval.safety_findings else ""
         return f"[{approval.id}] {kind_zh}  {title}{warn_badge}"
 
-    # ── Selection / rendering ─────────────────────────────────────
+    # ── Pending selection / rendering ────────────────────────────
 
     def _on_selection_changed(self, current, _previous):
         if current is None:
@@ -3645,17 +3699,13 @@ class ApprovalTab(QWidget):
         )
 
         lines: list[str] = []
-        # Heading
         lines.append(f"<h3 style='color:#00dcff; margin:0 0 8px 0;'>[{approval.id}] {self._html_escape(approval.title)}</h3>")
-
-        # Meta
         lines.append(f"<p><b>{t('approval_kind')}:</b> {kind_label}</p>")
         lines.append(f"<p><b>{t('approval_proposer_tier')}:</b> {self._html_escape(approval.proposer_tier or '—')}</p>")
         lines.append(f"<p><b>{t('approval_target')}:</b> <code>{self._html_escape(approval.target_path)}</code></p>")
         if approval.reason:
             lines.append(f"<p><b>{t('approval_reason')}:</b> {self._html_escape(approval.reason)}</p>")
 
-        # Safety findings — highlighted amber
         if approval.safety_findings:
             lines.append(f"<h4 style='color:#ffa502; margin-top:12px;'>⚠ {t('approval_safety_findings')} ({len(approval.safety_findings)})</h4>")
             lines.append("<ul>")
@@ -3671,13 +3721,11 @@ class ApprovalTab(QWidget):
                 )
             lines.append("</ul>")
 
-        # Source (proposed)
         lines.append(f"<h4 style='margin-top:12px;'>{t('approval_source')}</h4>")
         lines.append(f"<pre style='background-color:#1a1a1a; padding:10px; "
                      f"border-left:3px solid #00dcff; color:#ddd; white-space:pre-wrap;'>"
                      f"{self._html_escape(approval.source)}</pre>")
 
-        # Previous source (for SELF_MOD only)
         if approval.previous_source:
             lines.append(f"<h4 style='margin-top:12px; color:#888;'>{t('approval_previous')}</h4>")
             lines.append(f"<pre style='background-color:#1a1a1a; padding:10px; "
@@ -3698,7 +3746,7 @@ class ApprovalTab(QWidget):
         self.approve_btn.setEnabled(has_selection)
         self.reject_btn.setEnabled(has_selection)
 
-    # ── Actions ───────────────────────────────────────────────────
+    # ── Pending actions ──────────────────────────────────────────
 
     def _on_approve(self):
         if self._current_id is None:
@@ -3741,7 +3789,138 @@ class ApprovalTab(QWidget):
         self.refresh()
         self.proposals_changed.emit()
 
-    # ── Introspection for tab badge ───────────────────────────────
+    # ── History sub-tab ──────────────────────────────────────────
+
+    def _on_subtab_changed(self, index):
+        if index == 1:
+            self._refresh_history()
+
+    def _refresh_history(self):
+        """Load all proposals (pending + approved + rejected)."""
+        from sentinel.growth.approval import list_history
+        try:
+            self._history_cache = list_history()
+        except Exception as e:
+            log.warning("refresh history failed: %s", e)
+            self._history_cache = []
+
+        self.hist_list.blockSignals(True)
+        self.hist_list.clear()
+        for entry in self._history_cache:
+            label = self._format_hist_label(entry)
+            item = QListWidgetItem(label)
+            item.setData(Qt.UserRole, entry.get("id"))
+            self.hist_list.addItem(item)
+        self.hist_list.blockSignals(False)
+
+        if self.hist_list.count() > 0:
+            self.hist_list.setCurrentRow(0)
+        else:
+            self._history_selected = None
+            self.hist_empty_lbl.setVisible(True)
+            self.hist_detail_text.setVisible(False)
+
+    @staticmethod
+    def _format_hist_label(entry: dict) -> str:
+        import datetime
+        status = entry.get("_status", "?")
+        status_icon = {"approved": "✅", "rejected": "❌", "pending": "🟡"}.get(status, "?")
+        kind = entry.get("kind", "?")
+        kind_zh = t("approval_kind_skill") if kind == "skill_gen" else t("approval_kind_selfmod")
+        title = entry.get("title", "(no title)")
+        if len(title) > 35:
+            title = title[:35] + "…"
+        ts = entry.get("created_at", 0)
+        date_str = datetime.datetime.fromtimestamp(ts).strftime("%m/%d %H:%M") if ts else ""
+        return f"{status_icon} [{entry.get('id', '?')}] {kind_zh}  {title}  {date_str}"
+
+    def _on_hist_selection(self, current, _previous):
+        if current is None:
+            self._history_selected = None
+            self.hist_empty_lbl.setVisible(True)
+            self.hist_detail_text.setVisible(False)
+            return
+        sel_id = current.data(Qt.UserRole)
+        entry = next((e for e in self._history_cache if e.get("id") == sel_id), None)
+        if entry is None:
+            self.hist_empty_lbl.setVisible(True)
+            self.hist_detail_text.setVisible(False)
+            return
+        self._history_selected = entry
+        self._render_hist_detail(entry)
+
+    def _render_hist_detail(self, entry: dict):
+        import datetime
+        self.hist_empty_lbl.setVisible(False)
+        self.hist_detail_text.setVisible(True)
+
+        status = entry.get("_status", "?")
+        status_label = t(f"approval_status_{status}") if status in ("approved", "rejected", "pending") else status
+        kind = entry.get("kind", "?")
+        kind_label = t("approval_kind_skill") if kind == "skill_gen" else t("approval_kind_selfmod")
+
+        lines: list[str] = []
+        # Title + status badge
+        title = self._html_escape(entry.get("title", "(no title)"))
+        lines.append(f"<h3 style='color:#00dcff; margin:0 0 8px 0;'>[{self._html_escape(entry.get('id', ''))}] {title}</h3>")
+        lines.append(f"<p style='font-size:14px; margin-bottom:6px;'>{status_label}</p>")
+
+        # Meta
+        lines.append(f"<p><b>{t('approval_kind')}:</b> {kind_label}</p>")
+        tier = entry.get("proposer_tier", "")
+        if tier:
+            lines.append(f"<p><b>{t('approval_proposer_tier')}:</b> {self._html_escape(tier)}</p>")
+        ts = entry.get("created_at", 0)
+        if ts:
+            dt = datetime.datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
+            lines.append(f"<p><b>提交時間:</b> {dt}</p>")
+        target = entry.get("target_path", "")
+        if target:
+            lines.append(f"<p><b>{t('approval_target')}:</b> <code>{self._html_escape(target)}</code></p>")
+        reason = entry.get("reason", "")
+        if reason:
+            lines.append(f"<p><b>{t('approval_reason')}:</b> {self._html_escape(reason)}</p>")
+
+        # Rejection info
+        rejection = entry.get("_rejection")
+        if rejection:
+            rej_reason = rejection.get("reason", "")
+            rej_at = rejection.get("at", 0)
+            rej_dt = datetime.datetime.fromtimestamp(rej_at).strftime("%Y-%m-%d %H:%M:%S") if rej_at else ""
+            lines.append(f"<p style='color:#e74c3c;'><b>{t('approval_rejected_reason')}:</b> "
+                         f"{self._html_escape(rej_reason) or '(未提供)'} — {rej_dt}</p>")
+
+        # Safety findings
+        findings = entry.get("safety_findings", [])
+        if findings:
+            lines.append(f"<h4 style='color:#ffa502; margin-top:12px;'>⚠ {t('approval_safety_findings')} ({len(findings)})</h4>")
+            lines.append("<ul>")
+            for f in findings:
+                rule = f.get("rule", "?")
+                msg = f.get("message", "")
+                sev = f.get("severity", "")
+                lines.append(f"<li><b>[{self._html_escape(sev)}] {self._html_escape(rule)}</b> — {self._html_escape(msg)}</li>")
+            lines.append("</ul>")
+
+        # Source code
+        source = entry.get("source", "")
+        if source:
+            lines.append(f"<h4 style='margin-top:12px;'>{t('approval_source')}</h4>")
+            lines.append(f"<pre style='background-color:#1a1a1a; padding:10px; "
+                         f"border-left:3px solid #00dcff; color:#ddd; white-space:pre-wrap;'>"
+                         f"{self._html_escape(source)}</pre>")
+
+        # Previous source (self_mod)
+        prev = entry.get("previous_source", "")
+        if prev:
+            lines.append(f"<h4 style='margin-top:12px; color:#888;'>{t('approval_previous')}</h4>")
+            lines.append(f"<pre style='background-color:#1a1a1a; padding:10px; "
+                         f"border-left:3px solid #666; color:#888; white-space:pre-wrap;'>"
+                         f"{self._html_escape(prev)}</pre>")
+
+        self.hist_detail_text.setHtml("".join(lines))
+
+    # ── Introspection for tab badge ──────────────────────────────
 
     def pending_count(self) -> int:
         return len(self._pending_cache)

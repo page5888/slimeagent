@@ -173,6 +173,41 @@ def list_pending() -> list[PendingApproval]:
     return items
 
 
+def list_history() -> list[dict]:
+    """Read all approved + rejected proposals, newest first.
+
+    Each dict has the same shape as PendingApproval (via asdict), plus:
+      - "_status": "approved" | "rejected"
+      - "_decided_at": float (unix ts) — from audit log or file mtime
+      - "_rejection": dict (only for rejected; has reason, at, by)
+    """
+    _ensure_dirs()
+    items: list[dict] = []
+    for status_dir, status_label in ((APPROVED_DIR, "approved"),
+                                     (REJECTED_DIR, "rejected")):
+        for f in status_dir.glob("*.json"):
+            try:
+                data = json.loads(f.read_text(encoding="utf-8"))
+                data["_status"] = status_label
+                # Derive decision timestamp
+                if status_label == "rejected" and "_rejection" in data:
+                    data["_decided_at"] = data["_rejection"].get("at", data.get("created_at", 0))
+                else:
+                    data["_decided_at"] = f.stat().st_mtime
+                items.append(data)
+            except (json.JSONDecodeError, TypeError, OSError) as e:
+                log.warning("Corrupted %s file %s: %s", status_label, f.name, e)
+    # Add pending items too (so the history view shows the full picture)
+    for p in list_pending():
+        d = asdict(p)
+        d["_status"] = "pending"
+        d["_decided_at"] = p.created_at
+        items.append(d)
+    # Sort newest first
+    items.sort(key=lambda x: x.get("_decided_at", 0), reverse=True)
+    return items
+
+
 def get_pending(approval_id: str) -> Optional[PendingApproval]:
     path = PENDING_DIR / f"{approval_id}.json"
     if not path.exists():
