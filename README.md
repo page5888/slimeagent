@@ -25,11 +25,11 @@ AI Slime Agent 是一個**背景常駐**的桌面 AI 夥伴。
 
 ### 前置需求
 
-- Windows 10/11（目前主要支援平台）
-- Python 3.10+
+- Windows 10/11（主要支援平台）或 macOS 12+（部分支援）
+- Python 3.10+（macOS 建議 3.11+）
 - Gemini API Key（Google 免費提供，[這裡申請](https://aistudio.google.com/apikey)）
 
-### 安裝步驟
+### 安裝步驟（Windows）
 
 ```bash
 # 1. Clone 這個 repo
@@ -47,9 +47,35 @@ pip install -r sentinel/requirements.txt
 start.bat
 ```
 
+### 安裝步驟（macOS）
+
+```bash
+# 1. Clone 這個 repo
+git clone https://github.com/page5888/slimeagent.git
+cd slimeagent
+
+# 2. 建立虛擬環境（建議使用 Homebrew Python 3.11+）
+python3 -m venv venv
+source venv/bin/activate
+
+# 3. 安裝依賴
+pip install -r sentinel/requirements.txt
+
+# 4. 啟動
+chmod +x start.sh
+./start.sh
+```
+
+> **macOS 已知限制：**
+> - 鍵盤 / 滑鼠追蹤已停用（`pynput` 在 macOS 必須在主執行緒呼叫，與 Qt 背景執行緒衝突）
+> - 螢幕截圖需要在「系統設定 → 隱私權 → 螢幕錄製」授予權限
+> - 開機自動啟動目前僅支援 Windows 排程任務
+>
+> 其餘核心功能（LLM 蒸餾、進化系統、裝備、社群市場）在 macOS 均可正常運作。
+
 第一次啟動會打開 GUI，在「設定」分頁填入 Gemini API Key，然後就可以看著你的史萊姆甦醒。
 
-### 想要自動開機啟動？
+### 想要自動開機啟動？（Windows）
 
 GUI 裡有「開機自動啟動」開關，勾起來就會建立 Windows 排程任務。
 
@@ -212,12 +238,12 @@ python smoke_test_wallet.py
 - **裝備模板**：`sentinel/equipment_templates.py` — 加新的武器、背景
 - **裝備視覺**：`sentinel/equipment_visuals.py` — QPainter 繪製
 - **成就系統**：尚未實作，歡迎認領
-- **跨平台**：目前主要支援 Windows，macOS / Linux 只有部分測試
+- **跨平台**：macOS 基本可跑（鍵盤追蹤已停用，見上方說明），Linux 尚未測試
 
 提交前請：
 
 1. 執行 `python -m py_compile` 確保沒有語法錯誤
-2. 跑一次 `start.bat` 確認 GUI 正常開啟
+2. 跑一次 `start.bat`（Windows）或 `./start.sh`（macOS）確認 GUI 正常開啟
 3. 如果改到 server，跑 `smoke_test_wallet.py`
 
 ---
