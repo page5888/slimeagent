@@ -1,0 +1,27 @@
+# AI Slime Agent — desktop client dependencies.
+#
+# Install:
+#   pip install -r sentinel/requirements.txt
+#
+# Tested on Windows 10/11 and macOS 12+ with Python 3.10–3.13.
+# (On macOS, pynput is installed but the listener is skipped at runtime —
+#  see sentinel/input_tracker.py. Removing pynput entirely on macOS would
+#  break Windows builds from the same requirements file.)
+
+# ── Core GUI & system integration ──────────────────────────────────
+PySide6>=6.6
+psutil>=5.9
+watchdog>=3.0
+pynput>=1.7
+Pillow>=10.0
+
+# ── Telegram notifications ─────────────────────────────────────────
+python-telegram-bot>=21.0
+
+# ── LLM providers ──────────────────────────────────────────────────
+# All three are imported lazily — the app works with just one.
+# Gemini (google-genai, NOT the old google-generativeai — they are
+# different packages and this codebase requires the new one).
+google-genai>=1.0
+openai>=1.40
+anthropic>=0.40

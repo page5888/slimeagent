@@ -4998,6 +4998,14 @@ class MainWindow(QMainWindow):
                     exp_mult = get_exp_multiplier(equip_state)
                     if exp_mult > 1.0:
                         obs_count = int(obs_count * exp_mult)
+                    # Reload evo from disk every cycle so a GUI-side evolution
+                    # (form/title change, manual evolve button, naming) is not
+                    # overwritten by this daemon's stale in-memory copy when
+                    # record_observation → save_evolution writes back. Without
+                    # this, pressing the evolve button shows the new form for a
+                    # moment, then silently reverts to Slime on the next tick.
+                    # See issue #3.
+                    evo = load_evolution()
                     # Feed activity to adaptive evolution
                     record_activity_affinities(evo, user_act + "\n" + (input_act or ""))
                     record_observation(evo, obs_count, sources=exp_sources)
