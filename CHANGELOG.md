@@ -6,7 +6,22 @@
 
 ## [Unreleased]
 
+### Fixed
+- **macOS SIGTRAP 崩潰** — `pynput` 的 `keyboard.Listener` 在 macOS 內部透過 ctypes 呼叫
+  `TSMGetInputSourceProperty`，此 API 要求在主 dispatch queue 執行；但 `InputTracker.start()`
+  是從 `_start_daemon()` 背景執行緒呼叫，導致 `dispatch_assert_queue_fail` → SIGTRAP（exit 133）。
+  修復方式：在 `input_tracker.py` 加入 `_MACOS` 平台判斷，macOS 上完全跳過 pynput 匯入與監聽器啟動。
+  Windows 行為不受影響。（[#1](https://github.com/page5888/slimeagent/pull/1)）
+- **一鍵更新「分叉分支」報錯** — 更新按鈕改用 `git fetch + git reset --hard origin/main`
+  取代原本的 `git pull`；修復本地有額外 commit 時出現
+  *"You have divergent branches and need to specify how to reconcile them"* 的錯誤
+- **進化後變回初生史萊姆** — 兩個疊加的修復：
+  (1) `load_evolution()` 加入白名單過濾，舊存檔缺／多欄位不會觸發 `TypeError`；
+  (2) 即使 load 真的失敗，也會把原檔備份成 `aislime_evolution.broken.<ts>.json`
+  而不是直接覆蓋重生 — 使用者進度不會再被悄悄清掉
+
 ### Added
+- **`start.sh`** — macOS / Linux 啟動腳本，對應 Windows 的 `start.bat`
 - **Creator reward ledger**（Phase 1）— 新增 `creator_reward_ledger` 表追蹤
   每位創作者被投票累積的點數，以及通過審核的 100 點獎勵。這是
   5888 `s2sCreatorRewardSettle`（Week 5–6 上線）之前的過渡存錄。

@@ -47,10 +47,10 @@ AI Slime Agent 是一個**背景常駐**的桌面 AI 夥伴。
 
 ### 前置需求
 
-- **Windows 10/11**
+- **Windows 10/11**（主要支援平台）或 **macOS 12+**（部分支援，見下方限制）
 - **至少一個 LLM provider API Key**（Gemini 免費，[這裡申請](https://aistudio.google.com/apikey)）
 
-### 安裝（一般使用者）
+### 安裝（一般使用者，Windows）
 
 1. 從 [Releases](https://github.com/page5888/slimeagent/releases/latest) 下載 `AISlime-Windows.zip`
 2. 解壓縮到喜歡的資料夾（例如 `C:\AISlime\`）
@@ -59,7 +59,7 @@ AI Slime Agent 是一個**背景常駐**的桌面 AI 夥伴。
 
 > 如果防毒軟體跳通知，請選「允許執行」。PyInstaller 打包的程式有時會被誤判，原始碼公開可審閱。
 
-### 從原始碼安裝（開發者）
+### 從原始碼安裝（開發者，Windows）
 
 需要 **Python 3.10+**。
 
@@ -79,7 +79,33 @@ pip install -r sentinel/requirements.txt
 start.bat
 ```
 
-### 自己打包 .exe
+### 從原始碼安裝（開發者，macOS）
+
+```bash
+# 1. Clone
+git clone https://github.com/page5888/slimeagent.git
+cd slimeagent
+
+# 2. 建立虛擬環境（建議 Homebrew Python 3.11+）
+python3 -m venv venv
+source venv/bin/activate
+
+# 3. 安裝依賴
+pip install -r sentinel/requirements.txt
+
+# 4. 啟動
+chmod +x start.sh
+./start.sh
+```
+
+> **macOS 已知限制：**
+> - 鍵盤 / 滑鼠追蹤已停用（`pynput` 在 macOS 必須在主執行緒呼叫，與 Qt 背景執行緒衝突）
+> - 螢幕截圖需要在「系統設定 → 隱私權 → 螢幕錄製」授予權限
+> - 開機自動啟動目前僅支援 Windows 排程任務
+>
+> 其餘核心功能（LLM 蒸餾、進化系統、裝備、社群市場）在 macOS 均可正常運作。
+
+### 自己打包 .exe（Windows）
 
 ```bash
 # 額外安裝 PyInstaller
@@ -340,13 +366,14 @@ python smoke_test_wallet.py
 | 裝備視覺 | `sentinel/equipment_visuals.py` | 會 QPainter 的開發者 |
 | 新 LLM provider | `sentinel/llm.py` | 後端工程 |
 | 成就系統 | （未實作） | 歡迎認領 |
-| macOS / Linux 支援 | 全域 | 跨平台經驗者 |
+| macOS 完整支援 | `sentinel/input_tracker.py` 等 | 目前鍵盤追蹤已停用，歡迎 main-thread 安全的實作 |
+| Linux 支援 | 全域 | 跨平台經驗者 |
 | 繁中以外的 i18n | `sentinel/i18n.py` | 翻譯 |
 
 ### 提交前請
 
 1. `python -m py_compile sentinel/*.py` — 確保沒有語法錯誤
-2. `start.bat` 跑一次 — 確認 GUI 正常開啟
+2. 跑一次 `start.bat`（Windows）或 `./start.sh`（macOS）— 確認 GUI 正常開啟
 3. 改到 server 的話，跑 `smoke_test_wallet.py`
 4. 改到 SQL migration — 同時在 SQLite 和 Postgres 測試
 

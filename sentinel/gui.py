@@ -3219,17 +3219,30 @@ class SettingsTab(QWidget):
                 self.update_btn.setEnabled(True)
                 return
 
-            # Pull
+            # Pull: fetch then hard-reset to avoid divergent-branch errors
             result = subprocess.run(
-                ["git", "pull", "origin", "main"],
+                ["git", "fetch", "origin", "main"],
                 capture_output=True, text=True, timeout=60,
                 cwd=str(Path(__file__).parent.parent),
             )
-
             if result.returncode != 0:
                 QMessageBox.warning(
                     self, "更新失敗",
-                    f"git pull 失敗：\n{result.stderr[:500]}",
+                    f"git fetch 失敗：\n{result.stderr[:500]}",
+                )
+                self.update_btn.setText("🔄 檢查更新")
+                self.update_btn.setEnabled(True)
+                return
+
+            result = subprocess.run(
+                ["git", "reset", "--hard", "origin/main"],
+                capture_output=True, text=True, timeout=30,
+                cwd=str(Path(__file__).parent.parent),
+            )
+            if result.returncode != 0:
+                QMessageBox.warning(
+                    self, "更新失敗",
+                    f"git reset 失敗：\n{result.stderr[:500]}",
                 )
                 self.update_btn.setText("🔄 檢查更新")
                 self.update_btn.setEnabled(True)

@@ -3,20 +3,28 @@
 Captures what the user types (aggregated into chunks) and where they click.
 All data stays local - only AI Slime reads it for distillation.
 """
+import sys
 import time
 import logging
 import threading
 import json
 from pathlib import Path
 from collections import deque
-from pynput import keyboard, mouse
 
 log = logging.getLogger("sentinel.input")
 
 INPUT_LOG = Path.home() / ".hermes" / "sentinel_input.jsonl"
 
-# Keys that signal a "chunk break" - user finished a thought
-_BREAK_KEYS = {keyboard.Key.enter, keyboard.Key.tab}
+# macOS: pynput keyboard listener calls TSMGetInputSourceProperty which
+# must run on the main thread — starting it from a daemon thread causes
+# dispatch_assert_queue abort. Disable tracking on macOS for now.
+_MACOS = sys.platform == "darwin"
+
+if not _MACOS:
+    from pynput import keyboard, mouse
+    _BREAK_KEYS = {keyboard.Key.enter, keyboard.Key.tab}
+else:
+    _BREAK_KEYS = set()
 
 
 class InputTracker:
@@ -38,6 +46,9 @@ class InputTracker:
         if self._running:
             return
         self._running = True
+        if _MACOS:
+            log.info("Input tracking disabled on macOS (pynput main-thread restriction)")
+            return
         self._kb_listener = keyboard.Listener(on_press=self._on_key)
         self._mouse_listener = mouse.Listener(on_click=self._on_click)
         self._kb_listener.start()
