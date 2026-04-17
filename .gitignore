@@ -7,3 +7,12 @@ __pycache__/
 dist/
 build/
 AISlime-Windows.zip
+
+# Local SQLite dbs (relay.db gets created by migrations / dry-runs)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Local evolution state backups from load-failure recovery
+aislime_evolution.broken.*.json
