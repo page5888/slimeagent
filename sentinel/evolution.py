@@ -201,10 +201,16 @@ def load_evolution() -> EvolutionState:
     if EVOLUTION_FILE.exists():
         try:
             data = json.loads(EVOLUTION_FILE.read_text(encoding='utf-8'))
-            state = EvolutionState(
-                **{k: v for k, v in data.items()
-                   if k not in ('skills', 'evolution_log', 'dominant_traits', 'affinity_scores')}
-            )
+            # Filter to only fields EvolutionState actually declares — keeps
+            # old saves loadable after schema changes, and new fields loadable
+            # if older code is run against new saves.
+            valid_fields = {f.name for f in EvolutionState.__dataclass_fields__.values()}
+            scalar_kwargs = {
+                k: v for k, v in data.items()
+                if k in valid_fields
+                and k not in ('skills', 'evolution_log', 'dominant_traits', 'affinity_scores')
+            }
+            state = EvolutionState(**scalar_kwargs)
             state.skills = [Skill(**s) for s in data.get('skills', [])]
             state.evolution_log = data.get('evolution_log', [])
             state.dominant_traits = data.get('dominant_traits', [])

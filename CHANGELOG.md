@@ -20,6 +20,10 @@
 - **一鍵更新「分叉分支」報錯** — 更新按鈕改用 `git fetch + git reset --hard origin/main`
   取代原本的 `git pull`；修復本地有額外 commit 時出現
   *"You have divergent branches and need to specify how to reconcile them"* 的錯誤
+- **進化後變回初生史萊姆** — `load_evolution()` 原本直接展開 JSON 全部欄位到
+  `EvolutionState(**data)`；只要版本升級後 schema 新增了欄位，舊存檔就會觸發
+  `TypeError` 被 `except` 靜默吞掉，重建初生狀態。修復方式：加入白名單過濾，
+  只傳 dataclass 認識的欄位，新舊存檔版本互相相容（已同步自上游修法）
 - **Creator reward ledger**（Phase 1）— 新增 `creator_reward_ledger` 表追蹤
   每位創作者被投票累積的點數，以及通過審核的 100 點獎勵。這是
   5888 `s2sCreatorRewardSettle`（Week 5–6 上線）之前的過渡存錄。
