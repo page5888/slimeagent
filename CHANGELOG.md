@@ -15,6 +15,11 @@
 
 ### Added
 - **`start.sh`** — macOS / Linux 啟動腳本，對應 Windows 的 `start.bat`
+
+### Fixed (continued)
+- **一鍵更新「分叉分支」報錯** — 更新按鈕改用 `git fetch + git reset --hard origin/main`
+  取代原本的 `git pull`；修復本地有額外 commit 時出現
+  *"You have divergent branches and need to specify how to reconcile them"* 的錯誤
 - **Creator reward ledger**（Phase 1）— 新增 `creator_reward_ledger` 表追蹤
   每位創作者被投票累積的點數，以及通過審核的 100 點獎勵。這是
   5888 `s2sCreatorRewardSettle`（Week 5–6 上線）之前的過渡存錄。
