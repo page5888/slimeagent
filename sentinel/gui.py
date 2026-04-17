@@ -2006,7 +2006,17 @@ class FederationTab(QWidget):
             from sentinel import relay_client
             resp = relay_client.list_patterns(limit=20)
         except Exception as e:
-            self.status_lbl.setText(t("fed_network_err").format(err=str(e)))
+            # Distinguish "not logged in" from genuine network failure so
+            # users don't see "連線錯誤 422" and think the server's broken.
+            # See issue #5 — relay now returns 401 for missing auth header,
+            # but pre-fix builds may still see 422, so handle both.
+            from sentinel.relay_client import RelayError
+            if isinstance(e, RelayError) and str(e.code) in ("401", "422"):
+                self.status_lbl.setText(t("fed_login_required"))
+            else:
+                self.status_lbl.setText(
+                    t("fed_network_err").format(err=str(e))
+                )
             self._patterns = []
             return
 
@@ -2118,11 +2128,15 @@ class FederationTab(QWidget):
     def _on_vote(self, pattern_id: str, vote: str):
         """Handle a vote click. Refreshes the list after success."""
         from sentinel import relay_client
+        from sentinel.relay_client import RelayError
         try:
             resp = relay_client.vote_pattern(pattern_id, vote)
         except Exception as e:
-            QMessageBox.warning(self, "AI Slime",
-                                t("fed_network_err").format(err=str(e)))
+            if isinstance(e, RelayError) and str(e.code) in ("401", "422"):
+                QMessageBox.warning(self, "AI Slime", t("fed_login_required"))
+            else:
+                QMessageBox.warning(self, "AI Slime",
+                                    t("fed_network_err").format(err=str(e)))
             return
 
         # H. Confirmed patterns feed back into chat prompt — the slime
