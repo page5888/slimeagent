@@ -4993,6 +4993,9 @@ class MainWindow(QMainWindow):
                     if screen_act:
                         exp_sources["screen"] = 1
                     obs_count = sum(exp_sources.values())
+                    # Reload evo so GUI-side evolution (form change) is never
+                    # overwritten by this daemon's stale in-memory copy.
+                    evo = load_evolution()
                     # Apply equipment EXP buff (reload so GUI equip changes take effect)
                     equip_state = load_equipment()
                     exp_mult = get_exp_multiplier(equip_state)
