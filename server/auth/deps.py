@@ -4,11 +4,14 @@ from jose import jwt, JWTError
 from server import config
 
 
-async def get_current_user(authorization: str = Header(...)) -> dict:
+async def get_current_user(authorization: str | None = Header(None)) -> dict:
     """Extract and verify JWT from Authorization header.
 
     Returns: {user_id, google_sub, email}
+    Raises 401 (not 422) when the header is missing or malformed.
     """
+    if not authorization:
+        raise HTTPException(401, "Authorization header missing")
     if not authorization.startswith("Bearer "):
         raise HTTPException(401, "Invalid authorization header")
 
