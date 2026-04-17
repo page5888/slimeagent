@@ -18,10 +18,10 @@ def get_wallet_client() -> WalletClient | None:
     global _client
     if _client is not None:
         return _client
-    if not config.WALLET_API_BASE or not config.WALLET_HMAC_SECRET:
+    if not config.WALLET_ENDPOINTS or not config.WALLET_HMAC_SECRET:
         return None
     _client = WalletClient(
-        api_base=config.WALLET_API_BASE,
+        endpoints=config.WALLET_ENDPOINTS,
         site_id=config.WALLET_SITE_ID,
         api_key=config.WALLET_API_KEY,
         hmac_secret=config.WALLET_HMAC_SECRET,

@@ -21,11 +21,19 @@
   `slime_evolve` + `slime_list_fee`（舊的 generic `smoke_test` reason
   已不在白名單，會被 403 擋下）
 
-### Phase 2 計畫（Week 5–6，等 5888 `s2sCreatorRewardSettle` 上線）
-1. 寫 replay script 走訪 `creator_reward_ledger WHERE status='pending'`
-2. 每筆以 `slime_creator_reward_settle:{ledger_id}` 當 idempotency key 呼叫 settle endpoint
-3. 確認成功後將該 row 標為 `status='settled'`，寫入 `settle_tx_id`
-4. Replay 完成後，`cast_vote()` 改為 inline 呼叫 settle（不再寫 ledger）
+### Phase 2 計畫（staging 已就緒 2026-04-16）
+5888 澄清**不會有 dedicated `s2sCreatorRewardSettle` endpoint** — 複用既有
+`s2sGrant`，只把 `slime_creator_reward_settle` + `slime_creator_approval`
+加進 grant 白名單即可。流程：
+
+1. 跑 `scripts/phase2_creator_replay.py`（`--dry-run` 先檢視）走訪
+   `creator_reward_ledger WHERE status='pending'`
+2. 每筆依 `voter_id` 有無分路：
+   - 有 voter → `s2sGrant(reason=slime_creator_reward_settle)`
+   - 無 voter（系統核可 bonus）→ `s2sGrant(reason=slime_creator_approval)`
+3. idempotency key 用 `<reason>:<ledger_id>`，永久 dedupe 保 replay 安全
+4. 成功後 UPDATE `status='settled'` + `settled_at` + `settle_tx_id`
+5. Replay 穩定後，`cast_vote()` 改為 inline 呼叫 `s2sGrant`（不再寫 ledger）
 
 ---
 

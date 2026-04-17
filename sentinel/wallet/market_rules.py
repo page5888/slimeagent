@@ -81,10 +81,14 @@ SPEND_TYPE_CREATOR_REWARD = "slime_creator_reward"  # voter → creator tip (10 
 #   Voter pays via s2sSpend(reason=slime_creator_reward). Points go to
 #   5888 platform pool; creator credit is tracked LOCALLY in our
 #   `creator_reward_ledger` table, NOT transferred through 5888.
-# Phase 2 (when 5888 ships s2sCreatorRewardSettle, target Week 5-6):
-#   A migration walks ledger rows with status='pending' and calls the
-#   atomic settle endpoint. We stop writing new ledger rows and call
-#   settle inline from cast_vote instead.
+# Phase 2 (as of 2026-04-16 — white-listed on 5888 staging, ready to run):
+#   There is NO dedicated s2sCreatorRewardSettle endpoint — 5888 clarified
+#   we reuse s2sGrant with reason=GRANT_TYPE_CREATOR_REWARD_SETTLE /
+#   GRANT_TYPE_CREATOR_APPROVAL. A replay script (scripts/phase2_creator_replay.py)
+#   walks status='pending' rows and calls s2sGrant; idempotencyKey is
+#   "slime_creator_reward_settle:{ledger_id}" so retries dedupe safely.
+#   After replay drains all pending rows, cast_vote() switches from
+#   writing ledger rows to calling s2sGrant inline.
 
 # grant reasons (applied atomically by 5888's marketSaleSettle endpoint
 # once it ships — we do NOT call grant with these ourselves):
@@ -92,6 +96,10 @@ GRANT_TYPE_SALE_PROCEEDS = "slime_sale_proceeds"      # 70% → seller
 GRANT_TYPE_L1_COMMISSION = "slime_l1_commission"      # 15% → L1 upline (fallback: platform pool)
 GRANT_TYPE_L2_COMMISSION = "slime_l2_commission"      # 5% → L2 upline (fallback: platform pool)
 GRANT_TYPE_PLATFORM_POOL = "slime_platform_pool"      # 10% → platform
+
+# grant reasons WE call directly (Phase 2 creator reward settlement):
+GRANT_TYPE_CREATOR_REWARD_SETTLE = "slime_creator_reward_settle"  # per-vote tip payout
+GRANT_TYPE_CREATOR_APPROVAL = "slime_creator_approval"            # +100pt on approved submission
 
 # refund reasons:
 REFUND_TYPE_ORDER = "slime_order_refund"

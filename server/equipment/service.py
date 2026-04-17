@@ -259,12 +259,12 @@ async def _approve_submission(db, sub) -> bool:
     )
 
     # Creator approval bonus — Phase 1: record in ledger, NOT granted
-    # via 5888 wallet yet. 5888 sitePolicy grant whitelist doesn't yet
-    # include slime_creator_approval_bonus; attempting grant here would
-    # 403. Will be paid in the Phase 2 replay (same endpoint as the
-    # per-vote tips). Dedicated entry with voter_id='system' and a
-    # distinguishing spend_key prefix so the replay can tell
-    # per-vote tips apart from the approval bonus.
+    # via 5888 wallet yet. Phase 2 (ready as of 2026-04-16) will pay
+    # these via s2sGrant(reason=slime_creator_approval) from the replay
+    # script — that reason is now on the 5888 staging grant whitelist.
+    # Dedicated ledger entry with voter_id=NULL and spend_key prefix
+    # "slime_creator_approval:" so the replay can route it to the
+    # right reason (vs per-vote tips, which use slime_creator_reward_settle).
     bonus_id = str(uuid.uuid4())
     bonus_key = f"slime_creator_approval:{submission_id}"
     await db.execute(

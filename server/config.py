@@ -19,13 +19,26 @@ JWT_EXPIRE_HOURS = 24 * 7  # 7 days
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 
 # ── 5888 Wallet S2S ─────────────────────────────────────────────────
+# 5888 deploys each S2S function to its own Cloud Run URL, so there is
+# no shared base_url — we hold a mapping of endpoint name -> full URL.
+#
 # Priority: env vars > ~/.hermes/wallet_5888_keys.json (local dev only) > empty.
 # WALLET_ENV selects which block to load from the JSON; defaults to "staging".
-# Production always requires env-var overrides — the JSON is a dev convenience.
-WALLET_API_BASE = os.getenv("WALLET_API_BASE", "")
+# Production deployments should set env vars explicitly — the JSON is a dev
+# convenience.
 WALLET_SITE_ID = os.getenv("WALLET_SITE_ID", "")
 WALLET_API_KEY = os.getenv("WALLET_API_KEY", "")
 WALLET_HMAC_SECRET = os.getenv("WALLET_HMAC_SECRET", "")
+# WALLET_ENDPOINTS_JSON, if set, is a JSON string mapping endpoint name
+# (e.g. "s2sEnsureUser") to its Cloud Run URL.
+_raw_endpoints = os.getenv("WALLET_ENDPOINTS_JSON", "")
+WALLET_ENDPOINTS: dict[str, str] = {}
+if _raw_endpoints:
+    import json as _json
+    try:
+        WALLET_ENDPOINTS = _json.loads(_raw_endpoints)
+    except _json.JSONDecodeError:
+        WALLET_ENDPOINTS = {}
 
 
 def _load_wallet_keys_from_home():
@@ -34,9 +47,9 @@ def _load_wallet_keys_from_home():
     Convenience for local dev only. The file is never committed — it lives
     in the user's home dir and holds staging/production secrets.
     """
-    global WALLET_API_BASE, WALLET_SITE_ID, WALLET_API_KEY, WALLET_HMAC_SECRET
+    global WALLET_SITE_ID, WALLET_API_KEY, WALLET_HMAC_SECRET, WALLET_ENDPOINTS
     # Skip if already configured via env
-    if WALLET_API_BASE and WALLET_HMAC_SECRET:
+    if WALLET_ENDPOINTS and WALLET_HMAC_SECRET:
         return
     keys_file = Path.home() / ".hermes" / "wallet_5888_keys.json"
     if not keys_file.exists():
@@ -48,10 +61,11 @@ def _load_wallet_keys_from_home():
         return
     env = os.getenv("WALLET_ENV", "staging")
     block = data.get(env) or {}
-    WALLET_API_BASE = WALLET_API_BASE or block.get("base_url", "")
     WALLET_SITE_ID = WALLET_SITE_ID or block.get("site_id", "")
     WALLET_API_KEY = WALLET_API_KEY or block.get("api_key", "")
     WALLET_HMAC_SECRET = WALLET_HMAC_SECRET or block.get("hmac_secret", "")
+    if not WALLET_ENDPOINTS:
+        WALLET_ENDPOINTS = block.get("endpoints") or {}
 
 
 _load_wallet_keys_from_home()

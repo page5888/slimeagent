@@ -4,6 +4,9 @@ This module is used by the RELAY SERVER (not the desktop app).
 The desktop app talks to the relay server; the relay server talks to 5888.
 
 HMAC_SECRET never leaves the server.
+
+5888 deploys each S2S function as its own Cloud Run service, so there is
+no shared base URL — we take a per-endpoint mapping at construction.
 """
 import hashlib
 import hmac
@@ -16,12 +19,42 @@ from typing import Any
 log = logging.getLogger("sentinel.wallet.client")
 
 
+# Canonical endpoint names we currently call. Kept here so typos in
+# callers fail loudly at construction instead of silently at request time.
+REQUIRED_ENDPOINTS = (
+    "s2sEnsureUser",
+    "s2sGetBalance",
+    "s2sSpend",
+    "s2sGrant",
+    "s2sRefund",
+)
+
+# Optional endpoints: only present in certain environments. s2sResetTestBalance
+# exists on staging/test (5888 enforces a siteId guard that prod would reject
+# anyway), so we don't make it required.
+OPTIONAL_ENDPOINTS = (
+    "s2sResetTestBalance",
+)
+
+
 class WalletClient:
     """S2S client for 5888 wallet API."""
 
-    def __init__(self, api_base: str, site_id: str,
+    def __init__(self, endpoints: dict[str, str], site_id: str,
                  api_key: str, hmac_secret: str):
-        self.api_base = api_base.rstrip("/")
+        """
+        Args:
+            endpoints: map of 5888 function name (e.g. "s2sEnsureUser")
+                to its full HTTPS URL. Each 5888 function lives on its
+                own Cloud Run service, so there is no shared base URL.
+        """
+        missing = [e for e in REQUIRED_ENDPOINTS if e not in endpoints]
+        if missing:
+            raise ValueError(
+                f"WalletClient missing endpoint URL(s): {missing}. "
+                f"Got: {sorted(endpoints.keys())}"
+            )
+        self.endpoints = {k: v.rstrip("/") for k, v in endpoints.items()}
         self.site_id = site_id
         self.api_key = api_key
         self.hmac_secret = hmac_secret
@@ -51,8 +84,14 @@ class WalletClient:
 
     def _post(self, endpoint: str, body: dict) -> dict:
         """POST to wallet API with HMAC signature."""
+        url = self.endpoints.get(endpoint)
+        if not url:
+            raise WalletError(
+                500, "ENDPOINT_NOT_CONFIGURED",
+                f"No URL configured for endpoint {endpoint}",
+            )
+
         raw_body, headers = self._sign(body)
-        url = f"{self.api_base}/{endpoint}"
 
         req = urllib.request.Request(
             url,
@@ -135,6 +174,20 @@ class WalletClient:
         body = {"date": date} if date else {}
         result = self._post("s2sGetReconciliationUrl", body)
         return result.get("url", "")
+
+    def reset_test_balance(self, uid: str, balance: int,
+                           reason: str = "smoke_test_fixture") -> dict:
+        """Reset a test account's balance. Staging/test only.
+
+        5888 enforces a runtime double guard (siteId must contain "test" or
+        "staging"), so calling this in prod will 403 even if the endpoint
+        were somehow configured. Safe to expose.
+        """
+        return self._post("s2sResetTestBalance", {
+            "uid": uid,
+            "balance": balance,
+            "reason": reason,
+        })
 
 
 class WalletError(Exception):
