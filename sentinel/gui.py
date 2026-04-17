@@ -2006,7 +2006,12 @@ class FederationTab(QWidget):
             from sentinel import relay_client
             resp = relay_client.list_patterns(limit=20)
         except Exception as e:
-            self.status_lbl.setText(t("fed_network_err").format(err=str(e)))
+            err_str = str(e)
+            # 401/422 both mean "not logged in" — show a friendly hint
+            if any(c in err_str for c in ("401", "422")):
+                self.status_lbl.setText(t("fed_login_required"))
+            else:
+                self.status_lbl.setText(t("fed_network_err").format(err=err_str))
             self._patterns = []
             return
 
