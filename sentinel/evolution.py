@@ -225,7 +225,31 @@ def load_evolution() -> EvolutionState:
             state.affinity_scores = data.get('affinity_scores', {})
             return state
         except Exception as e:
-            log.error(f"Failed to load evolution state: {e}")
+            # CRITICAL: do NOT silently overwrite a corrupt/incompatible save.
+            # Back it up with a timestamp so the user's progress isn't erased,
+            # and surface the error loudly so we can diagnose schema drift
+            # (this is what caused Mac users to keep reverting to newborn —
+            # a single load failure wiped the file on every launch).
+            backup = EVOLUTION_FILE.with_suffix(
+                f".broken.{int(time.time())}.json"
+            )
+            try:
+                EVOLUTION_FILE.rename(backup)
+                log.error(
+                    f"Failed to load evolution state: {e!r}. "
+                    f"Backed up corrupt save to {backup}. "
+                    f"Starting a new slime — inspect the backup to recover."
+                )
+            except Exception as backup_err:
+                log.error(
+                    f"Failed to load evolution state: {e!r}. "
+                    f"Also failed to back up corrupt save: {backup_err!r}. "
+                    f"LEAVING {EVOLUTION_FILE} IN PLACE to avoid data loss — "
+                    f"fix the file manually before restarting."
+                )
+                # Don't overwrite — raise so the user sees the problem
+                # instead of silently getting a reborn newborn.
+                raise
 
     # First boot - birth!
     state = EvolutionState(
