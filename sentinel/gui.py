@@ -2093,12 +2093,15 @@ class FederationTab(QWidget):
         layout.addWidget(self.pending_header)
 
         self.pending_container = QWidget()
-        # Preferred vertically: the container grows to fit its children.
-        # We no longer clamp via setMaximumHeight(600) — that cap combined
-        # with a larger pending queue (users can accumulate 20+ candidates
-        # across distillation cycles) silently clipped all cards from view.
-        # Overflow is prevented by capping rendered cards below instead.
-        self.pending_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        # Reserve a bounded slice of the tab for pending cards. The real
+        # content is in the community list below; pending is a side
+        # panel. Without a ceiling, two wrapped-QLabel cards can eat
+        # 300-400px on a normal window and push the community section
+        # into a single-card strip — which is what Peter hit after the
+        # VISIBLE_CAP=3 fix. With Maximum(220) + two small cards, the
+        # community scroll area consistently gets the rest of the tab.
+        self.pending_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        self.pending_container.setMaximumHeight(220)
         self.pending_layout = QVBoxLayout(self.pending_container)
         self.pending_layout.setContentsMargins(0, 0, 0, 0)
         self.pending_layout.setSpacing(6)
@@ -2398,12 +2401,12 @@ class FederationTab(QWidget):
         candidates = list_pending()
 
         if candidates:
-            # Cap visible cards. Server rate-limits submits to 3/day, so
-            # showing more than that is just vertical clutter — and with
-            # a large queue (20+) rendering every card used to overflow
-            # the container silently. "還有 N 個候選" below the top-3
-            # makes the queue size visible without cost.
-            VISIBLE_CAP = 3
+            # Cap visible cards. Server rate-limits submits to 3/day,
+            # so even 3 visible is pushing it — but 2 gives the
+            # community list below real breathing room on an 800px
+            # window. Remainder shows as "還有 N 個候選排隊中" in the
+            # header so queue size is still visible at a glance.
+            VISIBLE_CAP = 2
             shown = candidates[:VISIBLE_CAP]
             hidden_count = max(0, len(candidates) - VISIBLE_CAP)
 
