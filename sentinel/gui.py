@@ -2093,12 +2093,15 @@ class FederationTab(QWidget):
         layout.addWidget(self.pending_header)
 
         self.pending_container = QWidget()
-        # Maximum vertical policy: the container hugs its children's
-        # total height instead of expanding to fill whatever the parent
-        # QVBoxLayout hands it. Without this, an empty-state placeholder
-        # (one wrapped QLabel) could grow to push the community list
-        # and action buttons off-screen.
-        self.pending_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        # Preferred (not Maximum) vertical: lets the container grow
+        # to fit its children's heightForWidth. Maximum here combined
+        # with a wrapped-QLabel child collapsed to ~0 height on some
+        # layouts because the label's sizeHint was computed before it
+        # had a width, so "don't grow beyond sizeHint" meant "stay 0".
+        # A hard ceiling via setMaximumHeight is what actually prevents
+        # runaway growth; the card itself also limits via Maximum.
+        self.pending_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.pending_container.setMaximumHeight(600)
         self.pending_layout = QVBoxLayout(self.pending_container)
         self.pending_layout.setContentsMargins(0, 0, 0, 0)
         self.pending_layout.setSpacing(6)
@@ -2422,25 +2425,29 @@ class FederationTab(QWidget):
             body = t("fed_pending_empty_seen").format(sessions=session_count)
 
         card = QFrame()
-        # SizePolicy: grow horizontally to fill the column, but only
-        # take as much vertical space as the wrapped text needs. Without
-        # Maximum on the vertical axis, QLabel+wordwrap inside a QFrame
-        # inside a QVBoxLayout stretches to eat all remaining height in
-        # the parent, hiding the community list and the buttons below.
-        card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        # Expanding horizontally (fill column), Preferred vertically
+        # (use sizeHint without being clamped to 0 on word-wrap labels).
+        # The runaway-growth worry is handled by pending_container's
+        # explicit maximum height, not by clamping the card itself.
+        card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        # Guarantee a visible baseline even if the label's heightForWidth
+        # misbehaves on the first layout pass — otherwise users saw an
+        # invisible empty area where the hint should be.
+        card.setMinimumHeight(56)
         card.setStyleSheet(
-            "QFrame { background: rgba(255,255,255,0.02); "
-            "border: 1px dashed rgba(255,209,102,0.35); border-radius: 6px; "
+            "QFrame { background: rgba(255,209,102,0.08); "
+            "border: 1px dashed rgba(255,209,102,0.45); border-radius: 6px; "
             "padding: 10px; }"
         )
         v = QVBoxLayout(card)
         v.setContentsMargins(12, 10, 12, 10)
         lbl = QLabel(body)
         lbl.setWordWrap(True)
-        # #ddd is the same tone used by other secondary text in the app
-        # (see equip_inventory tab); #bbb on pure black got lost visually.
-        lbl.setStyleSheet("color:#ddd; font-size: 11px; line-height: 1.5;")
-        lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+        # #e6e6e6 matches the statement color used on pending cards and
+        # gives high contrast on the dark theme. The earlier #bbb/#ddd
+        # rendered technically but was hard to spot.
+        lbl.setStyleSheet("color:#e6e6e6; font-size: 11px;")
+        lbl.setMinimumHeight(32)
         v.addWidget(lbl)
         return card
 
