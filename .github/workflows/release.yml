@@ -1,0 +1,98 @@
+# Build + publish AI Slime Windows ZIP on version tags.
+#
+# Trigger:  git tag v0.4.0 && git push --tags
+# Result:   Actions runs this workflow → PyInstaller packages the app →
+#           zip uploaded to a new GitHub Release for the tag.
+#
+# Users install by downloading AISlime-Windows.zip from the Releases
+# page; the existing one-click Update button (git fetch + reset) is for
+# source-install users, not for zip installs. See issue workflow notes.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'                 # v0.4.0, v0.4.1, v1.0.0, ...
+  workflow_dispatch:         # manual trigger in the Actions UI, handy
+                             # for rebuilding a release without re-tagging
+
+permissions:
+  contents: write            # needed by softprops/action-gh-release
+
+jobs:
+  build-windows:
+    name: Build Windows ZIP
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r sentinel/requirements.txt
+          pip install pyinstaller
+
+      - name: Run PyInstaller
+        shell: pwsh
+        # --noconfirm overwrites any previous build artifacts;
+        # --clean drops the PyInstaller work cache so a stale pyd
+        # doesn't ship. Matches build_exe.bat step 2.
+        run: |
+          pyinstaller AISlime.spec --noconfirm --clean
+
+      - name: Zip release archive
+        shell: pwsh
+        # Compress-Archive with -Path dist\AISlime\* packages the
+        # folder contents without an extra AISlime/ parent, matching
+        # how v0.3.0 was shipped so users' extraction muscle memory
+        # still works.
+        run: |
+          if (Test-Path AISlime-Windows.zip) { Remove-Item AISlime-Windows.zip }
+          Compress-Archive -Path dist\AISlime\* -DestinationPath AISlime-Windows.zip -Force
+          $size = (Get-Item AISlime-Windows.zip).Length
+          Write-Host "AISlime-Windows.zip size: $size bytes"
+
+      - name: Upload build artifact (also available on the run page)
+        uses: actions/upload-artifact@v4
+        with:
+          name: AISlime-Windows-${{ github.ref_name }}
+          path: AISlime-Windows.zip
+          retention-days: 30
+
+      - name: Publish GitHub Release
+        # Only runs for tag pushes — manual dispatch (no tag) will
+        # still produce the artifact above but won't try to create a
+        # release without a version to attach to.
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: AISlime-Windows.zip
+          generate_release_notes: true     # GitHub drafts a summary
+                                           # from commits + PRs
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha') }}
+          body: |
+            ## 🫠 AI Slime Agent ${{ github.ref_name }}
+
+            下載 **AISlime-Windows.zip** → 解壓縮 → 雙擊 `AISlime.exe`。
+
+            ### 升級建議
+            - 原始碼安裝的使用者：設定分頁點「🔄 檢查更新」即可拿到這個版本
+            - zip 版使用者：下載新 zip，解壓到新資料夾，第一次啟動後
+              你原本的 `~/.hermes/` 資料會自動被讀到（進化、聊天、裝備、設定全部保留）
+            - 如果舊版存檔 load 失敗，會被備份為 `~/.hermes/aislime_evolution.broken.<時戳>.json`，
+              不會靜默覆蓋
+
+            ---
+
+            自動產生的 commit 紀錄見下方 ⬇
