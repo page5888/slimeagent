@@ -2068,85 +2068,100 @@ class FederationTab(QWidget):
     def __init__(self):
         super().__init__()
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(8)
+        layout.setContentsMargins(20, 18, 20, 16)
+        layout.setSpacing(14)
 
-        # Header + description
-        self.header_lbl = QLabel(f"<b style='color:#00dcff;'>{t('fed_header')}</b>")
-        self.header_lbl.setStyleSheet("font-size: 14px;")
+        # ── Page title ────────────────────────────────────────────────
+        # Single line. The tab name "公頻" already labels this tab, so
+        # we don't need a second "史萊姆之間的共同觀察" heading + a
+        # separate description paragraph — that doubled the chrome at
+        # the top of the screen.
+        self.header_lbl = QLabel(
+            f"<span style='color:#00dcff; font-weight:600;'>"
+            f"{t('fed_header')}</span>"
+            f"  <span style='color:#666; font-weight:400; font-size:11px;'>"
+            f"{t('fed_subtitle')}</span>"
+        )
+        self.header_lbl.setStyleSheet("font-size: 15px; padding-bottom: 2px;")
         layout.addWidget(self.header_lbl)
 
-        self.desc_lbl = QLabel(t("fed_desc"))
-        self.desc_lbl.setWordWrap(True)
-        self.desc_lbl.setStyleSheet("color:#aaa; font-size: 11px;")
-        layout.addWidget(self.desc_lbl)
-
-        # "Pending to share" section — candidates the slime wants to
-        # share, each needing explicit user approval before upload.
-        # Hidden when the queue is empty (which is the common case on
-        # first launch, before the distiller has run a few times).
-        self.pending_header = QLabel(
-            f"<b style='color:#ffd166;'>{t('fed_pending_header')}</b>"
+        # ── Pending section (your slime's proposals) ─────────────────
+        # Hidden entirely when queue is empty & session_count > 0 — see
+        # _rebuild_pending. Takes 0 visual weight when not in use.
+        self.pending_header = QLabel("")  # text set in _rebuild_pending
+        self.pending_header.setStyleSheet(
+            "color:#ffd166; font-size: 12px; "
+            "font-weight:600; letter-spacing: 0.3px;"
         )
-        self.pending_header.setStyleSheet("font-size: 12px; padding-top: 6px;")
         self.pending_header.setVisible(False)
         layout.addWidget(self.pending_header)
 
         self.pending_container = QWidget()
-        # Reserve a bounded slice of the tab for pending cards. The real
-        # content is in the community list below; pending is a side
-        # panel. Without a ceiling, two wrapped-QLabel cards can eat
-        # 300-400px on a normal window and push the community section
-        # into a single-card strip — which is what Peter hit after the
-        # VISIBLE_CAP=3 fix. With Maximum(220) + two small cards, the
-        # community scroll area consistently gets the rest of the tab.
-        self.pending_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        self.pending_container.setSizePolicy(
+            QSizePolicy.Expanding, QSizePolicy.Maximum
+        )
         self.pending_container.setMaximumHeight(220)
         self.pending_layout = QVBoxLayout(self.pending_container)
         self.pending_layout.setContentsMargins(0, 0, 0, 0)
-        self.pending_layout.setSpacing(6)
+        self.pending_layout.setSpacing(10)
         self.pending_container.setVisible(False)
         layout.addWidget(self.pending_container)
 
-        # Divider between "pending (yours)" and "community (others')"
-        self.community_header = QLabel(
-            f"<b style='color:#00dcff;'>{t('fed_community_header')}</b>"
+        # ── Thin divider between "your slime" and "others" ─────────
+        self.divider = QFrame()
+        self.divider.setFrameShape(QFrame.HLine)
+        self.divider.setStyleSheet("color:#2a2a2a; background:#2a2a2a;")
+        self.divider.setFixedHeight(1)
+        self.divider.setVisible(False)   # only shown when pending visible
+        layout.addWidget(self.divider)
+
+        # ── Community section ────────────────────────────────────────
+        self.community_header = QLabel(t("fed_community_header"))
+        self.community_header.setStyleSheet(
+            "color:#00dcff; font-size: 12px; "
+            "font-weight:600; letter-spacing: 0.3px;"
         )
-        self.community_header.setStyleSheet("font-size: 12px; padding-top: 6px;")
         layout.addWidget(self.community_header)
 
-        # Status line (shown when loading / empty / error)
         self.status_lbl = QLabel(t("fed_loading"))
-        self.status_lbl.setStyleSheet("color:#888; padding: 8px;")
+        self.status_lbl.setStyleSheet("color:#666; font-size: 11px; padding: 4px 0;")
         layout.addWidget(self.status_lbl)
 
-        # Scrollable list of pattern cards
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.NoFrame)
         self.list_container = QWidget()
         self.list_layout = QVBoxLayout(self.list_container)
         self.list_layout.setContentsMargins(0, 0, 0, 0)
-        self.list_layout.setSpacing(6)
+        self.list_layout.setSpacing(10)
         self.list_layout.addStretch()
         self.scroll.setWidget(self.list_container)
         layout.addWidget(self.scroll, 1)
 
-        # My contributions + refresh buttons
+        # ── Action row ───────────────────────────────────────────────
+        # my_btn: secondary (ghost). refresh_btn: primary (filled cyan).
+        # Both shorter & less visually loud than before. Matches the
+        # "cards have no chrome" theme above.
         self.my_btn = QPushButton(t("fed_my_contributions"))
+        self.my_btn.setCursor(Qt.PointingHandCursor)
         self.my_btn.clicked.connect(self._open_my_contributions)
         self.my_btn.setStyleSheet(
-            "QPushButton { background:transparent; color:#ffd166;"
-            " padding:6px 14px; border:1px solid #ffd166; border-radius:4px; }"
-            "QPushButton:hover { background:rgba(255,209,102,0.1); }"
+            "QPushButton { background:transparent; color:#ccc;"
+            " padding:6px 14px; border:1px solid #3a3a3a; border-radius:14px;"
+            " font-size:11px; }"
+            "QPushButton:hover { color:#ffd166; border-color:#ffd166; }"
         )
         self.refresh_btn = QPushButton(t("fed_refresh"))
+        self.refresh_btn.setCursor(Qt.PointingHandCursor)
         self.refresh_btn.clicked.connect(self.refresh)
         self.refresh_btn.setStyleSheet(
-            "QPushButton { background:#1e90ff; color:#fff; font-weight:bold;"
-            " padding:6px 16px; border-radius:4px; border:none; }"
-            "QPushButton:hover { background:#3aa0ff; }"
+            "QPushButton { background:#00a8c9; color:#fff; font-weight:500;"
+            " padding:6px 16px; border-radius:14px; border:none;"
+            " font-size:11px; }"
+            "QPushButton:hover { background:#00c0e3; }"
         )
         btn_row = QHBoxLayout()
+        btn_row.setContentsMargins(0, 4, 0, 0)
         btn_row.addWidget(self.my_btn)
         btn_row.addStretch()
         btn_row.addWidget(self.refresh_btn)
@@ -2207,95 +2222,90 @@ class FederationTab(QWidget):
             self.list_layout.insertWidget(self.list_layout.count() - 1, card)
 
     def _build_card(self, pat: dict) -> QWidget:
-        """Render a single pattern as a card with vote buttons."""
+        """Render a single community pattern as a card with vote buttons.
+
+        Design: no filled background, just a 3px left accent bar and
+        padding. Accent color reflects status — cyan for community-
+        promoted, subtle grey-cyan for still-pending. Much lighter
+        visual weight than the translucent-box-with-border treatment
+        it replaces, so a list of 5-10 patterns reads as a list of
+        ideas instead of a stack of colored boxes.
+        """
+        status = pat.get("status", "pending")
+        accent = "#00dcff" if status == "community" else "#3a5f6b"
         card = QFrame()
         card.setStyleSheet(
-            "QFrame { background: rgba(255,255,255,0.04); "
-            "border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; "
-            "padding: 8px; }"
+            f"QFrame {{ background: transparent; "
+            f"border: none; "
+            f"border-left: 3px solid {accent}; }}"
         )
         v = QVBoxLayout(card)
-        v.setContentsMargins(10, 8, 10, 8)
-        v.setSpacing(4)
+        v.setContentsMargins(14, 6, 6, 10)
+        v.setSpacing(6)
 
-        # Top row: category + status + sample_n
-        top = QHBoxLayout()
-        cat_key = f"fed_cat_{pat.get('category', '')}"
-        cat_text = t(cat_key)
-        # Fall back to raw category if the i18n key wasn't found
-        if cat_text == cat_key:
-            cat_text = pat.get("category", "")
-        cat_lbl = QLabel(f"<b style='color:#00dcff;'>{cat_text}</b>")
-        top.addWidget(cat_lbl)
-
-        status = pat.get("status", "pending")
-        status_key = "fed_status_community" if status == "community" else "fed_status_pending"
-        status_color = "#2ed573" if status == "community" else "#ffa502"
-        status_lbl = QLabel(
-            f"<span style='color:{status_color}; font-size:10px;'>"
-            f"[{t(status_key)}]</span>"
-        )
-        top.addWidget(status_lbl)
-        top.addStretch()
-
-        sample = pat.get("sample_n", 0)
-        conf = pat.get("confidence", 0.0)
-        meta_lbl = QLabel(
-            f"<span style='color:#888; font-size:10px;'>"
-            f"樣本 {sample} · 信心 {conf:.0%}</span>"
-        )
-        top.addWidget(meta_lbl)
-        v.addLayout(top)
-
-        # Statement
+        # Statement at the top — this is what the user reads first and
+        # decides on. Larger than the meta line, clearly the main thing.
         stmt_lbl = QLabel(pat.get("statement", ""))
         stmt_lbl.setWordWrap(True)
-        stmt_lbl.setStyleSheet("color: #e0e0e0; font-size: 13px; padding: 4px 0;")
+        stmt_lbl.setStyleSheet("color:#e6e6e6; font-size: 13px;")
         v.addWidget(stmt_lbl)
 
-        # Vote counts
+        # Meta line: category · status · vote tallies. Single row of
+        # small grey text so it reads as supporting info, not chrome.
+        cat_key = f"fed_cat_{pat.get('category', '')}"
+        cat_text = t(cat_key)
+        if cat_text == cat_key:
+            cat_text = pat.get("category", "")
+        status = pat.get("status", "pending")
+        status_key = "fed_status_community" if status == "community" else "fed_status_pending"
+        status_color = "#00dcff" if status == "community" else "#888"
         vc = pat.get("votes_confirm", 0)
         vr = pat.get("votes_refute", 0)
         vu = pat.get("votes_unclear", 0)
-        counts_lbl = QLabel(
-            f"<span style='color:#2ed573;'>✓ {vc}</span> · "
-            f"<span style='color:#e74c3c;'>✗ {vr}</span> · "
-            f"<span style='color:#888;'>? {vu}</span>"
+        meta_lbl = QLabel(
+            f"<span style='color:#888;'>{cat_text}</span>"
+            f"  ·  <span style='color:{status_color};'>{t(status_key)}</span>"
+            f"  ·  <span style='color:#5ab572;'>✓ {vc}</span>"
+            f"  <span style='color:#cc6b63;'>✗ {vr}</span>"
+            f"  <span style='color:#666;'>? {vu}</span>"
         )
-        counts_lbl.setStyleSheet("font-size: 11px;")
-        v.addWidget(counts_lbl)
+        meta_lbl.setStyleSheet("font-size: 10px;")
+        v.addWidget(meta_lbl)
 
-        # Buttons row — disabled if user already voted
+        # Vote row. When user has already voted, show a subtle status
+        # line instead of disabled buttons — fewer visual elements,
+        # same information.
         btn_row = QHBoxLayout()
+        btn_row.setContentsMargins(0, 2, 0, 0)
+        btn_row.setSpacing(6)
         user_voted = pat.get("user_voted")
 
         if user_voted:
             voted_key = f"fed_voted_{user_voted}"
-            voted_lbl = QLabel(f"<i style='color:#888;'>{t(voted_key)}</i>")
+            voted_lbl = QLabel(f"<span style='color:#666;'>{t(voted_key)}</span>")
+            voted_lbl.setStyleSheet("font-size: 10px;")
             btn_row.addWidget(voted_lbl)
             btn_row.addStretch()
         else:
             pattern_id = pat["id"]
-            for vote_type, label_key, bg in [
-                ("confirm", "fed_btn_confirm", "#2ed573"),
-                ("refute",  "fed_btn_refute",  "#e74c3c"),
-                ("unclear", "fed_btn_unclear", "#7f8c8d"),
+            btn_row.addStretch()
+            for vote_type, label_key, fg in [
+                ("confirm", "fed_btn_confirm", "#5ab572"),
+                ("refute",  "fed_btn_refute",  "#cc6b63"),
+                ("unclear", "fed_btn_unclear", "#888"),
             ]:
                 btn = QPushButton(t(label_key))
+                btn.setCursor(Qt.PointingHandCursor)
                 btn.setStyleSheet(
-                    f"QPushButton {{ background:{bg}; color:#fff; "
-                    f"padding:4px 10px; border-radius:4px; border:none; "
-                    f"font-size: 11px; }}"
-                    f"QPushButton:hover {{ opacity: 0.85; }}"
-                    f"QPushButton:disabled {{ background:#444; color:#888; }}"
+                    f"QPushButton {{ background:transparent; color:{fg}; "
+                    f"padding:3px 10px; border:1px solid {fg}; "
+                    f"border-radius:10px; font-size: 10px; }}"
+                    f"QPushButton:hover {{ background:rgba(255,255,255,0.05); }}"
                 )
-                # Capture pattern_id + vote_type in default args so the
-                # lambda doesn't close over the loop variable.
                 btn.clicked.connect(
                     lambda _checked, pid=pattern_id, v=vote_type: self._on_vote(pid, v)
                 )
                 btn_row.addWidget(btn)
-            btn_row.addStretch()
 
         v.addLayout(btn_row)
         return card
@@ -2401,11 +2411,6 @@ class FederationTab(QWidget):
         candidates = list_pending()
 
         if candidates:
-            # Cap visible cards. Server rate-limits submits to 3/day,
-            # so even 3 visible is pushing it — but 2 gives the
-            # community list below real breathing room on an 800px
-            # window. Remainder shows as "還有 N 個候選排隊中" in the
-            # header so queue size is still visible at a glance.
             VISIBLE_CAP = 2
             shown = candidates[:VISIBLE_CAP]
             hidden_count = max(0, len(candidates) - VISIBLE_CAP)
@@ -2413,14 +2418,15 @@ class FederationTab(QWidget):
             suffix = ""
             if hidden_count > 0:
                 suffix = (
-                    f"  <span style='color:#888; font-size:10px;'>"
-                    f"({t('fed_pending_more').format(n=hidden_count)})</span>"
+                    f"  <span style='color:#666; font-weight:400;'>"
+                    f"· {t('fed_pending_more').format(n=hidden_count)}</span>"
                 )
             self.pending_header.setText(
-                f"<b style='color:#ffd166;'>{t('fed_pending_header')}</b>{suffix}"
+                f"{t('fed_pending_header')}{suffix}"
             )
             self.pending_header.setVisible(True)
             self.pending_container.setVisible(True)
+            self.divider.setVisible(True)
             for cand in shown:
                 card = self._build_pending_card(cand)
                 self.pending_layout.addWidget(card)
@@ -2436,68 +2442,80 @@ class FederationTab(QWidget):
             pass
 
         if session_count == 0:
-            # Fresh install: show the header with an inline hint, no
-            # separate card. Keeps the feature discoverable but costs
-            # one line of vertical space instead of a whole card.
+            # Fresh install: header with inline hint, no separate card.
             self.pending_header.setText(
-                f"<b style='color:#ffd166;'>{t('fed_pending_header')}</b>"
-                f"  <span style='color:#888; font-size:10px;'>"
-                f"{t('fed_pending_empty_new_short')}</span>"
+                f"{t('fed_pending_header')}"
+                f"  <span style='color:#666; font-weight:400;'>"
+                f"· {t('fed_pending_empty_new_short')}</span>"
             )
             self.pending_header.setVisible(True)
             self.pending_container.setVisible(False)
+            self.divider.setVisible(True)
             return
 
-        # Used-before-but-nothing-queued-this-round: hide completely so
-        # the community list and buttons get full breathing room. The
-        # tab-title badge counter (_refresh_federation_tab_label) will
-        # still alert the user next time candidates actually arrive.
+        # Used-before-but-nothing-queued-this-round: hide the whole
+        # section (header + divider + container) so the community list
+        # gets full vertical space. The tab-title badge counter still
+        # pings the user when real candidates arrive.
         self.pending_header.setVisible(False)
         self.pending_container.setVisible(False)
+        self.divider.setVisible(False)
 
     def _build_pending_card(self, cand: dict) -> QWidget:
-        """Card for a candidate the slime wants to share — shows the
-        statement + category + confidence, with Share / Skip buttons."""
+        """Card for a candidate the slime wants to share.
+
+        Matches the community-card visual language: no filled
+        background, just a 3px amber left accent (amber = "yours") and
+        padding. Consistent with the cleaner community cards below so
+        the tab reads as one connected list with a color-coded stripe.
+        """
         card = QFrame()
         card.setStyleSheet(
-            "QFrame { background: rgba(255,209,102,0.06); "
-            "border: 1px solid rgba(255,209,102,0.25); border-radius: 6px; "
-            "padding: 8px; }"
+            "QFrame { background: transparent; border: none; "
+            "border-left: 3px solid #ffd166; }"
         )
         v = QVBoxLayout(card)
-        v.setContentsMargins(10, 8, 10, 8)
+        v.setContentsMargins(14, 6, 6, 10)
         v.setSpacing(6)
 
         stmt = QLabel(cand.get("statement", ""))
         stmt.setWordWrap(True)
-        stmt.setStyleSheet("color:#e6e6e6; font-size: 12px;")
+        stmt.setStyleSheet("color:#e6e6e6; font-size: 13px;")
         v.addWidget(stmt)
 
+        # Meta: category · confidence. Same density as community card
+        # meta so the two sections line up visually.
+        cat_text = t(f"fed_cat_{cand.get('category','')}") or cand.get("category", "")
+        conf_pct = int((cand.get("confidence", 0) or 0) * 100)
         meta = QLabel(
-            t("fed_pending_meta").format(
-                category=t(f"fed_cat_{cand.get('category','')}") or cand.get("category", ""),
-                confidence=int((cand.get("confidence", 0) or 0) * 100),
-            )
+            f"<span style='color:#888;'>{cat_text}</span>"
+            f"  ·  <span style='color:#888;'>{t('fed_pending_confidence').format(pct=conf_pct)}</span>"
         )
-        meta.setStyleSheet("color:#888; font-size: 10px;")
+        meta.setStyleSheet("font-size: 10px;")
         v.addWidget(meta)
 
         btn_row = QHBoxLayout()
+        btn_row.setContentsMargins(0, 2, 0, 0)
+        btn_row.setSpacing(6)
         btn_row.addStretch()
 
         skip_btn = QPushButton(t("fed_pending_skip"))
+        skip_btn.setCursor(Qt.PointingHandCursor)
         skip_btn.setStyleSheet(
             "QPushButton { background:transparent; color:#888;"
-            " padding:4px 10px; border:1px solid #555; border-radius:4px; }"
-            "QPushButton:hover { background:rgba(255,255,255,0.05); }"
+            " padding:3px 12px; border:1px solid #444; border-radius:10px;"
+            " font-size:10px; }"
+            "QPushButton:hover { color:#ccc; border-color:#666; }"
         )
         skip_btn.clicked.connect(lambda _, cid=cand["id"]: self._on_skip_candidate(cid))
         btn_row.addWidget(skip_btn)
 
         share_btn = QPushButton(t("fed_pending_share"))
+        share_btn.setCursor(Qt.PointingHandCursor)
         share_btn.setStyleSheet(
-            "QPushButton { background:#ffd166; color:#222; font-weight:bold;"
-            " padding:4px 12px; border:none; border-radius:4px; }"
+            "QPushButton { background:#ffd166; color:#1a1a1a; font-weight:600;"
+            " padding:3px 14px; border:none; border-radius:10px;"
+            " font-size:10px; }"
             "QPushButton:hover { background:#ffdc88; }"
         )
         share_btn.clicked.connect(lambda _, cid=cand["id"]: self._on_approve_candidate(cid))
@@ -2562,10 +2580,13 @@ class FederationTab(QWidget):
 
     # ── i18n ──────────────────────────────────────────────────────────
     def retranslate(self):
-        self.header_lbl.setText(f"<b style='color:#00dcff;'>{t('fed_header')}</b>")
-        self.desc_lbl.setText(t("fed_desc"))
-        self.pending_header.setText(f"<b style='color:#ffd166;'>{t('fed_pending_header')}</b>")
-        self.community_header.setText(f"<b style='color:#00dcff;'>{t('fed_community_header')}</b>")
+        self.header_lbl.setText(
+            f"<span style='color:#00dcff; font-weight:600;'>"
+            f"{t('fed_header')}</span>"
+            f"  <span style='color:#666; font-weight:400; font-size:11px;'>"
+            f"{t('fed_subtitle')}</span>"
+        )
+        self.community_header.setText(t("fed_community_header"))
         self.refresh_btn.setText(t("fed_refresh"))
         self.my_btn.setText(t("fed_my_contributions"))
         self.refresh()
