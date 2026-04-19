@@ -1953,6 +1953,31 @@ class FederationTab(QWidget):
         self.desc_lbl.setStyleSheet("color:#aaa; font-size: 11px;")
         layout.addWidget(self.desc_lbl)
 
+        # "Pending to share" section — candidates the slime wants to
+        # share, each needing explicit user approval before upload.
+        # Hidden when the queue is empty (which is the common case on
+        # first launch, before the distiller has run a few times).
+        self.pending_header = QLabel(
+            f"<b style='color:#ffd166;'>{t('fed_pending_header')}</b>"
+        )
+        self.pending_header.setStyleSheet("font-size: 12px; padding-top: 6px;")
+        self.pending_header.setVisible(False)
+        layout.addWidget(self.pending_header)
+
+        self.pending_container = QWidget()
+        self.pending_layout = QVBoxLayout(self.pending_container)
+        self.pending_layout.setContentsMargins(0, 0, 0, 0)
+        self.pending_layout.setSpacing(6)
+        self.pending_container.setVisible(False)
+        layout.addWidget(self.pending_container)
+
+        # Divider between "pending (yours)" and "community (others')"
+        self.community_header = QLabel(
+            f"<b style='color:#00dcff;'>{t('fed_community_header')}</b>"
+        )
+        self.community_header.setStyleSheet("font-size: 12px; padding-top: 6px;")
+        layout.addWidget(self.community_header)
+
         # Status line (shown when loading / empty / error)
         self.status_lbl = QLabel(t("fed_loading"))
         self.status_lbl.setStyleSheet("color:#888; padding: 8px;")
@@ -1993,6 +2018,11 @@ class FederationTab(QWidget):
         endpoint returns fast. A background thread would be nice but
         isn't worth the complexity at this scale.
         """
+        # Refresh the "pending to share" section first. It's local-only
+        # (no network), so even if the relay is down the user can still
+        # see + approve candidates the slime prepared earlier.
+        self._rebuild_pending()
+
         self.status_lbl.setText(t("fed_loading"))
         self.status_lbl.setVisible(True)
         # Clear old cards but keep the trailing stretch
@@ -2164,10 +2194,107 @@ class FederationTab(QWidget):
         # based on the new data.
         self.refresh()
 
+    # ── Pending candidates (the slime wants to share) ─────────────────
+
+    def _rebuild_pending(self):
+        """Re-render the "pending to share" section from the local queue."""
+        # Clear old cards
+        while self.pending_layout.count() > 0:
+            item = self.pending_layout.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+
+        from sentinel.growth.federation import list_pending
+        candidates = list_pending()
+
+        if not candidates:
+            self.pending_header.setVisible(False)
+            self.pending_container.setVisible(False)
+            return
+
+        self.pending_header.setVisible(True)
+        self.pending_container.setVisible(True)
+        for cand in candidates:
+            card = self._build_pending_card(cand)
+            self.pending_layout.addWidget(card)
+
+    def _build_pending_card(self, cand: dict) -> QWidget:
+        """Card for a candidate the slime wants to share — shows the
+        statement + category + confidence, with Share / Skip buttons."""
+        card = QFrame()
+        card.setStyleSheet(
+            "QFrame { background: rgba(255,209,102,0.06); "
+            "border: 1px solid rgba(255,209,102,0.25); border-radius: 6px; "
+            "padding: 8px; }"
+        )
+        v = QVBoxLayout(card)
+        v.setContentsMargins(10, 8, 10, 8)
+        v.setSpacing(6)
+
+        stmt = QLabel(cand.get("statement", ""))
+        stmt.setWordWrap(True)
+        stmt.setStyleSheet("color:#e6e6e6; font-size: 12px;")
+        v.addWidget(stmt)
+
+        meta = QLabel(
+            t("fed_pending_meta").format(
+                category=t(f"fed_cat_{cand.get('category','')}") or cand.get("category", ""),
+                confidence=int((cand.get("confidence", 0) or 0) * 100),
+            )
+        )
+        meta.setStyleSheet("color:#888; font-size: 10px;")
+        v.addWidget(meta)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+
+        skip_btn = QPushButton(t("fed_pending_skip"))
+        skip_btn.setStyleSheet(
+            "QPushButton { background:transparent; color:#888;"
+            " padding:4px 10px; border:1px solid #555; border-radius:4px; }"
+            "QPushButton:hover { background:rgba(255,255,255,0.05); }"
+        )
+        skip_btn.clicked.connect(lambda _, cid=cand["id"]: self._on_skip_candidate(cid))
+        btn_row.addWidget(skip_btn)
+
+        share_btn = QPushButton(t("fed_pending_share"))
+        share_btn.setStyleSheet(
+            "QPushButton { background:#ffd166; color:#222; font-weight:bold;"
+            " padding:4px 12px; border:none; border-radius:4px; }"
+            "QPushButton:hover { background:#ffdc88; }"
+        )
+        share_btn.clicked.connect(lambda _, cid=cand["id"]: self._on_approve_candidate(cid))
+        btn_row.addWidget(share_btn)
+
+        v.addLayout(btn_row)
+        return card
+
+    def _on_approve_candidate(self, candidate_id: str):
+        from sentinel.growth.federation import approve_candidate
+        err = approve_candidate(candidate_id)
+        if err is None:
+            QMessageBox.information(self, "AI Slime", t("fed_pending_shared"))
+        else:
+            # Show the message from the server / local validator verbatim —
+            # it's already user-facing Chinese from federation.py's mapping.
+            QMessageBox.warning(self, "AI Slime", err.message)
+        # Refresh both sections — the candidate is gone (or kept on
+        # transient error), and the community list may have the new
+        # pattern if submission succeeded.
+        self.refresh()
+
+    def _on_skip_candidate(self, candidate_id: str):
+        from sentinel.growth.federation import skip_candidate
+        skip_candidate(candidate_id)
+        self._rebuild_pending()
+
     # ── i18n ──────────────────────────────────────────────────────────
     def retranslate(self):
         self.header_lbl.setText(f"<b style='color:#00dcff;'>{t('fed_header')}</b>")
         self.desc_lbl.setText(t("fed_desc"))
+        self.pending_header.setText(f"<b style='color:#ffd166;'>{t('fed_pending_header')}</b>")
+        self.community_header.setText(f"<b style='color:#00dcff;'>{t('fed_community_header')}</b>")
         self.refresh_btn.setText(t("fed_refresh"))
         self.refresh()
 

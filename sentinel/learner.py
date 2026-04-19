@@ -21,7 +21,13 @@ DISTILL_TEMPLATE = (
     "用純 JSON 回覆（不要 markdown、不要 ```）：\n"
     '{"observations":["1-2個簡短新發現"],'
     '"patterns":{"work_style":"簡短","preferences":"簡短","pain_points":"簡短"},'
-    '"updated_profile":"一段話總結使用者"}'
+    '"updated_profile":"一段話總結使用者",'
+    '"federation_candidates":[{"category":"schedule|tooling|workflow|health|focus","statement":"不含任何路徑/網址/email/帳號的一句觀察（≤80字，描述「這類使用者」而非「這位使用者」）","confidence":0.0~1.0}]}\n\n'
+    "federation_candidates 規則（重要，違反就留空陣列 []）：\n"
+    "1. 絕對不能含：絕對路徑（C:\\... 或 /Users/...）、網址、email、電話、git hash、帳號名稱\n"
+    "2. 描述要通用：用「寫程式的人」「夜貓族」「研究型任務」等群體描述，不要「這位使用者」\n"
+    "3. 只有在觀察到明確模式（非單次事件）才提出，不確定就留空\n"
+    "4. 最多 2 條，寧缺勿濫"
 )
 
 SPEECH_DISTILL_TEMPLATE = (
@@ -99,6 +105,36 @@ def distill_from_activity(recent_activity: str):
         memory["observations"] = (memory.get("observations", []) + new_obs)[-50:]  # Keep last 50
         memory["last_updated"] = time.time()
         memory["session_count"] = memory.get("session_count", 0) + 1
+
+        # Federation candidates: the LLM's proposed patterns to share
+        # with the community pool. They go into a local pending queue —
+        # the user approves each one via the 公頻 tab before anything
+        # is uploaded. We do this here (not inline in growth.federation)
+        # so the distillation → candidate pipeline is one trace to read.
+        # See sentinel/growth/federation.py for the opt-in contract.
+        candidates = result.get("federation_candidates") or []
+        if isinstance(candidates, list) and candidates:
+            try:
+                from sentinel.growth.federation import add_candidate
+                added = 0
+                for c in candidates[:3]:  # hard cap regardless of model output
+                    if not isinstance(c, dict):
+                        continue
+                    ok = add_candidate(
+                        category=str(c.get("category", "")),
+                        statement=str(c.get("statement", "")),
+                        confidence=float(c.get("confidence", 0.6) or 0.6),
+                        sample_n=max(1, memory["session_count"]),
+                    )
+                    if ok:
+                        added += 1
+                if added:
+                    log.info(f"Enqueued {added} federation candidate(s) for user review")
+            except Exception as e:
+                # Never let a federation hiccup break the distillation —
+                # profile update is the critical path; candidates are a
+                # nice-to-have by-product.
+                log.warning(f"Failed to enqueue federation candidates: {e}")
 
         # Save learning log entry
         log_entry = {

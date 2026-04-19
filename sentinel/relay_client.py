@@ -260,3 +260,27 @@ def vote_pattern(pattern_id: str, vote: str) -> dict:
     """
     return _request("POST", f"federation/patterns/{pattern_id}/vote",
                     {"vote": vote}, auth=True)
+
+
+def submit_pattern(category: str, statement: str,
+                   confidence: float = 0.5, sample_n: int = 1) -> dict:
+    """Submit a pattern to the community pool.
+
+    Server-side rules (enforced in server/federation/service.py):
+      - category ∈ {schedule, tooling, workflow, health, focus}
+      - statement length ≤ 100 chars, no PII (email/URL/path/phone/hex)
+      - max 3 submissions per user per 24h
+
+    Returns {"ok": True, "id": str, "remaining_today": int, ...} on
+    success. Raises RelayError with code:
+      - "400"  INVALID_CATEGORY / EMPTY_STATEMENT / STATEMENT_TOO_LONG
+      - "422"  PII_DETECTED
+      - "429"  RATE_LIMITED
+      - "401"  not logged in
+    """
+    return _request("POST", "federation/patterns", {
+        "category": category,
+        "statement": statement,
+        "confidence": confidence,
+        "sample_n": sample_n,
+    })

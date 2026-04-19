@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+### Added
+- **公頻投稿管線（Phase A1）** — 公頻從「只能看 + 投票」變成活的社群。
+  每小時的 LLM 蒸餾多產出 `federation_candidates`（群體化描述、去識別化），
+  進本地待審佇列 `~/.hermes/pending_federation.json`；公頻 tab 頂部新增
+  「🌱 你的史萊姆想分享這些心得」區塊，使用者按「分享」才真的上傳。
+  - Server：`POST /federation/patterns` 含 PII 過濾（email / URL / 絕對路徑 /
+    電話 / 長 hex token 一律拒）、類別白名單、長度上限 100 字、每使用者每 24h
+    3 條 rate limit
+  - Client：`sentinel/growth/federation.py` 的 stub 改實裝，dedup 機制避免
+    同一句話重複上架
+  - 設計文件：詳見 `sentinel/growth/federation.py` 開頭的三層式 opt-in 架構
+
 ### Fixed
 - **macOS SIGTRAP 崩潰** — `pynput` 的 `keyboard.Listener` 在 macOS 內部透過 ctypes 呼叫
   `TSMGetInputSourceProperty`，此 API 要求在主 dispatch queue 執行；但 `InputTracker.start()`

@@ -119,11 +119,22 @@ PR 5 will flesh out the HTTP calls to the relay.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
-from dataclasses import dataclass, field
+import time
+from dataclasses import dataclass, field, asdict
+from pathlib import Path
 from typing import Optional
 
 log = logging.getLogger("sentinel.growth.federation")
+
+# Local queue of pattern candidates the slime wants to share. The user
+# reviews these in the 公頻 tab and explicitly approves each before it
+# hits the network. Size is capped so a runaway distiller can't balloon
+# the file.
+PENDING_FILE = Path.home() / ".hermes" / "pending_federation.json"
+MAX_PENDING = 20
 
 # Categories are intentionally few and concrete. Adding a new one is a
 # schema change that needs server-side update too.
@@ -158,45 +169,222 @@ class PatternSubmitError:
     message: str
 
 
-# ── Stubs — PR 5 will implement these ─────────────────────────────
+# ── Submission (Phase A1 — live) ──────────────────────────────────
 
 def submit_pattern(pattern: Pattern) -> Optional[PatternSubmitError]:
-    """Submit a pattern to the community pool.
+    """Submit a pattern to the community pool via the relay.
 
-    Currently: logs and returns an error. The relay doesn't have these
-    endpoints yet. See PR 5.
+    Runs client-side validation first (saves a round-trip), then POSTs
+    through relay_client. Server re-checks everything — the two gates
+    are deliberately redundant so a malicious client can't skip scrub.
+
+    Returns None on success, a PatternSubmitError on refusal. Callers
+    should show the error.message directly to the user.
     """
-    log.warning(
-        "federation.submit_pattern called but not yet implemented "
-        "(pattern category=%s). See PR 5.",
-        pattern.category,
-    )
-    return PatternSubmitError(
-        code="NOT_IMPLEMENTED",
-        message=(
-            "聯邦學習協議尚未實裝（PR 5 才會完成）。你的觀察已儲存在本地。"
-        ),
-    )
+    local_err = validate_pattern(pattern)
+    if local_err is not None:
+        return local_err
 
+    try:
+        # Imported lazily so tests that only exercise the pure helpers
+        # above don't need a relay URL configured.
+        from sentinel import relay_client
+        resp = relay_client.submit_pattern(
+            category=pattern.category,
+            statement=pattern.statement,
+            confidence=pattern.confidence_local,
+            sample_n=pattern.sample_n,
+        )
+        # Server returned the assigned id — propagate so the caller can
+        # track it (and eventually show in a "my contributions" tab).
+        pattern.id = resp.get("id", pattern.id)
+        pattern.submitted_at = time.time()
+        log.info(f"Pattern submitted: id={pattern.id} category={pattern.category}")
+        return None
+    except Exception as e:
+        # relay_client raises RelayError with .code set to HTTP status
+        # or a tag ("NETWORK", "NOT_CONFIGURED"). Map the common cases
+        # to design-doc codes so the UI can react consistently.
+        code_raw = getattr(e, "code", "NETWORK")
+        message = getattr(e, "message", str(e))
+        mapped = {
+            "401": ("NOT_AUTHED", "請先到「設定」分頁登入 Google 帳號。"),
+            "422": ("CONTAINS_PII", f"伺服器拒絕：{message}"),
+            "429": ("RATE_LIMITED", f"今天分享次數已達上限：{message}"),
+            "400": ("BAD_REQUEST", f"伺服器拒絕：{message}"),
+        }.get(str(code_raw), ("NETWORK", f"連線失敗：{message}"))
+        log.warning(f"Pattern submit refused: {mapped[0]} — {mapped[1]}")
+        return PatternSubmitError(code=mapped[0], message=mapped[1])
+
+
+# Fetch helpers kept as stubs — the GUI calls relay_client directly for
+# the list/vote views, so these client-side re-wrappings aren't used
+# yet. Leaving them in place so the design doc at the top of this file
+# still matches the public API surface.
 
 def fetch_community_patterns(category: Optional[str] = None,
                              limit: int = 20) -> list[Pattern]:
-    """Fetch community-approved patterns. Currently returns empty."""
-    log.warning(
-        "federation.fetch_community_patterns called but not yet implemented. "
-        "See PR 5."
-    )
+    """Currently the GUI calls relay_client.list_patterns directly.
+    Kept as an explicit no-op so the design-doc signature remains valid
+    if we later want a caching layer here."""
     return []
 
 
 def vote_on_pattern(pattern_id: str, vote: str) -> bool:
-    """Vote confirm/refute/unclear on a pattern. vote ∈ {'confirm',
-    'refute', 'unclear'}. Returns False (not implemented)."""
-    log.warning(
-        "federation.vote_on_pattern called but not yet implemented. "
-        "See PR 5."
-    )
+    """Currently the GUI calls relay_client.vote_pattern directly."""
     return False
+
+
+# ── Local pending-candidates queue ────────────────────────────────
+#
+# Learner distillation (sentinel/learner.py) produces candidate patterns
+# as a by-product of the hourly profile update. Instead of auto-submitting
+# them (which violates the "opt-in per pattern" contract in the design
+# doc above), we stash them here. The GUI shows them on top of the
+# federation tab and the user approves each one explicitly.
+
+def _candidate_hash(category: str, statement: str) -> str:
+    """Stable fingerprint so two distillation runs don't enqueue the
+    same candidate twice. Lowercase + stripped — small punctuation
+    differences shouldn't count as distinct patterns."""
+    key = f"{category}::{statement.strip().lower()}"
+    return hashlib.sha1(key.encode("utf-8")).hexdigest()[:12]
+
+
+def load_pending() -> dict:
+    """Read the pending queue. Shape:
+       {"candidates": [{id, category, statement, confidence, sample_n,
+                        created_at}, ...],
+        "seen_hashes": [<hex>, ...]}   # both pending and historically submitted
+    """
+    if PENDING_FILE.exists():
+        try:
+            return json.loads(PENDING_FILE.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as e:
+            log.warning(f"pending_federation.json unreadable: {e} — starting fresh")
+    return {"candidates": [], "seen_hashes": []}
+
+
+def save_pending(data: dict) -> None:
+    PENDING_FILE.parent.mkdir(parents=True, exist_ok=True)
+    PENDING_FILE.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def add_candidate(category: str, statement: str,
+                  confidence: float = 0.6, sample_n: int = 3) -> bool:
+    """Enqueue a pattern candidate from the distiller.
+
+    Skips duplicates (same category+statement seen before, whether still
+    pending or already submitted/skipped). Drops invalid shapes silently
+    so one bad LLM output can't block the whole distillation cycle.
+
+    Returns True if added, False if skipped (dup / invalid).
+    """
+    statement = (statement or "").strip()
+    if not statement or category not in VALID_CATEGORIES:
+        return False
+    if len(statement) > 100:
+        statement = statement[:100].rstrip()
+    # Cheap client-side PII guard — the real check is server-side, but
+    # filtering obvious leaks early keeps the queue clean so the user
+    # doesn't see their own file paths prompted back at them.
+    if _looks_like_pii(statement):
+        log.info(f"Skipping candidate with PII-like content: {statement[:40]}…")
+        return False
+
+    data = load_pending()
+    h = _candidate_hash(category, statement)
+    if h in data.get("seen_hashes", []):
+        return False
+
+    cand = {
+        "id": h,
+        "category": category,
+        "statement": statement,
+        "confidence": max(0.0, min(1.0, float(confidence))),
+        "sample_n": max(1, int(sample_n)),
+        "created_at": time.time(),
+    }
+    data.setdefault("candidates", []).append(cand)
+    data.setdefault("seen_hashes", []).append(h)
+
+    # Cap queue size — drop oldest so fresh candidates can always land.
+    # Cap seen_hashes separately but wider, so we keep remembering
+    # "we already showed this one" even after it's been purged from
+    # the active queue.
+    if len(data["candidates"]) > MAX_PENDING:
+        data["candidates"] = data["candidates"][-MAX_PENDING:]
+    if len(data["seen_hashes"]) > MAX_PENDING * 10:
+        data["seen_hashes"] = data["seen_hashes"][-MAX_PENDING * 10:]
+
+    save_pending(data)
+    log.info(f"Enqueued federation candidate: [{category}] {statement[:40]}…")
+    return True
+
+
+def list_pending() -> list[dict]:
+    """Return current pending candidates in enqueue order (oldest first)."""
+    return list(load_pending().get("candidates", []))
+
+
+def _remove_candidate(candidate_id: str) -> Optional[dict]:
+    data = load_pending()
+    kept = []
+    removed = None
+    for c in data.get("candidates", []):
+        if c.get("id") == candidate_id and removed is None:
+            removed = c
+        else:
+            kept.append(c)
+    data["candidates"] = kept
+    save_pending(data)
+    return removed
+
+
+def approve_candidate(candidate_id: str) -> Optional[PatternSubmitError]:
+    """Approve a pending candidate and submit it to the pool.
+
+    On success: the candidate is removed from the pending queue.
+    On refusal: the candidate is ALSO removed if the server said this
+    content will never be accepted (PII/bad shape); kept otherwise so a
+    transient network failure doesn't make the user re-generate.
+    """
+    cand = None
+    for c in list_pending():
+        if c.get("id") == candidate_id:
+            cand = c
+            break
+    if cand is None:
+        return PatternSubmitError(code="NOT_FOUND",
+                                  message="候選已不在列表中。")
+
+    pat = Pattern(
+        category=cand["category"],
+        statement=cand["statement"],
+        confidence_local=cand.get("confidence", 0.6),
+        sample_n=cand.get("sample_n", 3),
+    )
+    err = submit_pattern(pat)
+    if err is None:
+        _remove_candidate(candidate_id)
+        return None
+
+    # Permanent refusals: drop from queue so the user isn't stuck with
+    # a zombie card that will always fail. Transient ones stay.
+    if err.code in ("CONTAINS_PII", "BAD_REQUEST", "BAD_CATEGORY",
+                    "BAD_STATEMENT", "TOO_FEW_SAMPLES", "BAD_CONFIDENCE"):
+        _remove_candidate(candidate_id)
+    return err
+
+
+def skip_candidate(candidate_id: str) -> bool:
+    """Remove a candidate from the queue without submitting. The hash
+    stays in seen_hashes so the same candidate won't re-appear next
+    distillation cycle. Returns True if removed, False if not found."""
+    return _remove_candidate(candidate_id) is not None
 
 
 # ── Local helpers that ARE usable today ───────────────────────────
