@@ -2093,15 +2093,12 @@ class FederationTab(QWidget):
         layout.addWidget(self.pending_header)
 
         self.pending_container = QWidget()
-        # Preferred (not Maximum) vertical: lets the container grow
-        # to fit its children's heightForWidth. Maximum here combined
-        # with a wrapped-QLabel child collapsed to ~0 height on some
-        # layouts because the label's sizeHint was computed before it
-        # had a width, so "don't grow beyond sizeHint" meant "stay 0".
-        # A hard ceiling via setMaximumHeight is what actually prevents
-        # runaway growth; the card itself also limits via Maximum.
+        # Preferred vertically: the container grows to fit its children.
+        # We no longer clamp via setMaximumHeight(600) — that cap combined
+        # with a larger pending queue (users can accumulate 20+ candidates
+        # across distillation cycles) silently clipped all cards from view.
+        # Overflow is prevented by capping rendered cards below instead.
         self.pending_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        self.pending_container.setMaximumHeight(600)
         self.pending_layout = QVBoxLayout(self.pending_container)
         self.pending_layout.setContentsMargins(0, 0, 0, 0)
         self.pending_layout.setSpacing(6)
@@ -2401,14 +2398,27 @@ class FederationTab(QWidget):
         candidates = list_pending()
 
         if candidates:
-            # Normal state: real candidates to act on. Full header
-            # without the "no pending" suffix.
+            # Cap visible cards. Server rate-limits submits to 3/day, so
+            # showing more than that is just vertical clutter — and with
+            # a large queue (20+) rendering every card used to overflow
+            # the container silently. "還有 N 個候選" below the top-3
+            # makes the queue size visible without cost.
+            VISIBLE_CAP = 3
+            shown = candidates[:VISIBLE_CAP]
+            hidden_count = max(0, len(candidates) - VISIBLE_CAP)
+
+            suffix = ""
+            if hidden_count > 0:
+                suffix = (
+                    f"  <span style='color:#888; font-size:10px;'>"
+                    f"({t('fed_pending_more').format(n=hidden_count)})</span>"
+                )
             self.pending_header.setText(
-                f"<b style='color:#ffd166;'>{t('fed_pending_header')}</b>"
+                f"<b style='color:#ffd166;'>{t('fed_pending_header')}</b>{suffix}"
             )
             self.pending_header.setVisible(True)
             self.pending_container.setVisible(True)
-            for cand in candidates:
+            for cand in shown:
                 card = self._build_pending_card(cand)
                 self.pending_layout.addWidget(card)
             return
