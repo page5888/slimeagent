@@ -2376,11 +2376,19 @@ class FederationTab(QWidget):
     def _rebuild_pending(self):
         """Re-render the "pending to share" section from the local queue.
 
-        Always visible (Phase A3): when empty, shows an onboarding hint
-        so new users understand why nothing is there and what will
-        trigger candidates to appear. The pre-A3 behavior was to hide
-        the section entirely, which made the feature invisible on a
-        fresh install — users had no way to know it existed.
+        Layout contract (redesigned):
+          - has candidates:       show header + 1 card per candidate
+          - no candidates, fresh: show header + inline "first distill
+                                  within ~1 hour" hint under it, no card
+          - no candidates, used:  HIDE header + container entirely so
+                                  the empty middle doesn't squeeze the
+                                  community list below
+
+        The previous design always drew a placeholder card even when
+        there was nothing to act on, which pushed community patterns
+        and the action buttons toward the bottom of the tab on every
+        visit. Not worth the visual cost for a hint that's mostly
+        relevant on day 0 only.
         """
         # Clear old cards
         while self.pending_layout.count() > 0:
@@ -2392,26 +2400,21 @@ class FederationTab(QWidget):
         from sentinel.growth.federation import list_pending
         candidates = list_pending()
 
-        # Always show header — the section is a permanent part of the
-        # tab, not a conditional surprise.
-        self.pending_header.setVisible(True)
-        self.pending_container.setVisible(True)
-
-        if not candidates:
-            self.pending_layout.addWidget(self._build_pending_empty_card())
+        if candidates:
+            # Normal state: real candidates to act on. Full header
+            # without the "no pending" suffix.
+            self.pending_header.setText(
+                f"<b style='color:#ffd166;'>{t('fed_pending_header')}</b>"
+            )
+            self.pending_header.setVisible(True)
+            self.pending_container.setVisible(True)
+            for cand in candidates:
+                card = self._build_pending_card(cand)
+                self.pending_layout.addWidget(card)
             return
 
-        for cand in candidates:
-            card = self._build_pending_card(cand)
-            self.pending_layout.addWidget(card)
-
-    def _build_pending_empty_card(self) -> QWidget:
-        """Onboarding placeholder when the candidate queue is empty.
-
-        Tells the user what to expect rather than leaving a silent void.
-        Peeks at session_count from learner memory so the message can
-        be specific ("還在觀察中" vs "第 3 次蒸餾後會有候選").
-        """
+        # Empty — decide between "onboarding hint" and "hide entirely"
+        # based on how long the slime has been running.
         session_count = 0
         try:
             from sentinel.learner import load_memory
@@ -2420,30 +2423,24 @@ class FederationTab(QWidget):
             pass
 
         if session_count == 0:
-            body = t("fed_pending_empty_new")
-        else:
-            body = t("fed_pending_empty_seen").format(sessions=session_count)
+            # Fresh install: show the header with an inline hint, no
+            # separate card. Keeps the feature discoverable but costs
+            # one line of vertical space instead of a whole card.
+            self.pending_header.setText(
+                f"<b style='color:#ffd166;'>{t('fed_pending_header')}</b>"
+                f"  <span style='color:#888; font-size:10px;'>"
+                f"{t('fed_pending_empty_new_short')}</span>"
+            )
+            self.pending_header.setVisible(True)
+            self.pending_container.setVisible(False)
+            return
 
-        # Dead-simple render: one QLabel with rich-text HTML, no nested
-        # frame, no stylesheet padding. Previous attempts used a QFrame
-        # wrapper with QSS padding + word-wrapped inner QLabel, which on
-        # some Windows/Qt/DPI combinations rendered the whole thing
-        # invisible (heightForWidth returning 0 before layout pass).
-        # Using rich text means font color and spacing are handled by
-        # Qt's text renderer, not QSS — rock solid across platforms.
-        html = (
-            "<div style='background-color:rgba(255,209,102,0.10); "
-            "border:1px dashed #ffd166; border-radius:6px; "
-            "padding:12px 14px; margin:0;'>"
-            f"<span style='color:#e6e6e6; font-size:11px;'>"
-            f"{body}</span></div>"
-        )
-        lbl = QLabel(html)
-        lbl.setTextFormat(Qt.RichText)
-        lbl.setWordWrap(True)
-        lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        lbl.setMinimumHeight(56)
-        return lbl
+        # Used-before-but-nothing-queued-this-round: hide completely so
+        # the community list and buttons get full breathing room. The
+        # tab-title badge counter (_refresh_federation_tab_label) will
+        # still alert the user next time candidates actually arrive.
+        self.pending_header.setVisible(False)
+        self.pending_container.setVisible(False)
 
     def _build_pending_card(self, cand: dict) -> QWidget:
         """Card for a candidate the slime wants to share — shows the
