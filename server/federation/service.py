@@ -126,6 +126,25 @@ async def list_recent(limit: int = 20,
     return rows
 
 
+async def list_user_patterns(user_id: str, limit: int = 50) -> list[dict]:
+    """Return patterns this user has submitted, newest first.
+
+    Used by the 「🏆 我的貢獻」 dialog in the client so users can see how
+    their shared patterns are doing. Includes status (pending /
+    community / rejected) and the three vote counters, no need to join
+    anything — all state is on the pattern row itself.
+    """
+    db = await get_db()
+    rows = await db.execute_fetchall(
+        "SELECT id, category, statement, confidence, sample_n, status, "
+        "votes_confirm, votes_refute, votes_unclear, promoted_at, created_at "
+        "FROM patterns WHERE creator_id = ? "
+        "ORDER BY created_at DESC LIMIT ?",
+        (user_id, limit),
+    )
+    return rows
+
+
 async def cast_vote(user_id: str, pattern_id: str, vote: str) -> dict:
     """Record a vote. Raises ValueError on already-voted or not-found.
 

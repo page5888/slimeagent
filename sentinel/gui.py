@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QTextEdit, QLineEdit, QPushButton, QLabel, QProgressBar, QGroupBox,
     QFormLayout, QComboBox, QPlainTextEdit, QSystemTrayIcon, QMenu,
     QScrollArea, QFrame, QSpinBox, QMessageBox, QInputDialog,
-    QListWidget, QListWidgetItem, QSplitter,
+    QListWidget, QListWidgetItem, QSplitter, QDialog,
 )
 from PySide6.QtCore import Qt, QTimer, Signal, Slot, QObject, QThread, QSize, QRect, QPoint
 from PySide6.QtWidgets import QLayout, QSizePolicy
@@ -1932,7 +1932,135 @@ class MemoryTab(QWidget):
 # Layer 3 of the federation design (sentinel/growth/federation.py):
 # other slimes' abstracted observations arrive here as "patterns", and
 # this tab lets the user vote whether the statement also fits them.
-# Submission (layer 2) is a later PR.
+# Submission (layer 2) shipped in Phase A1.
+
+
+class MyContributionsDialog(QDialog):
+    """Shows the user's own submitted patterns with current vote counts
+    and promotion status. Phase A3 — gives users visible feedback on
+    sharing so the loop doesn't feel one-way."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(t("fed_my_contributions"))
+        self.setMinimumSize(520, 420)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(8)
+
+        # Header + summary line (filled in _load after the fetch)
+        title = QLabel(f"<b style='color:#ffd166;'>{t('fed_my_contributions')}</b>")
+        title.setStyleSheet("font-size: 14px;")
+        layout.addWidget(title)
+
+        self.summary_lbl = QLabel(t("fed_loading"))
+        self.summary_lbl.setStyleSheet("color:#888; font-size: 11px;")
+        layout.addWidget(self.summary_lbl)
+
+        # Scrollable list of contribution cards
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        container = QWidget()
+        self.list_layout = QVBoxLayout(container)
+        self.list_layout.setContentsMargins(0, 0, 0, 0)
+        self.list_layout.setSpacing(6)
+        self.list_layout.addStretch()
+        scroll.setWidget(container)
+        layout.addWidget(scroll, 1)
+
+        close_btn = QPushButton(t("fed_my_close"))
+        close_btn.clicked.connect(self.accept)
+        close_btn.setStyleSheet(
+            "QPushButton { background:#333; color:#fff;"
+            " padding:6px 16px; border-radius:4px; border:none; }"
+            "QPushButton:hover { background:#444; }"
+        )
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        btn_row.addWidget(close_btn)
+        layout.addLayout(btn_row)
+
+        self._load()
+
+    def _load(self):
+        """Fetch my-patterns from relay and render cards."""
+        try:
+            from sentinel import relay_client
+            from sentinel.relay_client import RelayError
+        except Exception as e:
+            self.summary_lbl.setText(str(e))
+            return
+
+        try:
+            resp = relay_client.list_my_patterns(limit=50)
+        except Exception as e:
+            from sentinel.relay_client import RelayError
+            if isinstance(e, RelayError) and str(e.code) in ("401", "422"):
+                self.summary_lbl.setText(t("fed_login_required"))
+            else:
+                self.summary_lbl.setText(
+                    t("fed_network_err").format(err=str(e))
+                )
+            return
+
+        items = resp.get("items", []) or []
+
+        if not items:
+            self.summary_lbl.setText(t("fed_my_empty"))
+            return
+
+        # Summary: N submitted / M promoted
+        n_total = len(items)
+        n_community = sum(1 for r in items if r.get("status") == "community")
+        self.summary_lbl.setText(
+            t("fed_my_summary").format(total=n_total, community=n_community)
+        )
+
+        for item in items:
+            card = self._build_card(item)
+            self.list_layout.insertWidget(self.list_layout.count() - 1, card)
+
+    def _build_card(self, item: dict) -> QWidget:
+        status = item.get("status") or "pending"
+        # Status → color + label. Kept in one place so the scheme is
+        # consistent and easy to tweak.
+        status_style = {
+            "community": ("#00dcff", t("fed_my_status_community")),
+            "pending":   ("#888",    t("fed_my_status_pending")),
+            "rejected":  ("#e76f51", t("fed_my_status_rejected")),
+        }.get(status, ("#888", status))
+        color, status_label = status_style
+
+        card = QFrame()
+        card.setStyleSheet(
+            "QFrame { background: rgba(255,255,255,0.03); "
+            f"border-left: 3px solid {color}; "
+            "border-radius: 4px; padding: 8px; }"
+        )
+        v = QVBoxLayout(card)
+        v.setContentsMargins(10, 8, 10, 8)
+        v.setSpacing(4)
+
+        stmt = QLabel(item.get("statement", ""))
+        stmt.setWordWrap(True)
+        stmt.setStyleSheet("color:#e6e6e6; font-size: 12px;")
+        v.addWidget(stmt)
+
+        category_zh = t(f"fed_cat_{item.get('category','')}") or item.get("category", "")
+        meta_line = t("fed_my_meta").format(
+            category=category_zh,
+            status=status_label,
+            confirm=item.get("votes_confirm", 0),
+            refute=item.get("votes_refute", 0),
+            unclear=item.get("votes_unclear", 0),
+        )
+        meta = QLabel(meta_line)
+        meta.setStyleSheet(f"color:{color}; font-size: 10px;")
+        v.addWidget(meta)
+
+        return card
+
 
 class FederationTab(QWidget):
     """Voting UI for community patterns."""
@@ -1994,7 +2122,14 @@ class FederationTab(QWidget):
         self.scroll.setWidget(self.list_container)
         layout.addWidget(self.scroll, 1)
 
-        # Refresh button
+        # My contributions + refresh buttons
+        self.my_btn = QPushButton(t("fed_my_contributions"))
+        self.my_btn.clicked.connect(self._open_my_contributions)
+        self.my_btn.setStyleSheet(
+            "QPushButton { background:transparent; color:#ffd166;"
+            " padding:6px 14px; border:1px solid #ffd166; border-radius:4px; }"
+            "QPushButton:hover { background:rgba(255,209,102,0.1); }"
+        )
         self.refresh_btn = QPushButton(t("fed_refresh"))
         self.refresh_btn.clicked.connect(self.refresh)
         self.refresh_btn.setStyleSheet(
@@ -2003,6 +2138,7 @@ class FederationTab(QWidget):
             "QPushButton:hover { background:#3aa0ff; }"
         )
         btn_row = QHBoxLayout()
+        btn_row.addWidget(self.my_btn)
         btn_row.addStretch()
         btn_row.addWidget(self.refresh_btn)
         layout.addLayout(btn_row)
@@ -2229,7 +2365,14 @@ class FederationTab(QWidget):
     # ── Pending candidates (the slime wants to share) ─────────────────
 
     def _rebuild_pending(self):
-        """Re-render the "pending to share" section from the local queue."""
+        """Re-render the "pending to share" section from the local queue.
+
+        Always visible (Phase A3): when empty, shows an onboarding hint
+        so new users understand why nothing is there and what will
+        trigger candidates to appear. The pre-A3 behavior was to hide
+        the section entirely, which made the feature invisible on a
+        fresh install — users had no way to know it existed.
+        """
         # Clear old cards
         while self.pending_layout.count() > 0:
             item = self.pending_layout.takeAt(0)
@@ -2240,16 +2383,51 @@ class FederationTab(QWidget):
         from sentinel.growth.federation import list_pending
         candidates = list_pending()
 
-        if not candidates:
-            self.pending_header.setVisible(False)
-            self.pending_container.setVisible(False)
-            return
-
+        # Always show header — the section is a permanent part of the
+        # tab, not a conditional surprise.
         self.pending_header.setVisible(True)
         self.pending_container.setVisible(True)
+
+        if not candidates:
+            self.pending_layout.addWidget(self._build_pending_empty_card())
+            return
+
         for cand in candidates:
             card = self._build_pending_card(cand)
             self.pending_layout.addWidget(card)
+
+    def _build_pending_empty_card(self) -> QWidget:
+        """Onboarding placeholder when the candidate queue is empty.
+
+        Tells the user what to expect rather than leaving a silent void.
+        Peeks at session_count from learner memory so the message can
+        be specific ("還在觀察中" vs "第 3 次蒸餾後會有候選").
+        """
+        session_count = 0
+        try:
+            from sentinel.learner import load_memory
+            session_count = int(load_memory().get("session_count", 0) or 0)
+        except Exception:
+            pass
+
+        if session_count == 0:
+            body = t("fed_pending_empty_new")
+        else:
+            body = t("fed_pending_empty_seen").format(sessions=session_count)
+
+        card = QFrame()
+        card.setStyleSheet(
+            "QFrame { background: rgba(255,255,255,0.02); "
+            "border: 1px dashed rgba(255,209,102,0.25); border-radius: 6px; "
+            "padding: 10px; }"
+        )
+        v = QVBoxLayout(card)
+        v.setContentsMargins(12, 10, 12, 10)
+        lbl = QLabel(body)
+        lbl.setWordWrap(True)
+        lbl.setStyleSheet("color:#bbb; font-size: 11px;")
+        v.addWidget(lbl)
+        return card
 
     def _build_pending_card(self, cand: dict) -> QWidget:
         """Card for a candidate the slime wants to share — shows the
@@ -2349,6 +2527,13 @@ class FederationTab(QWidget):
         skip_candidate(candidate_id)
         self._rebuild_pending()
 
+    # ── My contributions dialog (A3) ──────────────────────────────────
+
+    def _open_my_contributions(self):
+        """Open a dialog listing the user's submitted patterns."""
+        dlg = MyContributionsDialog(self)
+        dlg.exec()
+
     # ── i18n ──────────────────────────────────────────────────────────
     def retranslate(self):
         self.header_lbl.setText(f"<b style='color:#00dcff;'>{t('fed_header')}</b>")
@@ -2356,6 +2541,7 @@ class FederationTab(QWidget):
         self.pending_header.setText(f"<b style='color:#ffd166;'>{t('fed_pending_header')}</b>")
         self.community_header.setText(f"<b style='color:#00dcff;'>{t('fed_community_header')}</b>")
         self.refresh_btn.setText(t("fed_refresh"))
+        self.my_btn.setText(t("fed_my_contributions"))
         self.refresh()
 
 

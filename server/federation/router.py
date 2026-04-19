@@ -54,6 +54,21 @@ async def list_patterns(
     return {"items": items, "count": len(items)}
 
 
+@router.get("/my-patterns")
+async def list_my_patterns(
+    limit: int = Query(50, ge=1, le=200),
+    user: dict = Depends(get_current_user),
+):
+    """List patterns the current user has submitted, newest first.
+
+    Powers the client-side 「🏆 我的貢獻」 dialog — users see their own
+    submissions with current vote counts and promotion status so they
+    have visible feedback on sharing.
+    """
+    items = await service.list_user_patterns(user_id=user["user_id"], limit=limit)
+    return {"items": items, "count": len(items)}
+
+
 @router.post("/patterns")
 async def submit_pattern(
     req: SubmitPatternRequest,

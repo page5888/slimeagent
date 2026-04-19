@@ -262,6 +262,18 @@ def vote_pattern(pattern_id: str, vote: str) -> dict:
                     {"vote": vote}, auth=True)
 
 
+def list_my_patterns(limit: int = 50) -> dict:
+    """Fetch patterns the logged-in user has submitted.
+
+    Returns {"items": [...], "count": int}. Each item has id, category,
+    statement, status, votes_confirm/refute/unclear, promoted_at,
+    created_at. Used by the 「🏆 我的貢獻」 dialog.
+
+    Raises RelayError(401) if not logged in.
+    """
+    return _request("GET", f"federation/my-patterns?limit={limit}", auth=True)
+
+
 def submit_pattern(category: str, statement: str,
                    confidence: float = 0.5, sample_n: int = 1) -> dict:
     """Submit a pattern to the community pool.
