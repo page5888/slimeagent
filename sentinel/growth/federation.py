@@ -252,17 +252,33 @@ def _candidate_hash(category: str, statement: str) -> str:
 
 
 def load_pending() -> dict:
-    """Read the pending queue. Shape:
+    """Read the pending queue + federation stats. Shape:
        {"candidates": [{id, category, statement, confidence, sample_n,
                         created_at}, ...],
-        "seen_hashes": [<hex>, ...]}   # both pending and historically submitted
+        "seen_hashes": [<hex>, ...],    # both pending and historically submitted
+        "votes_cast": int,              # A2: reward counter (every Nth vote → drop)
+        "patterns_shared": int,         # A2: total successful submissions
+        "new_since_last_view": int}     # A2: tab badge counter
     """
+    default = {
+        "candidates": [],
+        "seen_hashes": [],
+        "votes_cast": 0,
+        "patterns_shared": 0,
+        "new_since_last_view": 0,
+    }
     if PENDING_FILE.exists():
         try:
-            return json.loads(PENDING_FILE.read_text(encoding="utf-8"))
+            data = json.loads(PENDING_FILE.read_text(encoding="utf-8"))
+            # Ensure new fields are present for pre-A2 files — the
+            # file predates these counters and we don't want a KeyError
+            # on first launch after upgrade.
+            for k, v in default.items():
+                data.setdefault(k, v)
+            return data
         except (json.JSONDecodeError, OSError) as e:
             log.warning(f"pending_federation.json unreadable: {e} — starting fresh")
-    return {"candidates": [], "seen_hashes": []}
+    return default
 
 
 def save_pending(data: dict) -> None:
@@ -310,6 +326,9 @@ def add_candidate(category: str, statement: str,
     }
     data.setdefault("candidates", []).append(cand)
     data.setdefault("seen_hashes", []).append(h)
+    # Bump the "new since last view" counter so the federation tab
+    # shows a badge. Reset by mark_viewed() when the user opens the tab.
+    data["new_since_last_view"] = int(data.get("new_since_last_view", 0)) + 1
 
     # Cap queue size — drop oldest so fresh candidates can always land.
     # Cap seen_hashes separately but wider, so we keep remembering
@@ -385,6 +404,55 @@ def skip_candidate(candidate_id: str) -> bool:
     stays in seen_hashes so the same candidate won't re-appear next
     distillation cycle. Returns True if removed, False if not found."""
     return _remove_candidate(candidate_id) is not None
+
+
+# ── Federation stats (Phase A2: rewards + tab badge) ──────────────
+#
+# These counters live alongside the pending queue so there's one file
+# to reason about. They're tiny (handful of ints) — no risk of the
+# file growing unbounded. Vote count is tracked client-side because
+# the server already knows per-user votes; we just need it locally to
+# time equipment drops.
+
+
+def get_stats() -> dict:
+    """Return {votes_cast, patterns_shared, new_since_last_view, ...}.
+    Safe to call before the file exists — returns zeros in that case."""
+    data = load_pending()
+    return {
+        "votes_cast": int(data.get("votes_cast", 0)),
+        "patterns_shared": int(data.get("patterns_shared", 0)),
+        "new_since_last_view": int(data.get("new_since_last_view", 0)),
+        "pending_count": len(data.get("candidates", [])),
+    }
+
+
+def increment_vote_counter() -> int:
+    """Bump votes_cast and return the new total. Caller uses the
+    return value to decide if a reward drop should fire (e.g. every
+    5th vote). Does NOT decide the reward itself — that's a GUI
+    concern so the equipment state lives where it belongs."""
+    data = load_pending()
+    data["votes_cast"] = int(data.get("votes_cast", 0)) + 1
+    save_pending(data)
+    return data["votes_cast"]
+
+
+def increment_shared_counter() -> int:
+    """Bump patterns_shared on a successful submission."""
+    data = load_pending()
+    data["patterns_shared"] = int(data.get("patterns_shared", 0)) + 1
+    save_pending(data)
+    return data["patterns_shared"]
+
+
+def mark_viewed() -> None:
+    """Reset the 'new since last view' counter. Called when the user
+    opens the federation tab so the badge clears on acknowledgment."""
+    data = load_pending()
+    if data.get("new_since_last_view", 0):
+        data["new_since_last_view"] = 0
+        save_pending(data)
 
 
 # ── Local helpers that ARE usable today ───────────────────────────

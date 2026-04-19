@@ -328,6 +328,12 @@ DROP_CHANCES = {
     "evolution": 1.0,         # Every tier-up: guaranteed drop
     "daily_login": 0.2,       # First session of the day: 20% chance
     "share": 0.4,             # After sharing: 40% chance
+    # Federation rewards (Phase A2). Vote chance fires every 5th vote
+    # so the user gets a drop ~every 2-3 rounds of votes. Submit chance
+    # is higher since the user is rate-limited to 3 per day, and we
+    # want sharing to feel like a generous bet, not a lottery.
+    "federation_vote": 0.4,
+    "federation_submit": 0.8,
 }
 
 

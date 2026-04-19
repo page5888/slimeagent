@@ -2190,6 +2190,38 @@ class FederationTab(QWidget):
 
         if resp.get("promoted"):
             QMessageBox.information(self, "AI Slime", t("fed_vote_promoted"))
+
+        # A2 reward: every 5th successful vote gets a drop roll. Rate
+        # is defined in DROP_CHANCES["federation_vote"] — if it misses,
+        # the user silently rolls the next one 5 votes later. Keeping
+        # the trigger frequency low on the client side (every 5) and
+        # the chance high (40%) feels more generous than rolling every
+        # vote at 8% — same expected rate, much more satisfying hits.
+        try:
+            from sentinel.growth.federation import increment_vote_counter
+            from sentinel.wallet.equipment import (
+                load_equipment, try_drop, save_equipment,
+            )
+            count = increment_vote_counter()
+            if count > 0 and count % 5 == 0:
+                eq = load_equipment()
+                drop = try_drop(eq, "federation_vote")
+                if drop:
+                    save_equipment(eq)
+                    QMessageBox.information(
+                        self, "AI Slime",
+                        t("fed_vote_drop").format(
+                            rarity=drop["rarity_zh"],
+                            name=drop["name"],
+                        ),
+                    )
+        except Exception as e:
+            # Reward hiccups should never break the vote path.
+            import logging
+            logging.getLogger("sentinel.gui").warning(
+                f"federation vote reward failed: {e}"
+            )
+
         # Re-fetch — the card state (buttons → "已投", counts) changes
         # based on the new data.
         self.refresh()
@@ -2271,10 +2303,38 @@ class FederationTab(QWidget):
         return card
 
     def _on_approve_candidate(self, candidate_id: str):
-        from sentinel.growth.federation import approve_candidate
+        from sentinel.growth.federation import (
+            approve_candidate, increment_shared_counter,
+        )
         err = approve_candidate(candidate_id)
         if err is None:
-            QMessageBox.information(self, "AI Slime", t("fed_pending_shared"))
+            # A2 reward: successful submit rolls for an equipment drop
+            # (chance in DROP_CHANCES["federation_submit"]). Rate-limited
+            # to 3 submits per day on the server, so this is a capped
+            # reward — it won't be spammed.
+            drop_msg = ""
+            try:
+                increment_shared_counter()
+                from sentinel.wallet.equipment import (
+                    load_equipment, try_drop, save_equipment,
+                )
+                eq = load_equipment()
+                drop = try_drop(eq, "federation_submit")
+                if drop:
+                    save_equipment(eq)
+                    drop_msg = "\n\n" + t("fed_submit_drop").format(
+                        rarity=drop["rarity_zh"],
+                        name=drop["name"],
+                    )
+            except Exception as e:
+                import logging
+                logging.getLogger("sentinel.gui").warning(
+                    f"federation submit reward failed: {e}"
+                )
+            QMessageBox.information(
+                self, "AI Slime",
+                t("fed_pending_shared") + drop_msg,
+            )
         else:
             # Show the message from the server / local validator verbatim —
             # it's already user-facing Chinese from federation.py's mapping.
@@ -4603,13 +4663,17 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.equipment_tab, t("tab_equipment"))
         self.tabs.addTab(self.chat_tab, t("tab_chat"))
         self.tabs.addTab(self.memory_tab, t("tab_memory"))
-        self.tabs.addTab(self.federation_tab, t("tab_federation"))
+        self._federation_tab_index = self.tabs.addTab(
+            self.federation_tab, t("tab_federation")
+        )
         self.tabs.addTab(self.market_tab, t("tab_market"))
         self._approval_tab_index = self.tabs.addTab(self.approval_tab, t("tab_approval"))
         self.tabs.addTab(self.settings_tab, t("tab_settings"))
 
         # 待同意頁籤：切過去時主動刷新；動作後刷新 evolution + 標籤計數
+        # 公頻頁籤：切過去時清除「新訊息」badge
         self.tabs.currentChanged.connect(self._on_approval_tab_changed)
+        self.tabs.currentChanged.connect(self._on_federation_tab_changed)
         self.approval_tab.proposals_changed.connect(self.evolution_tab.refresh)
         self.approval_tab.proposals_changed.connect(self._refresh_approval_tab_label)
 
@@ -4680,6 +4744,7 @@ class MainWindow(QMainWindow):
         self.evo_timer.timeout.connect(self.equipment_tab.refresh)
         self.evo_timer.timeout.connect(self.approval_tab.refresh)
         self.evo_timer.timeout.connect(self._refresh_approval_tab_label)
+        self.evo_timer.timeout.connect(self._refresh_federation_tab_label)
         self.evo_timer.timeout.connect(self.home_tab.refresh)
         self.evo_timer.timeout.connect(self._sync_overlay_state)
         self.evo_timer.start(30000)  # 每 30 秒刷新進化、裝備、首頁
@@ -4854,6 +4919,42 @@ class MainWindow(QMainWindow):
             return
         n = self.approval_tab.pending_count()
         base = t("tab_approval")
+        label = f"{base} ({n})" if n > 0 else base
+        self.tabs.setTabText(idx, label)
+
+    def _on_federation_tab_changed(self, index: int):
+        """切到公頻分頁時清掉 new-pattern badge 並刷新列表。"""
+        if getattr(self, "_federation_tab_index", None) is None:
+            return
+        if index != self._federation_tab_index:
+            return
+        try:
+            from sentinel.growth.federation import mark_viewed
+            mark_viewed()
+        except Exception:
+            pass
+        self._refresh_federation_tab_label()
+        # Refresh content too — the user may have candidates queued since
+        # they last looked, and they expect to see them immediately.
+        self.federation_tab.refresh()
+
+    def _refresh_federation_tab_label(self):
+        """在公頻頁籤標題後面顯示待分享候選數量，像 `🌍 公頻 (2)`。
+
+        The count is `new_since_last_view` (candidates the distiller
+        queued since the user last opened the tab), not the total
+        pending — we want the badge to encourage revisiting, not nag
+        about candidates the user already saw and ignored.
+        """
+        idx = getattr(self, "_federation_tab_index", None)
+        if idx is None:
+            return
+        base = t("tab_federation")
+        try:
+            from sentinel.growth.federation import get_stats
+            n = get_stats().get("new_since_last_view", 0)
+        except Exception:
+            n = 0
         label = f"{base} ({n})" if n > 0 else base
         self.tabs.setTabText(idx, label)
 

@@ -7,6 +7,12 @@
 ## [Unreleased]
 
 ### Added
+- **公頻投票與分享獎勵（Phase A2）** — 公頻從「做義工」變成「有正向回饋的活動」。
+  - 每投 5 票有 40% 機率掉裝備（`federation_vote` trigger）
+  - 每次成功分享 pattern 有 80% 機率掉裝備（`federation_submit`，每天最多 3 次分享所以不會被刷）
+  - 公頻分頁 tab 標題加上待分享候選數量 badge（例：`🌍 公頻 (2)`），
+    切過去就清掉 — 使用者不用定時打開也知道有新東西
+  - 所有計數存本地 `~/.hermes/pending_federation.json`，跟分享佇列共用一個檔
 - **公頻投稿管線（Phase A1）** — 公頻從「只能看 + 投票」變成活的社群。
   每小時的 LLM 蒸餾多產出 `federation_candidates`（群體化描述、去識別化），
   進本地待審佇列 `~/.hermes/pending_federation.json`；公頻 tab 頂部新增
