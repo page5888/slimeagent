@@ -5125,7 +5125,14 @@ class MainWindow(QMainWindow):
         self.tabs.setTabText(idx, label)
 
     def _on_federation_tab_changed(self, index: int):
-        """切到公頻分頁時清掉 new-pattern badge 並刷新列表。"""
+        """切到公頻分頁時清掉 new-pattern badge，重建「待分享」區塊。
+
+        **不會**自動打 relay API 重撈社群列表 — 那是個同步、Render 冷啟
+        下可能 30-90 秒才回來的網路呼叫，會把主執行緒整個凍住，造成
+        每切一次 tab 就卡住幾十秒。社群列表要更新時使用者按「重新感應」
+        按鈕即可。本地的待分享 pending 候選仍然會在 tab 切進來時即時
+        重建，因為那只是讀本地 JSON 檔，幾毫秒的事。
+        """
         if getattr(self, "_federation_tab_index", None) is None:
             return
         if index != self._federation_tab_index:
@@ -5136,9 +5143,12 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         self._refresh_federation_tab_label()
-        # Refresh content too — the user may have candidates queued since
-        # they last looked, and they expect to see them immediately.
-        self.federation_tab.refresh()
+        # Cheap local rebuild only — surfaces any new pending candidates
+        # the distiller queued while the user was on another tab.
+        try:
+            self.federation_tab._rebuild_pending()
+        except Exception:
+            pass
 
     def _refresh_federation_tab_label(self):
         """在公頻頁籤標題後面顯示待分享候選數量，像 `🌍 公頻 (2)`。
