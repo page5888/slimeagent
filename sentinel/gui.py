@@ -2424,32 +2424,26 @@ class FederationTab(QWidget):
         else:
             body = t("fed_pending_empty_seen").format(sessions=session_count)
 
-        card = QFrame()
-        # Expanding horizontally (fill column), Preferred vertically
-        # (use sizeHint without being clamped to 0 on word-wrap labels).
-        # The runaway-growth worry is handled by pending_container's
-        # explicit maximum height, not by clamping the card itself.
-        card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        # Guarantee a visible baseline even if the label's heightForWidth
-        # misbehaves on the first layout pass — otherwise users saw an
-        # invisible empty area where the hint should be.
-        card.setMinimumHeight(56)
-        card.setStyleSheet(
-            "QFrame { background: rgba(255,209,102,0.08); "
-            "border: 1px dashed rgba(255,209,102,0.45); border-radius: 6px; "
-            "padding: 10px; }"
+        # Dead-simple render: one QLabel with rich-text HTML, no nested
+        # frame, no stylesheet padding. Previous attempts used a QFrame
+        # wrapper with QSS padding + word-wrapped inner QLabel, which on
+        # some Windows/Qt/DPI combinations rendered the whole thing
+        # invisible (heightForWidth returning 0 before layout pass).
+        # Using rich text means font color and spacing are handled by
+        # Qt's text renderer, not QSS — rock solid across platforms.
+        html = (
+            "<div style='background-color:rgba(255,209,102,0.10); "
+            "border:1px dashed #ffd166; border-radius:6px; "
+            "padding:12px 14px; margin:0;'>"
+            f"<span style='color:#e6e6e6; font-size:11px;'>"
+            f"{body}</span></div>"
         )
-        v = QVBoxLayout(card)
-        v.setContentsMargins(12, 10, 12, 10)
-        lbl = QLabel(body)
+        lbl = QLabel(html)
+        lbl.setTextFormat(Qt.RichText)
         lbl.setWordWrap(True)
-        # #e6e6e6 matches the statement color used on pending cards and
-        # gives high contrast on the dark theme. The earlier #bbb/#ddd
-        # rendered technically but was hard to spot.
-        lbl.setStyleSheet("color:#e6e6e6; font-size: 11px;")
-        lbl.setMinimumHeight(32)
-        v.addWidget(lbl)
-        return card
+        lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        lbl.setMinimumHeight(56)
+        return lbl
 
     def _build_pending_card(self, cand: dict) -> QWidget:
         """Card for a candidate the slime wants to share — shows the
