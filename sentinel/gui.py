@@ -2093,6 +2093,12 @@ class FederationTab(QWidget):
         layout.addWidget(self.pending_header)
 
         self.pending_container = QWidget()
+        # Maximum vertical policy: the container hugs its children's
+        # total height instead of expanding to fill whatever the parent
+        # QVBoxLayout hands it. Without this, an empty-state placeholder
+        # (one wrapped QLabel) could grow to push the community list
+        # and action buttons off-screen.
+        self.pending_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         self.pending_layout = QVBoxLayout(self.pending_container)
         self.pending_layout.setContentsMargins(0, 0, 0, 0)
         self.pending_layout.setSpacing(6)
@@ -2416,16 +2422,25 @@ class FederationTab(QWidget):
             body = t("fed_pending_empty_seen").format(sessions=session_count)
 
         card = QFrame()
+        # SizePolicy: grow horizontally to fill the column, but only
+        # take as much vertical space as the wrapped text needs. Without
+        # Maximum on the vertical axis, QLabel+wordwrap inside a QFrame
+        # inside a QVBoxLayout stretches to eat all remaining height in
+        # the parent, hiding the community list and the buttons below.
+        card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         card.setStyleSheet(
             "QFrame { background: rgba(255,255,255,0.02); "
-            "border: 1px dashed rgba(255,209,102,0.25); border-radius: 6px; "
+            "border: 1px dashed rgba(255,209,102,0.35); border-radius: 6px; "
             "padding: 10px; }"
         )
         v = QVBoxLayout(card)
         v.setContentsMargins(12, 10, 12, 10)
         lbl = QLabel(body)
         lbl.setWordWrap(True)
-        lbl.setStyleSheet("color:#bbb; font-size: 11px;")
+        # #ddd is the same tone used by other secondary text in the app
+        # (see equip_inventory tab); #bbb on pure black got lost visually.
+        lbl.setStyleSheet("color:#ddd; font-size: 11px; line-height: 1.5;")
+        lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         v.addWidget(lbl)
         return card
 
