@@ -309,6 +309,98 @@ def _exec_interpret_screen(payload: dict) -> dict:
     return result
 
 
+# ── Voice (first voice pass) ──────────────────────────────────────
+# Same rationale as vision: record/synthesize primitives live in
+# sentinel.voice, policy + audit live here, approval gates the mic
+# and speaker from running unasked.
+
+
+# Recording window is short by default. Long clips are an attack
+# surface (you shout consent then the mic stays open) and long
+# transcripts tend to drift anyway. 60s matches voice.py's own cap.
+_VOICE_LISTEN_MAX_SECONDS = 60
+_VOICE_SPEAK_MAX_CHARS = 1_000
+
+
+def _policy_voice_listen(payload: dict) -> tuple[bool, list[dict]]:
+    """Bound the recording window + warn that mic will open on approve."""
+    dur = (payload or {}).get("duration_s", 5)
+    try:
+        dur = float(dur)
+    except (TypeError, ValueError):
+        return False, [{
+            "level": "error",
+            "msg": "duration_s must be a number (seconds)",
+        }]
+    if dur <= 0 or dur > _VOICE_LISTEN_MAX_SECONDS:
+        return False, [{
+            "level": "error",
+            "msg": f"duration_s must be in (0, {_VOICE_LISTEN_MAX_SECONDS}]",
+        }]
+    language = (payload or {}).get("language")
+    if language is not None and not isinstance(language, str):
+        return False, [{
+            "level": "error",
+            "msg": "language must be a string (e.g. 'zh', 'en') or null",
+        }]
+    return True, [{
+        "level": "warn",
+        "msg": (
+            f"會打開麥克風錄音 {dur:g} 秒並把音檔送到雲端 STT 轉字 — "
+            "確認周圍環境沒有敏感對話"
+        ),
+    }]
+
+
+def _policy_voice_speak(payload: dict) -> tuple[bool, list[dict]]:
+    """Text must be non-empty + under the TTS budget."""
+    text = (payload or {}).get("text") or ""
+    if not isinstance(text, str) or not text.strip():
+        return False, [{
+            "level": "error",
+            "msg": "text must be a non-empty string",
+        }]
+    if len(text) > _VOICE_SPEAK_MAX_CHARS:
+        return False, [{
+            "level": "error",
+            "msg": f"text too long ({len(text)} chars; max {_VOICE_SPEAK_MAX_CHARS})",
+        }]
+    return True, [{
+        "level": "info",
+        "msg": "會用喇叭播放下面這段文字（TTS）",
+    }]
+
+
+def _exec_voice_listen(payload: dict) -> dict:
+    """Record → transcribe → publish transcript to the Context Bus.
+
+    We publish on the `voice` source bucket so the next chat turn
+    sees what the user just said without the caller needing to
+    marshal it — same pattern as vision.interpret_screen pushing into
+    the `screen` bucket.
+    """
+    from sentinel.voice import record_and_transcribe
+    from sentinel.context_bus import get_bus
+
+    duration = float((payload or {}).get("duration_s", 5))
+    language = (payload or {}).get("language") or None
+    result = record_and_transcribe(duration, language=language)
+    if result.get("ok"):
+        text = (result.get("text") or "").strip()
+        if text:
+            get_bus().publish(
+                "voice",
+                f"[由 {result.get('provider', '?')} 轉字]\n{text}",
+            )
+    return result
+
+
+def _exec_voice_speak(payload: dict) -> dict:
+    """TTS the given text and play it through the default output."""
+    from sentinel.voice import speak
+    return speak((payload or {}).get("text", ""))
+
+
 # ── Registration ──────────────────────────────────────────────────
 
 
@@ -325,6 +417,11 @@ _REGISTERED: list[tuple[str, Any]] = [
     # warning (screenshot → cloud VLM) so the approval card shows
     # what the user is consenting to.
     ("vision.interpret_screen", _policy_interpret_screen, _exec_interpret_screen),
+    # Voice — mic capture + STT, and TTS playback. Both approvable:
+    # mic privacy and speaker audibility are user decisions, not
+    # LLM decisions.
+    ("voice.listen",            _policy_voice_listen,     _exec_voice_listen),
+    ("voice.speak",             _policy_voice_speak,      _exec_voice_speak),
 ]
 
 
@@ -353,7 +450,7 @@ def register_all() -> None:
     except Exception as e:
         log.warning(f"chain.run registration failed: {e}")
     log.info(
-        "Action handlers registered (%d surface primitives + chain.run on %s)",
+        "Action handlers registered (%d surface/voice primitives + chain.run on %s)",
         len(_REGISTERED),
         get_surface().platform,
     )

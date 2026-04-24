@@ -127,6 +127,31 @@ CATALOG: dict[str, dict[str, Any]] = {
         "example": {"prompt": "告訴我主人的螢幕上有沒有紅色錯誤提示"},
         "policy_note": "會把整張螢幕截圖傳到雲端 VLM — 主人會在批准卡片看到警告",
     },
+    "voice.listen": {
+        "desc_zh": (
+            "打開麥克風錄幾秒，丟雲端 STT 轉成文字。轉好後會自動進「螢幕觀察」"
+            "旁邊的語音欄，下一輪對話你就看得到。"
+        ),
+        "desc_en": (
+            "Record N seconds from the mic and transcribe via cloud STT. "
+            "Transcript lands in the Context Bus voice channel."
+        ),
+        "payload": {
+            "duration_s": "number — 秒數，1~60 之間，不確定就填 5",
+            "language": "string (optional) — 'zh' / 'en'；不填讓模型自動判斷",
+        },
+        "example": {"duration_s": 5, "language": "zh"},
+        "policy_note": "會錄音 → 送到雲端 — 確認周圍沒有其他人私密對話",
+    },
+    "voice.speak": {
+        "desc_zh": "用 TTS 把一段文字唸出來（喇叭會發聲）",
+        "desc_en": "Speak the given text aloud via TTS",
+        "payload": {
+            "text": "string — 要念的內容，最多 1000 字",
+        },
+        "example": {"text": "提醒主人該休息囉"},
+        "policy_note": "會從喇叭發出聲音；如果主人戴著耳機就只有主人聽到",
+    },
     "chain.run": {
         "desc_zh": (
             "一次提案多個動作串起來跑（最多 5 步）。每一步都是上面其他的 action type，"
