@@ -33,6 +33,16 @@ class LinuxSurface(Surface):
         except FileNotFoundError:
             return {"ok": False, "error": "xdg-open not available"}
 
+    def open_url(self, url: str) -> dict:
+        if not url:
+            return {"ok": False, "error": "empty_url"}
+        try:
+            import webbrowser
+            ok = webbrowser.open(url, new=2)
+            return {"ok": bool(ok), "url": url}
+        except Exception as e:
+            return {"ok": False, "error": str(e), "url": url}
+
     def take_screenshot(self, out_path: Optional[str] = None) -> dict:
         if out_path is None:
             ts = int(time.time())

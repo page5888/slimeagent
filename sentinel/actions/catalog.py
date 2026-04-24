@@ -56,11 +56,32 @@ log = logging.getLogger("sentinel.actions")
 
 CATALOG: dict[str, dict[str, Any]] = {
     "surface.open_path": {
-        "desc_zh": "用系統預設程式開啟一個檔案或資料夾",
-        "desc_en": "Open a file or folder with the OS default handler",
+        "desc_zh": (
+            "用系統預設程式開啟**本地檔案或資料夾**。只接受主人電腦上的實體路徑 — "
+            "絕對不是網站 / App 名稱。要開網站請用 surface.open_url。"
+        ),
+        "desc_en": (
+            "Open a LOCAL file or folder with the OS default handler. "
+            "Only accepts real paths on disk — NOT website names or app "
+            "names. For websites use surface.open_url instead."
+        ),
         "payload": {"path": "string — 絕對路徑，必須在使用者 home 目錄下"},
         "example": {"path": "C:/Users/me/Documents/note.md"},
-        "policy_note": "URL 和使用者 home 之外的路徑會被拒絕",
+        "policy_note": "URL、不存在的路徑、使用者 home 之外的路徑都會被拒絕",
+    },
+    "surface.open_url": {
+        "desc_zh": (
+            "在預設瀏覽器打開一個網址。YouTube、GitHub、Google、任何 .com .tw "
+            "都用這個，不要用 open_path 亂湊路徑。"
+        ),
+        "desc_en": (
+            "Open a URL in the default browser. YouTube, GitHub, Google, any "
+            "website — use this, never fabricate a local path for a web "
+            "service with open_path."
+        ),
+        "payload": {"url": "string — 必須是 http:// 或 https:// 開頭的完整網址"},
+        "example": {"url": "https://youtube.com"},
+        "policy_note": "只允許 http/https，javascript:/data:/file:// 等一律拒絕",
     },
     "surface.focus_window": {
         "desc_zh": "把符合標題片段的視窗帶到前景",
@@ -161,6 +182,10 @@ PROMPT_INSTRUCTIONS_ZH = """
 2. 一次訊息最多 1 個動作提案，寧可先說「我打算做 X，對嗎」。
 3. 不確定參數（例如使用者說「開那個檔案」但你不知道是哪個）→ 用文字回問清楚，不要亂填 path。
 4. 不要提案不在下列白名單內的 action type。
+5. **本地檔案 vs 網站要選對 action**：
+   - 網站（YouTube / GitHub / google / 任何 .com、.tw 結尾）→ `surface.open_url`，參數是完整 https:// 網址
+   - 本地檔案或資料夾（真的在主人硬碟上的路徑）→ `surface.open_path`
+   - 絕對不要把「YouTube」「Chrome」「VS Code」等應用名硬湊成 `D:/xxx/yyy.app` 之類的假路徑
 
 格式（放在你的自然語言回覆任何位置，一次訊息最多一個）：
 <action>

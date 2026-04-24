@@ -144,6 +144,23 @@ class Surface:
         """
         return _not_supported("set_clipboard")
 
+    def open_url(self, url: str) -> dict:
+        """Open a web URL in the user's default browser.
+
+        Returns {"ok": bool, "url": str}. Distinct from open_path
+        because URLs and filesystem paths have different safety
+        concerns (phishing links vs. executable files), different
+        schemes to validate (http/https vs. drive letters), and the
+        LLM chose poorly when it had only open_path and tried to
+        treat "YouTube" as a .app on disk.
+
+        Policy concerns (enforced in handlers.py):
+          - Scheme must be http or https
+          - No javascript:, data:, file://, chrome://, etc.
+          - URL length cap to avoid smuggling payloads in query strings
+        """
+        return _not_supported("open_url")
+
 
 class DryRunSurface(Surface):
     """A Surface that logs intent but performs no real action.
@@ -184,6 +201,9 @@ class DryRunSurface(Surface):
 
     def set_clipboard(self, text: str) -> dict:
         return self._log_call("set_clipboard", text_len=len(text))
+
+    def open_url(self, url: str) -> dict:
+        return self._log_call("open_url", url=url)
 
 
 def _not_supported(primitive: str) -> dict:
