@@ -354,6 +354,32 @@ def _log_chat(role: str, text: str):
         pass
 
 
+_ACTION_REQUEST_HINTS = (
+    "幫我", "幫忙", "可以", "打開", "開啟", "切到", "切過去", "聚焦",
+    "複製", "貼", "剪貼簿", "截圖", "拍一下", "跑", "執行", "啟動",
+    "關掉", "列出", "列一下", "看一下視窗",
+    "open", "focus", "launch", "run", "copy", "paste", "screenshot",
+    "list windows",
+)
+
+
+def _user_might_want_action(user_text: str) -> bool:
+    """Cheap heuristic: does this user message read like an action
+    request?
+
+    We only inject the action-protocol prompt block when it does.
+    Always-on injection biases the LLM toward proposing actions even
+    on pure conversation ("我今天累了" → shouldn't propose anything),
+    which feels obnoxious. The hints list covers the common imperative
+    shapes; missed ones get natural-language replies and the user can
+    re-ask more directly.
+    """
+    if not user_text:
+        return False
+    t = user_text.lower()
+    return any(h in t or h in user_text for h in _ACTION_REQUEST_HINTS)
+
+
 def _retrieve_memory_block(query: str, k: int = 3) -> str:
     """Semantic recall → formatted block for the chat prompt.
 
@@ -427,9 +453,23 @@ def handle_message(user_text: str) -> str:
     # turn-by-turn history.
     memory_block = _retrieve_memory_block(user_text, k=3)
 
+    # Phase D1 — inject the action-proposal protocol only when the
+    # user's message looks like they're asking for something to be
+    # done. Otherwise the LLM gets biased toward using actions even
+    # on pure conversation, which reads as overeager.
+    action_block = ""
+    if _user_might_want_action(user_text):
+        try:
+            from sentinel.actions import format_catalog_for_prompt
+            action_block = format_catalog_for_prompt()
+        except Exception as e:
+            log.warning(f"could not load action catalog: {e}")
+
     parts = [system_prompt]
     if memory_block:
         parts.append(memory_block)
+    if action_block:
+        parts.append(action_block)
     parts.append(f"=== 對話紀錄 ===\n{conversation_text}")
     parts.append("Slime:")
     prompt = "\n\n".join(parts)
@@ -447,6 +487,23 @@ def handle_message(user_text: str) -> str:
             "連大賢者都需要休息...開玩笑的，只是 API 冷卻中。監控照常，等我回來！",
         ]
         reply = random.choice(offline_replies)
+
+    # Phase D1: if the LLM emitted any <action>…</action> blocks, route
+    # each through the approval queue and splice a short status
+    # sentence back into the reply so the user sees what was queued
+    # (or rejected). Purely-conversational replies without action
+    # blocks pass through unchanged.
+    try:
+        from sentinel.actions import parse_and_submit
+        reply, action_outcomes = parse_and_submit(reply)
+        if action_outcomes:
+            log.info(
+                f"chat proposed {len(action_outcomes)} action(s); "
+                f"queued={sum(1 for o in action_outcomes if o.queued)}"
+            )
+    except Exception as e:
+        # Never let an action-parsing hiccup break the chat reply.
+        log.warning(f"action parse/submit failed: {e}")
 
     _conversation.append({"role": "model", "text": reply})
     _log_chat("assistant", reply)
