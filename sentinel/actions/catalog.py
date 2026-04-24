@@ -97,6 +97,15 @@ CATALOG: dict[str, dict[str, Any]] = {
         "example": {},
         "policy_note": "無副作用",
     },
+    "vision.interpret_screen": {
+        "desc_zh": "截取現在的螢幕，傳給多模態 LLM 根據你給的 prompt 分析",
+        "desc_en": "Take a screenshot and have a VLM analyse it with your prompt",
+        "payload": {
+            "prompt": "string — 要 VLM 看什麼，例：『找錯誤訊息』『認出目前 UI』",
+        },
+        "example": {"prompt": "告訴我主人的螢幕上有沒有紅色錯誤提示"},
+        "policy_note": "會把整張螢幕截圖傳到雲端 VLM — 主人會在批准卡片看到警告",
+    },
 }
 
 
