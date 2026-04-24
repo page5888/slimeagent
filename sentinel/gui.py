@@ -172,6 +172,26 @@ def _format_action_result_for_chat(audit_entry: dict) -> list[str]:
             return [f"(目前 {count} 個視窗：{sample}{more})"]
         return []
 
+    if atype == "chain.run":
+        # Per-step status rollup. Chain success = all steps success;
+        # chain failure could be any mix. Show one line per step so
+        # the user sees which part of the plan did/didn't happen.
+        steps = result.get("steps") or []
+        if not steps:
+            return []
+        lines = [f"(多步驟動作，共 {len(steps)} 步)"]
+        marks = {"success": "✓", "failed": "✗", "skipped": "⤻",
+                 "pending": "…", "running": "…"}
+        for i, s in enumerate(steps, 1):
+            status = s.get("status", "?")
+            at = s.get("action_type", "?")
+            mark = marks.get(status, "?")
+            suffix = ""
+            if status == "failed" and s.get("error"):
+                suffix = f" ({s['error'][:60]})"
+            lines.append(f"  {mark} 步驟 {i} · {at}{suffix}")
+        return lines
+
     # Other action types: nothing extra to say beyond "✓ executed".
     return []
 
@@ -377,6 +397,23 @@ class ChatTab(QWidget):
             reason_lbl.setStyleSheet("color:#aaa; font-size: 10px;")
             reason_lbl.setWordWrap(True)
             v.addWidget(reason_lbl)
+
+        # Phase D4: chain.run previews every step so the user sees
+        # the whole plan before approving the chain. One numbered
+        # line per step with the step's action_type + title.
+        if p.action_type == "chain.run":
+            steps = (p.payload or {}).get("steps") or []
+            for i, s in enumerate(steps[:5], 1):
+                at = (s.get("action_type") or "?") if isinstance(s, dict) else "?"
+                title = (s.get("title") or at) if isinstance(s, dict) else "?"
+                step_lbl = QLabel(
+                    f"<span style='color:#aaa;'>{i}.</span> "
+                    f"<span style='color:#e6e6e6;'>{title}</span> "
+                    f"<span style='color:#666;'>· {at}</span>"
+                )
+                step_lbl.setStyleSheet("font-size: 10px;")
+                step_lbl.setWordWrap(True)
+                v.addWidget(step_lbl)
 
         # Surface any policy/safety findings so the user sees warnings
         # before clicking approve. Info is filtered out to keep the

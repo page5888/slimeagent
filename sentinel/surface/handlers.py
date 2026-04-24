@@ -286,8 +286,20 @@ def register_all() -> None:
             handler=executor,
             policy=policy,
         )
+    # Phase D4: chain.run sits alongside surface primitives in the
+    # action registry. Registered here (rather than a separate
+    # bootstrap step) so daemon startup order keeps simple — one call
+    # to register_all brings up every action the LLM can propose.
+    # chain.run's own policy_check recursively uses the surface.*
+    # handlers registered above, so order matters: primitives first,
+    # chain.run after.
+    try:
+        from sentinel.actions.chain import register as _register_chain
+        _register_chain()
+    except Exception as e:
+        log.warning(f"chain.run registration failed: {e}")
     log.info(
-        "Surface action handlers registered (%d primitives on %s)",
+        "Action handlers registered (%d surface primitives + chain.run on %s)",
         len(_REGISTERED),
         get_surface().platform,
     )

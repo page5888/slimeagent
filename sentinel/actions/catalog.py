@@ -106,6 +106,41 @@ CATALOG: dict[str, dict[str, Any]] = {
         "example": {"prompt": "告訴我主人的螢幕上有沒有紅色錯誤提示"},
         "policy_note": "會把整張螢幕截圖傳到雲端 VLM — 主人會在批准卡片看到警告",
     },
+    "chain.run": {
+        "desc_zh": (
+            "一次提案多個動作串起來跑（最多 5 步）。每一步都是上面其他的 action type，"
+            "payload 要塞完整。一次批准、一次執行整串。適合「開檔案然後 focus 到它」這種組合。"
+        ),
+        "desc_en": (
+            "Propose a multi-step chain (up to 5 steps). Each step is one of the "
+            "other action types with its payload fully specified. One approval = "
+            "whole chain runs."
+        ),
+        "payload": {
+            "steps": (
+                "list — 每個元素為 {action_type, payload, title}，"
+                "按順序執行，任一步失敗會跳過後面"
+            ),
+        },
+        "example": {
+            "steps": [
+                {
+                    "action_type": "surface.open_path",
+                    "payload": {"path": "C:/Users/me/proj"},
+                    "title": "開啟專案資料夾",
+                },
+                {
+                    "action_type": "surface.focus_window",
+                    "payload": {"title_match": "proj"},
+                    "title": "切過去",
+                },
+            ],
+        },
+        "policy_note": (
+            "每一步都會跑自己原本的政策檢查；任何一步被擋整條就被擋。"
+            "不能把 chain.run 嵌在另一個 chain.run 裡。"
+        ),
+    },
 }
 
 
