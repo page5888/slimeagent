@@ -5387,6 +5387,17 @@ class MainWindow(QMainWindow):
             # 安全網：首次啟動建立核心備份
             ensure_core_backup()
 
+            # Phase C2: register surface primitives as ACTION handlers
+            # so anything Phase D (computer-use) submits can reach the
+            # right executor. Happens once per daemon start; safe to
+            # repeat. Isolated in a try so a surface init failure on
+            # an unsupported platform doesn't abort the daemon.
+            try:
+                from sentinel.surface.handlers import register_all as _register_surface_actions
+                _register_surface_actions()
+            except Exception as _e:
+                log.warning(f"surface handler registration failed: {_e}")
+
             evo = load_evolution()
             equip_state = load_equipment()
             obs_since_drop = 0  # Track observations for drop trigger
