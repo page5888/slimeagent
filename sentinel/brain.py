@@ -3,6 +3,7 @@ import json
 import logging
 from sentinel.llm import call_llm
 from sentinel import config
+from sentinel.context_bus import get_bus
 
 log = logging.getLogger("sentinel.brain")
 
@@ -50,34 +51,56 @@ def analyze_events(context: str) -> dict | None:
     return _parse_json(text)
 
 
+def _format_file_events(file_events: list) -> str:
+    """Summarize a file event list the same way we always did — grouped
+    by event type, capped at 5 paths per type. Extracted so both the
+    legacy build_context shim and future direct publishers can use it.
+    """
+    by_type: dict[str, list[str]] = {}
+    for e in file_events:
+        by_type.setdefault(e["type"], []).append(e["path"])
+    lines = [f"(最近 {len(file_events)} 個事件)"]
+    for t, paths in by_type.items():
+        lines.append(f"  {t}: {len(paths)} files")
+        for p in paths[:5]:
+            lines.append(f"    - {p}")
+        if len(paths) > 5:
+            lines.append(f"    ... and {len(paths) - 5} more")
+    return "\n".join(lines)
+
+
 def build_context(system_snapshot, file_events: list, claude_activity: str,
                    user_activity: str = "") -> str:
-    """Build a context string for the LLM to analyze."""
-    parts = []
+    """Assemble context for LLM analysis.
 
-    parts.append("=== 系統狀態 ===")
-    parts.append(system_snapshot.summary())
-    if system_snapshot.warnings:
-        parts.append("⚠️ 系統警告: " + " | ".join(system_snapshot.warnings))
+    Thin shim over the Context Bus (Phase B1): publishes whatever the
+    caller passes in, then renders the full bus. Callers can migrate
+    to publishing directly from their own module at their own pace;
+    existing call sites keep working with no change.
+
+    Note that the render includes ALL currently-live sources (screen,
+    input, federation memory, …) — not just the four args this
+    function takes. That's intentional: the more context the LLM has,
+    the better its decisions. Stale entries are TTL-filtered inside
+    the bus so this doesn't drag unrelated old data in.
+    """
+    bus = get_bus()
+
+    # System state is always present — publish the summary plus any
+    # active warnings as one combined entry so the LLM reads them
+    # together ("CPU 92%, warning: RAM high" vs. splitting them).
+    system_text = system_snapshot.summary()
+    if getattr(system_snapshot, "warnings", None):
+        system_text += "\n⚠️ 系統警告: " + " | ".join(system_snapshot.warnings)
+    bus.publish("system", system_text)
 
     if file_events:
-        parts.append(f"\n=== 檔案變動 (最近 {len(file_events)} 個事件) ===")
-        by_type = {}
-        for e in file_events:
-            t = e['type']
-            by_type.setdefault(t, []).append(e['path'])
-        for t, paths in by_type.items():
-            parts.append(f"  {t}: {len(paths)} files")
-            for p in paths[:5]:
-                parts.append(f"    - {p}")
-            if len(paths) > 5:
-                parts.append(f"    ... and {len(paths)-5} more")
+        bus.publish("files", _format_file_events(file_events))
 
     if claude_activity:
-        parts.append(f"\n=== Claude Code 活動 ===")
-        parts.append(claude_activity)
+        bus.publish("claude", claude_activity)
 
     if user_activity:
-        parts.append(f"\n{user_activity}")
+        bus.publish("activity", user_activity)
 
-    return "\n".join(parts)
+    return bus.render()

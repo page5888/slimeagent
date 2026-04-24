@@ -5335,6 +5335,7 @@ class MainWindow(QMainWindow):
             from sentinel.file_watcher import FileWatcher
             from sentinel.claude_watcher import get_claude_activity_summary
             from sentinel.brain import analyze_events, build_context
+            from sentinel.context_bus import get_bus as _get_context_bus
             from sentinel.learner import distill_from_activity, get_profile_summary
             from sentinel.notifier import send_notification, send_startup_message
             from sentinel.activity_tracker import ActivityTracker
@@ -5419,9 +5420,17 @@ class MainWindow(QMainWindow):
                     claude_act = get_claude_activity_summary()
                     user_act = tracker.get_activity_summary()
                     input_act = input_tracker.get_full_summary()
-                    ctx = build_context(snapshot, file_events, claude_act, user_act)
+                    # build_context now publishes system/files/claude/activity
+                    # to the shared Context Bus. We then publish the remaining
+                    # source-specific signals (input, screen) the same way,
+                    # so all observation channels live in one place. `ctx`
+                    # is assembled from bus.render() rather than ad-hoc string
+                    # concat — consistent section labels, consistent priority
+                    # order, consistent TTL-driven decay. See context_bus.py.
+                    build_context(snapshot, file_events, claude_act, user_act)
+                    _cbus = _get_context_bus()
                     if input_act:
-                        ctx += "\n\n" + input_act
+                        _cbus.publish("input", input_act)
 
                     # 千里眼：隨機截圖觀察
                     screen_act = ""
@@ -5429,7 +5438,9 @@ class MainWindow(QMainWindow):
                         screen_obs = screen_watcher.capture_and_learn()
                         if screen_obs:
                             screen_act = screen_obs["analysis"]
-                            ctx += "\n\n=== 螢幕觀察（千里眼）===\n" + screen_act
+                            _cbus.publish("screen", screen_act)
+
+                    ctx = _cbus.render()
 
                     # 更新底部狀態列（第一行：主狀態 + 倒數計時）
                     import datetime as _dt
