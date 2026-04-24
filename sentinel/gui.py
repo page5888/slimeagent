@@ -136,6 +136,20 @@ class ChatTab(QWidget):
         self.chat_display.setReadOnly(True)
         layout.addWidget(self.chat_display, stretch=1)
 
+        # Phase D2: inline approval panel. Lives between the chat
+        # transcript and the input row. Only visible when there's at
+        # least one pending ACTION-kind proposal, so for pure
+        # conversation the chat tab looks identical to before D2.
+        # When the slime proposes an action, the card shows up right
+        # below the chat with [同意] / [拒絕] buttons — no tab switch
+        # required to act on what the slime just suggested.
+        self.approval_container = QWidget()
+        self.approval_layout = QVBoxLayout(self.approval_container)
+        self.approval_layout.setContentsMargins(0, 4, 0, 4)
+        self.approval_layout.setSpacing(6)
+        self.approval_container.setVisible(False)
+        layout.addWidget(self.approval_container)
+
         # Input area
         input_layout = QHBoxLayout()
         self.input_field = QLineEdit()
@@ -152,7 +166,21 @@ class ChatTab(QWidget):
         # Connect response signal
         self.bridge.chat_response.connect(self._on_response)
 
+        # Phase D2: refresh the inline panel when new proposals arrive
+        # from any source (chat reply, future autonomous paths).
+        # Using Qt.QueuedConnection via QTimer.singleShot keeps the
+        # callback off whatever thread fired it — approval callbacks
+        # may fire from background threads.
+        try:
+            from sentinel.growth import register_on_submit
+            register_on_submit(self._on_approval_submitted)
+        except Exception as e:
+            log.warning(f"chat tab: approval callback not registered: {e}")
+
         self._append_system("AI Slime 已就緒。你可以開始對話。")
+        # Render whatever's already pending at startup (e.g. leftover
+        # from a previous session the user never got to).
+        self._refresh_approval_panel()
 
     def _append_system(self, text: str):
         self.chat_display.append(f'<p style="color:#888;"><i>{text}</i></p>')
@@ -206,10 +234,197 @@ class ChatTab(QWidget):
     def _on_response(self, text: str):
         self.send_btn.setEnabled(True)
         self._append_bot(text)
+        # Phase D2: the slime may have proposed one or more actions
+        # during this reply. Repaint the inline card panel so the user
+        # can approve/deny without leaving chat.
+        self._refresh_approval_panel()
+
+    # ── Phase D2: inline approval cards ──────────────────────────
+
+    def _on_approval_submitted(self, _approval) -> None:
+        """Callback fired by approval.submit_action / submit_for_approval.
+
+        Marshal back onto the Qt main thread via singleShot so the UI
+        mutation happens where Qt expects it. Payload (the approval
+        object) is ignored here — we always refresh from the full
+        pending list so we don't have to track card state per-id.
+        """
+        QTimer.singleShot(0, self._refresh_approval_panel)
+
+    def _refresh_approval_panel(self) -> None:
+        """Re-render the inline approval cards from the current pending
+        list, filtered to ACTION-kind proposals.
+
+        Code-kind proposals (skill_gen, self_mod) have their own review
+        flow on the 待同意 tab with diff views — showing them as tiny
+        inline cards in chat would be wrong UX. Action proposals are
+        the ones D1 added and the ones users will see most often from
+        chat, so those get the quick-click treatment here.
+        """
+        # Clear old cards
+        while self.approval_layout.count() > 0:
+            item = self.approval_layout.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+
+        try:
+            from sentinel.growth import list_pending, ACTION
+            pending = [p for p in list_pending() if p.kind == ACTION]
+        except Exception as e:
+            log.warning(f"chat tab: couldn't list pending approvals: {e}")
+            self.approval_container.setVisible(False)
+            return
+
+        if not pending:
+            self.approval_container.setVisible(False)
+            return
+
+        self.approval_container.setVisible(True)
+        for p in pending[:5]:   # cap to keep chat area readable
+            card = self._build_approval_card(p)
+            self.approval_layout.addWidget(card)
+        if len(pending) > 5:
+            more = QLabel(
+                f"<span style='color:#888; font-size:10px;'>"
+                f"... 還有 {len(pending) - 5} 個提案（到「待同意」分頁看全部）</span>"
+            )
+            more.setAlignment(Qt.AlignCenter)
+            self.approval_layout.addWidget(more)
+
+    def _build_approval_card(self, p) -> QWidget:
+        """Compact approval card for an ACTION proposal.
+
+        Same 3-px-left-accent aesthetic as the federation cards (Phase
+        A3 redesign) for visual consistency across tabs: no filled
+        backgrounds, accent color encodes meaning. Yellow = action
+        awaiting decision.
+        """
+        card = QFrame()
+        card.setStyleSheet(
+            "QFrame { background: transparent; border: none; "
+            "border-left: 3px solid #ffd166; }"
+        )
+        v = QVBoxLayout(card)
+        v.setContentsMargins(12, 6, 8, 8)
+        v.setSpacing(4)
+
+        # Title + action_type subtitle
+        title_text = p.title or p.action_type
+        title_lbl = QLabel(
+            f"<b style='color:#e6e6e6;'>{title_text}</b>"
+            f"  <span style='color:#888; font-size:10px;'>"
+            f"{p.action_type}</span>"
+        )
+        title_lbl.setStyleSheet("font-size: 12px;")
+        title_lbl.setWordWrap(True)
+        v.addWidget(title_lbl)
+
+        if p.reason:
+            reason_lbl = QLabel(p.reason)
+            reason_lbl.setStyleSheet("color:#aaa; font-size: 10px;")
+            reason_lbl.setWordWrap(True)
+            v.addWidget(reason_lbl)
+
+        # Surface any policy/safety findings so the user sees warnings
+        # before clicking approve. Info is filtered out to keep the
+        # card compact; warn/error findings always show.
+        warnings = [f for f in (list(p.safety_findings or []) +
+                                list(p.policy_findings or []))
+                    if f.get("level") in ("warn", "error")]
+        for w in warnings:
+            lvl = w.get("level", "warn")
+            color = "#cc6b63" if lvl == "error" else "#ffa502"
+            msg = w.get("msg", "")
+            findings_lbl = QLabel(
+                f"<span style='color:{color};'>⚠ {msg}</span>"
+            )
+            findings_lbl.setStyleSheet("font-size: 10px;")
+            findings_lbl.setWordWrap(True)
+            v.addWidget(findings_lbl)
+
+        # Action row
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(6)
+        btn_row.addStretch()
+
+        deny_btn = QPushButton(t("chat_approval_deny"))
+        deny_btn.setCursor(Qt.PointingHandCursor)
+        deny_btn.setStyleSheet(
+            "QPushButton { background:transparent; color:#888;"
+            " padding:3px 12px; border:1px solid #444; border-radius:10px;"
+            " font-size:10px; }"
+            "QPushButton:hover { color:#cc6b63; border-color:#cc6b63; }"
+        )
+        deny_btn.clicked.connect(
+            lambda _checked, aid=p.id: self._on_deny_click(aid)
+        )
+        btn_row.addWidget(deny_btn)
+
+        approve_btn = QPushButton(t("chat_approval_approve"))
+        approve_btn.setCursor(Qt.PointingHandCursor)
+        approve_btn.setStyleSheet(
+            "QPushButton { background:#ffd166; color:#1a1a1a; font-weight:600;"
+            " padding:3px 14px; border:none; border-radius:10px;"
+            " font-size:10px; }"
+            "QPushButton:hover { background:#ffdc88; }"
+        )
+        approve_btn.clicked.connect(
+            lambda _checked, aid=p.id: self._on_approve_click(aid)
+        )
+        btn_row.addWidget(approve_btn)
+
+        v.addLayout(btn_row)
+        return card
+
+    def _on_approve_click(self, approval_id: str) -> None:
+        """Approve handler: invoke the handler registered with the
+        approval queue (in our case a surface.* executor). Any result
+        shows up in the chat transcript as a small system-italic line
+        so the user sees what happened without opening the audit log.
+        """
+        def _do() -> None:
+            from sentinel.growth import approve
+            try:
+                ok = approve(approval_id, approver="user_chat")
+            except Exception as e:
+                log.warning(f"approve({approval_id}) raised: {e}")
+                ok = False
+            # Marshal the UI update back onto the main thread.
+            msg = (
+                t("chat_approval_ok").format(id=approval_id)
+                if ok else t("chat_approval_failed").format(id=approval_id)
+            )
+            QTimer.singleShot(0, lambda: self._append_system(msg))
+            QTimer.singleShot(0, self._refresh_approval_panel)
+
+        # Run off the UI thread: executors may block (e.g. a slow
+        # subprocess.run or a Win32 focus call on a stuck window).
+        threading.Thread(target=_do, daemon=True).start()
+
+    def _on_deny_click(self, approval_id: str) -> None:
+        def _do() -> None:
+            from sentinel.growth import reject
+            try:
+                reject(approval_id, reason="denied in chat tab",
+                       approver="user_chat")
+            except Exception as e:
+                log.warning(f"reject({approval_id}) raised: {e}")
+            QTimer.singleShot(
+                0, lambda: self._append_system(
+                    t("chat_approval_denied").format(id=approval_id)
+                ),
+            )
+            QTimer.singleShot(0, self._refresh_approval_panel)
+
+        threading.Thread(target=_do, daemon=True).start()
 
     def retranslate(self):
         self.input_field.setPlaceholderText(t("chat_placeholder"))
         self.send_btn.setText(t("chat_send"))
+        # Refresh panel so translated button labels apply to any
+        # currently-rendered cards.
+        self._refresh_approval_panel()
 
 
 # ─── Home Tab (首頁) ─────────────────────────────────────────────────────
