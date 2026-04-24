@@ -102,6 +102,55 @@ def _policy_set_clipboard(payload: dict) -> tuple[bool, list[dict]]:
     return True, []
 
 
+# URL schemes we'll allow the slime to open on the user's browser.
+# Explicit allowlist — everything else (javascript:, data:, file://,
+# chrome://, about:, view-source:, …) is refused. User-facing
+# behaviors like phishing mitigations are the browser's job; ours is
+# to keep the slime from being tricked into executing local
+# javascript schemes or exfiltrating local files via file://.
+_ALLOWED_URL_SCHEMES = frozenset({"http", "https"})
+
+# Enough room for an OAuth callback URL with query params but not
+# for smuggling a multi-KB payload.
+_MAX_URL_LEN = 2048
+
+
+def _policy_open_url(payload: dict) -> tuple[bool, list[dict]]:
+    """Validate URL shape + scheme. Adds a warn-level finding for
+    every URL so the user sees the exact target on the approval
+    card before clicking — protects against the LLM paraphrasing
+    'YouTube' as a URL the user didn't expect.
+    """
+    url = (payload or {}).get("url")
+    if not isinstance(url, str) or not url.strip():
+        return False, [{"level": "error",
+                        "msg": "url must be a non-empty string"}]
+    url = url.strip()
+    if len(url) > _MAX_URL_LEN:
+        return False, [{
+            "level": "error",
+            "msg": f"url too long ({len(url)} chars; max {_MAX_URL_LEN})",
+        }]
+    # Parse scheme loosely — full urllib.parse.urlparse accepts a lot
+    # of input shapes; for a policy gate we just want the "word before
+    # ://" part.
+    import re as _re
+    m = _re.match(r"^([A-Za-z][A-Za-z0-9+.\-]*):", url)
+    scheme = (m.group(1).lower() if m else "").strip()
+    if scheme not in _ALLOWED_URL_SCHEMES:
+        return False, [{
+            "level": "error",
+            "msg": (
+                f"scheme {scheme!r} not allowed; only "
+                f"{sorted(_ALLOWED_URL_SCHEMES)} are permitted"
+            ),
+        }]
+    return True, [{
+        "level": "warn",
+        "msg": f"會在預設瀏覽器開啟：{url}",
+    }]
+
+
 def _policy_open_path(payload: dict) -> tuple[bool, list[dict]]:
     """Enforce: path exists, path is under a whitelisted root.
 
@@ -197,6 +246,10 @@ def _exec_open_path(payload: dict) -> dict:
     return get_surface().open_path(payload.get("path", ""))
 
 
+def _exec_open_url(payload: dict) -> dict:
+    return get_surface().open_url(payload.get("url", ""))
+
+
 # ── Vision (Phase D3) ──────────────────────────────────────────────
 # Lives here instead of a separate vision handlers module because it
 # shares the same "screenshot-as-side-effect" audit path: the user
@@ -267,6 +320,7 @@ _REGISTERED: list[tuple[str, Any]] = [
     ("surface.set_clipboard",   _policy_set_clipboard,    _exec_set_clipboard),
     ("surface.take_screenshot", None,                     _exec_take_screenshot),
     ("surface.open_path",       _policy_open_path,        _exec_open_path),
+    ("surface.open_url",        _policy_open_url,         _exec_open_url),
     # Phase D3 — vision pipeline as an action. Policy surfaces a
     # warning (screenshot → cloud VLM) so the approval card shows
     # what the user is consenting to.

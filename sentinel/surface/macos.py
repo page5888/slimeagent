@@ -48,6 +48,19 @@ class MacSurface(Surface):
         except FileNotFoundError:
             return {"ok": False, "error": "open command not found"}
 
+    def open_url(self, url: str) -> dict:
+        """Launch URL via the stdlib webbrowser module (same as
+        Windows) — works uniformly across Safari / Chrome / Firefox
+        based on macOS default."""
+        if not url:
+            return {"ok": False, "error": "empty_url"}
+        try:
+            import webbrowser
+            ok = webbrowser.open(url, new=2)
+            return {"ok": bool(ok), "url": url}
+        except Exception as e:
+            return {"ok": False, "error": str(e), "url": url}
+
     def take_screenshot(self, out_path: Optional[str] = None) -> dict:
         """Use PIL if available (needs Screen Recording permission) or
         the stdlib `screencapture` binary (also needs the permission

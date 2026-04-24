@@ -253,3 +253,23 @@ class WindowsSurface(Surface):
             return {"ok": True, "path": resolved}
         except OSError as e:
             return {"ok": False, "error": str(e), "path": resolved}
+
+    # ── open_url ───────────────────────────────────────────────────
+
+    def open_url(self, url: str) -> dict:
+        """Launch URL in the default browser via webbrowser module.
+
+        webbrowser.open spawns a browser without blocking and handles
+        the OS defaults correctly. We use it (rather than os.startfile
+        or subprocess("start", ...)) because it's cross-platform and
+        does the right thing on Windows — no shell=True, no URL
+        quoting games.
+        """
+        if not url:
+            return {"ok": False, "error": "empty_url"}
+        try:
+            import webbrowser
+            ok = webbrowser.open(url, new=2)  # new=2 → new tab if possible
+            return {"ok": bool(ok), "url": url}
+        except Exception as e:
+            return {"ok": False, "error": str(e), "url": url}
