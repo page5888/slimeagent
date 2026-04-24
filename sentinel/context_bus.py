@@ -257,6 +257,18 @@ SOURCE_SCREEN = SourceSpec(
     strategy=Strategy.REPLACE_SELF,
     ttl_seconds=600,
 )
+SOURCE_VOICE = SourceSpec(
+    # Transcripts from voice.listen land here so the LLM sees what
+    # the user said in the next turn without the chat caller needing
+    # to marshal STT output manually. Short TTL — voice is a fleeting
+    # signal, a 10-minute-old transcript just crowds the prompt.
+    key="voice",
+    label="語音輸入",
+    priority=65,
+    strategy=Strategy.APPEND,
+    max_items=3,
+    ttl_seconds=300,
+)
 SOURCE_MEMORY = SourceSpec(
     key="memory",
     label="相關記憶",
@@ -268,6 +280,6 @@ SOURCE_MEMORY = SourceSpec(
 
 for _spec in (
     SOURCE_SYSTEM, SOURCE_FILES, SOURCE_CLAUDE, SOURCE_ACTIVITY,
-    SOURCE_INPUT, SOURCE_SCREEN, SOURCE_MEMORY,
+    SOURCE_INPUT, SOURCE_SCREEN, SOURCE_VOICE, SOURCE_MEMORY,
 ):
     _bus.register(_spec)

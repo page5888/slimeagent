@@ -32,3 +32,14 @@ anthropic>=0.40
 # If missing, sentinel/memory.py falls back to recency-only recall
 # without breaking the app.
 sqlite-vec>=0.1
+
+# ── Voice (Phase D5) ───────────────────────────────────────────────
+# sounddevice + soundfile give us mic capture and WAV read/write
+# with a pure-pip install (libportaudio/libsndfile wheels ship with
+# the packages). numpy is a sounddevice transitive dep. pyttsx3 is
+# the offline TTS fallback when no cloud provider is available —
+# voice.py degrades gracefully when any of these are missing.
+sounddevice>=0.4
+soundfile>=0.12
+numpy>=1.24
+pyttsx3>=2.90
