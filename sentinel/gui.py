@@ -4159,11 +4159,26 @@ class ApprovalTab(QWidget):
 
     @staticmethod
     def _format_list_label(approval) -> str:
-        kind_zh = t("approval_kind_skill") if approval.kind == "skill_gen" else t("approval_kind_selfmod")
+        # Phase C1 introduced ACTION kind — map it to its action_type
+        # for the list label so users can tell what kind of side effect
+        # is being proposed without opening the detail pane.
+        if approval.kind == "skill_gen":
+            kind_zh = t("approval_kind_skill")
+        elif approval.kind == "self_mod":
+            kind_zh = t("approval_kind_selfmod")
+        elif approval.kind == "action":
+            kind_zh = f"動作·{approval.action_type or '?'}"
+        else:
+            kind_zh = approval.kind  # unknown: show raw kind rather than crash
         title = approval.title or "(no title)"
         if len(title) > 40:
             title = title[:40] + "…"
-        warn_badge = f" ⚠{len(approval.safety_findings)}" if approval.safety_findings else ""
+        # Combined warning count: safety scan findings (code) +
+        # policy findings (action). Either surface concerns worth
+        # flagging before the user clicks approve.
+        warn_count = len(getattr(approval, "safety_findings", []) or []) + \
+                     len(getattr(approval, "policy_findings", []) or [])
+        warn_badge = f" ⚠{warn_count}" if warn_count else ""
         return f"[{approval.id}] {kind_zh}  {title}{warn_badge}"
 
     # ── Pending selection / rendering ────────────────────────────

@@ -39,12 +39,17 @@ from sentinel.growth.capability import (
 )
 from sentinel.growth.approval import (
     PendingApproval,
+    PolicyDenied,
     submit_for_approval,
+    submit_action,
+    register_action_handler,
+    list_action_types,
     list_pending,
     approve,
     reject,
     register_on_submit,
     unregister_on_submit,
+    SKILL_GEN, SELF_MOD, ACTION,
 )
 from sentinel.growth.safety import (
     scan_code,
@@ -53,8 +58,11 @@ from sentinel.growth.safety import (
 
 __all__ = [
     "Capability", "current_capabilities", "can_perform",
-    "PendingApproval", "submit_for_approval", "list_pending",
-    "approve", "reject",
+    "PendingApproval", "PolicyDenied",
+    "submit_for_approval", "submit_action",
+    "register_action_handler", "list_action_types",
+    "list_pending", "approve", "reject",
     "register_on_submit", "unregister_on_submit",
+    "SKILL_GEN", "SELF_MOD", "ACTION",
     "scan_code", "SafetyReport",
 ]

@@ -1,27 +1,66 @@
-"""Human-in-the-loop approval queue for slime-authored code.
+"""Human-in-the-loop approval queue.
 
-The slime never deploys code it wrote. Instead:
+Two classes of things go through this queue:
 
-  1. self_evolution.generate_skill() or self_modify() produces code.
-  2. safety.scan_code() catches obvious bad patterns.
-  3. submit_for_approval() writes the proposal to a pending file and
-     notifies the user (Telegram if configured, GUI list otherwise).
-  4. The USER decides: approve() moves the code into the runnable
-     location; reject() deletes it and logs why.
+  A. Code the slime wrote (SKILL_GEN, SELF_MOD) — a file write on
+     approval. Existed since v0.1.
+  B. Actions the slime wants to take (ACTION) — a registered handler
+     fires on approval. Added in Phase C1 as groundwork for Phase D
+     computer-use capabilities.
+
+The mechanism is the same for both: no side effect happens until the
+user explicitly approves. `safety.scan_code` for code, a policy_check
+callback for actions, provide the "check before asking" layer so the
+user isn't bombarded with obviously-unsafe requests.
+
+Flow
+----
+  1. Caller builds a proposal:
+       - Code: submit_for_approval(kind=SKILL_GEN|SELF_MOD, ...)
+       - Action: submit_action(action_type=..., payload={...}, ...)
+  2. A safety/policy check runs at submit time; findings are stored
+     with the proposal (not hidden from the user).
+  3. Proposal lands in ~/.hermes/approvals/pending/<id>.json.
+     Callbacks registered via register_on_submit fire so GUI +
+     Telegram can notify.
+  4. User decides:
+       - approve(id) — code proposals write to target_path; action
+         proposals invoke their registered handler.
+       - reject(id, reason) — archived to rejected/ with the reason.
+  5. Every transition is audit-logged to approvals.jsonl.
+
+Action handler registry
+-----------------------
+Modules that want to offer user-approvable actions register a handler
+at import time:
+
+    from sentinel.growth import approval
+
+    def _execute_file_open(payload: dict) -> dict:
+        # payload validated by policy, execute side effect
+        subprocess.run(["start", "", payload["path"]], shell=True)
+        return {"ok": True}
+
+    def _policy_file_open(payload: dict) -> tuple[bool, list[dict]]:
+        findings = []
+        if not Path(payload["path"]).exists():
+            findings.append({"level": "error", "msg": "path not found"})
+            return False, findings
+        return True, findings
+
+    approval.register_action_handler(
+        "file_open", handler=_execute_file_open, policy=_policy_file_open,
+    )
+
+This file has ZERO side effects on sentinel code or the user's
+machine until approve() is called — that's the whole point.
 
 Storage layout under ~/.hermes/approvals/:
 
-  pending/<id>.json   — the proposal (metadata + source)
+  pending/<id>.json   — the proposal (metadata + source or payload)
   approved/<id>.json  — archived after approval (audit trail)
   rejected/<id>.json  — archived after rejection (audit trail)
-
-Every approve / reject action is logged to approvals.jsonl with
-timestamp, user decision, and findings from the safety scan. This
-gives a full audit of what the slime proposed and what the user
-accepted over time.
-
-This file has ZERO side effects on sentinel code until approve() is
-called — that's the whole point.
+  approvals.jsonl     — per-transition audit log
 """
 from __future__ import annotations
 
@@ -46,24 +85,46 @@ AUDIT_LOG = APPROVALS_DIR / "approvals.jsonl"
 
 SKILL_GEN = "skill_gen"           # new skill file in sentinel/skills/
 SELF_MOD = "self_mod"             # modification of a MODIFIABLE_FILES entry
+ACTION = "action"                 # generic side-effect action via handler
 
 
 @dataclass
 class PendingApproval:
     """A proposal awaiting user decision.
 
-    Fields chosen to stay readable by a human opening the JSON:
-    everything needed to judge the proposal is in one file.
+    Two shapes share this struct:
+      - Code proposals (kind ∈ {SKILL_GEN, SELF_MOD}) use
+        target_path + source + safety_findings.
+      - Action proposals (kind == ACTION) use action_type + payload +
+        policy_findings. The registered handler's name is stored in
+        action_type and the handler is looked up at approve() time,
+        not stored in the proposal itself.
+
+    Both share id/created_at/title/reason so a GUI can render a
+    uniform list without branching per kind for display.
+
+    Unused fields default to empty so both old files (pre-C1, no
+    action_type/payload/policy_findings) and new files round-trip
+    through JSON without migration.
     """
     id: str                       # short random ID, e.g. "a3f7b2"
-    kind: str                     # SKILL_GEN or SELF_MOD
+    kind: str                     # SKILL_GEN | SELF_MOD | ACTION
     created_at: float             # unix timestamp
     title: str                    # short human label
     reason: str                   # why the slime proposed this
-    target_path: str              # where code will land on approval
-    source: str                   # the actual code
-    safety_findings: list[dict] = field(default_factory=list)
+
+    # Code-proposal fields (SKILL_GEN, SELF_MOD). Empty for ACTION.
+    target_path: str = ""         # where code will land on approval
+    source: str = ""              # the actual code
     previous_source: str = ""     # for SELF_MOD: the code being replaced
+    safety_findings: list[dict] = field(default_factory=list)
+
+    # Action-proposal fields (ACTION). Empty for code kinds.
+    action_type: str = ""         # e.g. "file_open", "window_focus"
+    payload: dict = field(default_factory=dict)
+    policy_findings: list[dict] = field(default_factory=list)
+
+    # Common metadata
     proposer_tier: str = ""       # evolution tier at proposal time
 
 
@@ -102,7 +163,78 @@ def unregister_on_submit(callback) -> None:
         _submit_callbacks.remove(callback)
 
 
+# ── Action handler registry ───────────────────────────────────────
+# Modules that want to offer user-approvable actions register their
+# executor + policy check here. Kept as a simple dict — if there's
+# ever a need for dynamic loading or plugin-defined handlers, this is
+# the single point to generalize.
+
+_action_handlers: dict[str, dict] = {}
+
+
+def register_action_handler(
+    action_type: str,
+    handler,
+    policy=None,
+) -> None:
+    """Register how to execute and pre-check an action type.
+
+    handler: callable(payload: dict) -> dict
+        Runs when the user approves. Should carry out the side effect
+        and return a structured result (e.g. {"ok": True, "info": ...}).
+        Exceptions propagate to approve() which logs and returns False.
+
+    policy: optional callable(payload: dict) -> tuple[bool, list[dict]]
+        Runs at submit time. Returns (allowed, findings). If allowed
+        is False, submit_action refuses to queue (caller gets the
+        findings back and should inform the user). Findings are also
+        stored on the proposal so the user sees them when judging.
+        Each finding dict: {"level": "warn"|"error"|"info", "msg": str}.
+
+    Re-registering the same action_type replaces the previous handler,
+    which makes live reloads during development painless.
+    """
+    _action_handlers[action_type] = {
+        "handler": handler,
+        "policy": policy,
+    }
+    log.debug("action handler registered: %s", action_type)
+
+
+def list_action_types() -> list[str]:
+    """Return known action types. Useful for debugging / tests."""
+    return sorted(_action_handlers.keys())
+
+
 # ── Submit ────────────────────────────────────────────────────────
+
+def _persist_and_notify(approval: PendingApproval) -> PendingApproval:
+    """Common tail of submit_for_approval and submit_action.
+
+    Writes the pending file, fires the audit log, runs registered
+    on-submit callbacks. Isolated so both code and action paths share
+    the same persistence semantics without duplication.
+    """
+    path = PENDING_DIR / f"{approval.id}.json"
+    path.write_text(
+        json.dumps(asdict(approval), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    _audit("submit", approval.id, {
+        "kind": approval.kind,
+        "title": approval.title,
+        "target": approval.target_path or approval.action_type,
+        "warnings": len(approval.safety_findings) + len(approval.policy_findings),
+    })
+    log.info("Approval queued: %s (%s) — %s",
+             approval.id, approval.kind, approval.title)
+    for cb in list(_submit_callbacks):
+        try:
+            cb(approval)
+        except Exception as e:
+            log.warning("approval submit callback %r raised: %s", cb, e)
+    return approval
+
 
 def submit_for_approval(
     kind: str,
@@ -114,14 +246,14 @@ def submit_for_approval(
     safety_findings: Optional[list[dict]] = None,
     proposer_tier: str = "",
 ) -> PendingApproval:
-    """Queue a proposal. Does NOT deploy anything.
+    """Queue a code proposal. Does NOT deploy anything.
 
     Returns the created PendingApproval. Caller is expected to
     notify the user that action is required.
     """
     _ensure_dirs()
     if kind not in (SKILL_GEN, SELF_MOD):
-        raise ValueError(f"Unknown approval kind: {kind}")
+        raise ValueError(f"Unknown code-approval kind: {kind}")
 
     approval = PendingApproval(
         id=_new_id(),
@@ -135,27 +267,75 @@ def submit_for_approval(
         safety_findings=safety_findings or [],
         proposer_tier=proposer_tier,
     )
-    path = PENDING_DIR / f"{approval.id}.json"
-    path.write_text(
-        json.dumps(asdict(approval), ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    _audit("submit", approval.id, {
-        "kind": kind,
-        "title": title,
-        "target": target_path,
-        "warnings": len(approval.safety_findings),
-    })
-    log.info("Approval queued: %s (%s) — %s", approval.id, kind, title)
+    return _persist_and_notify(approval)
 
-    # Fire callbacks — each listener isolated so one crash doesn't stop the rest
-    for cb in list(_submit_callbacks):
+
+class PolicyDenied(Exception):
+    """Raised by submit_action when policy refuses to even queue.
+
+    Carries the findings list so the caller can display them. Policy
+    is the "won't do it" gate; rejection at queue time means the user
+    never sees a proposal that was obviously unsafe. Less noise for
+    the user, faster feedback for the caller.
+    """
+    def __init__(self, action_type: str, findings: list[dict]):
+        self.action_type = action_type
+        self.findings = findings
+        msg = "; ".join(f.get("msg", "") for f in findings) or "denied"
+        super().__init__(f"policy denied {action_type}: {msg}")
+
+
+def submit_action(
+    action_type: str,
+    title: str,
+    reason: str,
+    payload: Optional[dict] = None,
+    proposer_tier: str = "",
+) -> PendingApproval:
+    """Queue an action for user approval.
+
+    The action_type must have been registered via
+    register_action_handler. Its policy check (if any) runs
+    immediately; if denied, raises PolicyDenied and nothing is
+    queued. Otherwise the proposal lands in pending/ just like a
+    code proposal and waits for the user.
+    """
+    _ensure_dirs()
+    entry = _action_handlers.get(action_type)
+    if entry is None:
+        raise ValueError(
+            f"Unknown action_type: {action_type!r}. "
+            f"Known: {list_action_types()}"
+        )
+
+    payload = payload or {}
+    findings: list[dict] = []
+    policy_fn = entry.get("policy")
+    if policy_fn is not None:
         try:
-            cb(approval)
+            allowed, findings = policy_fn(payload)
         except Exception as e:
-            log.warning("approval submit callback %r raised: %s", cb, e)
+            log.error("policy check %s raised: %s", action_type, e)
+            # Fail closed: if the policy check itself crashes, assume
+            # the action isn't safe to queue.
+            raise PolicyDenied(action_type, [
+                {"level": "error", "msg": f"policy check failed: {e}"}
+            ])
+        if not allowed:
+            raise PolicyDenied(action_type, findings)
 
-    return approval
+    approval = PendingApproval(
+        id=_new_id(),
+        kind=ACTION,
+        created_at=time.time(),
+        title=title,
+        reason=reason,
+        action_type=action_type,
+        payload=payload,
+        policy_findings=findings,
+        proposer_tier=proposer_tier,
+    )
+    return _persist_and_notify(approval)
 
 
 # ── Query ─────────────────────────────────────────────────────────
@@ -222,46 +402,108 @@ def get_pending(approval_id: str) -> Optional[PendingApproval]:
 
 # ── Decide ────────────────────────────────────────────────────────
 
+def _archive_approved(approval_id: str) -> None:
+    """Move pending/<id>.json to approved/<id>.json. Logs on failure
+    but never raises — archive issues shouldn't overshadow the actual
+    approval outcome."""
+    src = PENDING_DIR / f"{approval_id}.json"
+    dst = APPROVED_DIR / f"{approval_id}.json"
+    try:
+        src.rename(dst)
+    except OSError as e:
+        log.warning("approve(%s): archive failed: %s", approval_id, e)
+
+
+def _execute_code_approval(pending: PendingApproval) -> bool:
+    """Write source to target_path for SKILL_GEN / SELF_MOD kinds."""
+    target = Path(pending.target_path)
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(pending.source, encoding="utf-8")
+        return True
+    except OSError as e:
+        log.error("approve(%s): write failed: %s", pending.id, e)
+        _audit("approve_failed", pending.id, {"error": str(e)})
+        return False
+
+
+def _execute_action_approval(pending: PendingApproval) -> bool:
+    """Invoke the registered handler for an ACTION-kind proposal.
+
+    Handler exceptions are caught and logged — a failed action is a
+    reject in the eyes of the queue, not a crash of the approval
+    system. The handler return value is included in the audit log.
+    """
+    entry = _action_handlers.get(pending.action_type)
+    if entry is None:
+        log.error("approve(%s): no handler for action_type=%s",
+                  pending.id, pending.action_type)
+        _audit("approve_failed", pending.id, {
+            "error": f"unknown action_type {pending.action_type}",
+        })
+        return False
+    handler = entry["handler"]
+    try:
+        result = handler(pending.payload)
+        _audit("action_result", pending.id, {
+            "action_type": pending.action_type,
+            "result": result if isinstance(result, dict) else {"ok": bool(result)},
+        })
+        return True
+    except Exception as e:
+        log.error("approve(%s) action %s failed: %s",
+                  pending.id, pending.action_type, e)
+        _audit("approve_failed", pending.id, {
+            "action_type": pending.action_type,
+            "error": str(e),
+        })
+        return False
+
+
 def approve(approval_id: str, approver: str = "user") -> bool:
-    """Deploy the proposal by writing its source to target_path.
+    """Carry out the user's "yes" decision.
 
-    Archives the pending file to approved/ after a successful write.
-    Returns True on success.
+    Dispatches by kind:
+      - SKILL_GEN / SELF_MOD: write source to target_path (unchanged
+        behavior from pre-C1).
+      - ACTION: invoke the registered handler with payload.
 
-    Safety note: we do NOT re-run the safety scanner here. The scanner
-    already ran at submit time and its findings are in the proposal.
-    The human saw those findings before approving. If they approved
-    anyway, that's their call — we log it and proceed.
+    Archives the pending file to approved/ on success, logs the
+    decision to the audit trail. Returns True only if the underlying
+    execution succeeded — a False here means the approval was logged
+    but the side effect couldn't be carried out (disk error, handler
+    exception, unknown action_type).
+
+    Safety note: we do NOT re-run safety / policy checks here. They
+    ran at submit time and their findings are visible in the
+    proposal. If the user saw the findings and approved anyway,
+    that's their call.
     """
     pending = get_pending(approval_id)
     if pending is None:
         log.warning("approve(%s): not found", approval_id)
         return False
 
-    target = Path(pending.target_path)
-    try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(pending.source, encoding="utf-8")
-    except OSError as e:
-        log.error("approve(%s): write failed: %s", approval_id, e)
-        _audit("approve_failed", approval_id, {"error": str(e)})
+    if pending.kind in (SKILL_GEN, SELF_MOD):
+        ok = _execute_code_approval(pending)
+        log_target = pending.target_path
+    elif pending.kind == ACTION:
+        ok = _execute_action_approval(pending)
+        log_target = pending.action_type
+    else:
+        log.error("approve(%s): unknown kind %s", approval_id, pending.kind)
         return False
 
-    # Move pending file to approved archive
-    src = PENDING_DIR / f"{approval_id}.json"
-    dst = APPROVED_DIR / f"{approval_id}.json"
-    try:
-        src.rename(dst)
-    except OSError as e:
-        # Write succeeded but archive failed — keep going but log
-        log.warning("approve(%s): archive failed: %s", approval_id, e)
+    if not ok:
+        return False
 
+    _archive_approved(approval_id)
     _audit("approve", approval_id, {
         "approver": approver,
-        "target": pending.target_path,
+        "target": log_target,
         "kind": pending.kind,
     })
-    log.info("Approved %s → %s", approval_id, pending.target_path)
+    log.info("Approved %s (%s) → %s", approval_id, pending.kind, log_target)
     return True
 
 
