@@ -354,6 +354,44 @@ def _log_chat(role: str, text: str):
         pass
 
 
+def _retrieve_memory_block(query: str, k: int = 3) -> str:
+    """Semantic recall → formatted block for the chat prompt.
+
+    Phase B2: before we hand the user's latest turn to the LLM, ask
+    sqlite-vec for the k most semantically relevant past memories
+    (chat turns, distilled observations, confirmed federation
+    patterns) and format them as a compact section. Returns empty
+    string on any failure — memory is a nice-to-have, never blocks
+    the reply.
+    """
+    try:
+        from sentinel.memory import recall
+        hits = recall(query, k=k)
+    except Exception as e:
+        log.warning(f"memory recall failed: {e}")
+        return ""
+    if not hits:
+        return ""
+    now = time.time()
+    lines = ["=== 相關記憶（由相似度檢索）==="]
+    for h in hits:
+        age_s = max(0.0, now - h["created_at"])
+        if age_s < 3600:
+            age = f"{int(age_s / 60)}m前"
+        elif age_s < 86400:
+            age = f"{int(age_s / 3600)}h前"
+        else:
+            age = f"{int(age_s / 86400)}d前"
+        # Trim long memories so the prompt doesn't blow up on any
+        # single past turn (cap ~200 chars per memory is plenty of
+        # signal for the model to "remember").
+        text = h["text"].replace("\n", " ")
+        if len(text) > 200:
+            text = text[:200] + "…"
+        lines.append(f"  · [{h['kind']} · {age}] {text}")
+    return "\n".join(lines)
+
+
 def handle_message(user_text: str) -> str:
     """Process an incoming message from the user and return a response."""
     # Record relationship signals BEFORE building prompt so they inform it
@@ -383,7 +421,18 @@ def handle_message(user_text: str) -> str:
         history_lines.append(f"{role}: {msg['text']}")
     conversation_text = "\n".join(history_lines)
 
-    prompt = f"{system_prompt}\n\n=== 對話紀錄 ===\n{conversation_text}\n\nSlime:"
+    # Phase B2 — semantic recall block. Placed between the system
+    # prompt and the live conversation so the model treats retrieved
+    # memories as background context, not part of the in-session
+    # turn-by-turn history.
+    memory_block = _retrieve_memory_block(user_text, k=3)
+
+    parts = [system_prompt]
+    if memory_block:
+        parts.append(memory_block)
+    parts.append(f"=== 對話紀錄 ===\n{conversation_text}")
+    parts.append("Slime:")
+    prompt = "\n\n".join(parts)
 
     reply = call_llm(prompt, temperature=0.7, max_tokens=1000,
                      model_pref=config.CHAT_MODEL_PREF)
@@ -401,6 +450,22 @@ def handle_message(user_text: str) -> str:
 
     _conversation.append({"role": "model", "text": reply})
     _log_chat("assistant", reply)
+
+    # Phase B2: store the turn in long-term semantic memory so future
+    # chats can recall it via similarity search. We store the pair
+    # (user + slime) as a single record — the slime's response often
+    # contains the concrete fact worth recalling ("主人提到下週要飛
+    # 東京"), so splitting would lose that coupling.
+    try:
+        from sentinel.memory import remember, KIND_CHAT
+        remember(
+            text=f"主人：{user_text}\nSlime：{reply}",
+            kind=KIND_CHAT,
+            metadata={"logged_at": time.time()},
+        )
+    except Exception as e:
+        # Never let a memory write break the chat reply.
+        log.warning(f"chat memory store failed: {e}")
 
     # Learn from conversations too - save to memory
     _maybe_learn_from_chat(user_text, reply)

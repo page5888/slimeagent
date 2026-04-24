@@ -147,6 +147,36 @@ def distill_from_activity(recent_activity: str):
 
         save_memory(memory)
         log.info(f"Distilled {len(new_obs)} new observations. Total sessions: {memory['session_count']}")
+
+        # Phase B2: persist this distillation cycle's outputs as
+        # semantic-searchable long-term memory. Profile updates get
+        # stored verbatim so the slime can later recall its own
+        # evolving model of the user; each individual observation
+        # becomes its own memory so recall can surface the specific
+        # observation (e.g. "主人週五晚上容易分心") rather than the
+        # whole paragraph when it's relevant.
+        try:
+            from sentinel.memory import (
+                remember, KIND_DISTILL_PROFILE, KIND_DISTILL_OBSERVATION,
+            )
+            profile_snippet = memory.get("profile", "")
+            if profile_snippet:
+                remember(
+                    text=profile_snippet,
+                    kind=KIND_DISTILL_PROFILE,
+                    metadata={"session": memory["session_count"]},
+                )
+            for obs_text in new_obs:
+                if isinstance(obs_text, str) and obs_text.strip():
+                    remember(
+                        text=obs_text,
+                        kind=KIND_DISTILL_OBSERVATION,
+                        metadata={"session": memory["session_count"]},
+                    )
+        except Exception as e:
+            # Never let a memory write break the distillation return path.
+            log.warning(f"distill memory persist failed: {e}")
+
         return result
 
     except Exception as e:

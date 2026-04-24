@@ -25,3 +25,10 @@ python-telegram-bot>=21.0
 google-genai>=1.0
 openai>=1.40
 anthropic>=0.40
+
+# ── Long-term memory (Phase B2) ────────────────────────────────────
+# sqlite-vec gives us local semantic search via SQLite — no separate
+# server, zero config, embeds into the existing ~/.hermes storage.
+# If missing, sentinel/memory.py falls back to recency-only recall
+# without breaking the app.
+sqlite-vec>=0.1

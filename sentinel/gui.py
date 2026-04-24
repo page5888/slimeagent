@@ -2340,6 +2340,26 @@ class FederationTab(QWidget):
                 if statement:
                     from sentinel import identity
                     identity.record_confirmed_pattern(pattern_id, statement, category)
+                    # Phase B2: also drop the statement into long-term
+                    # semantic memory so the slime can recall it in
+                    # chats ("你之前確認過『深夜工作者多半...』"). Kind
+                    # is federation_pattern so we can filter retrieval
+                    # by source if we later want different weights.
+                    try:
+                        from sentinel.memory import remember, KIND_FEDERATION
+                        remember(
+                            text=statement,
+                            kind=KIND_FEDERATION,
+                            metadata={
+                                "pattern_id": pattern_id,
+                                "category": category,
+                            },
+                        )
+                    except Exception as e:
+                        import logging
+                        logging.getLogger("sentinel.gui").warning(
+                            f"federation pattern memory persist failed: {e}"
+                        )
             except Exception:
                 pass
 
