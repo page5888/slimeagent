@@ -355,11 +355,28 @@ def _log_chat(role: str, text: str):
 
 
 _ACTION_REQUEST_HINTS = (
-    "幫我", "幫忙", "可以", "打開", "開啟", "切到", "切過去", "聚焦",
-    "複製", "貼", "剪貼簿", "截圖", "拍一下", "跑", "執行", "啟動",
-    "關掉", "列出", "列一下", "看一下視窗",
-    "open", "focus", "launch", "run", "copy", "paste", "screenshot",
-    "list windows",
+    # Generic imperative openers
+    "幫我", "幫忙", "可以", "你能", "請你", "麻煩", "去幫", "替我",
+    # File / folder / window management
+    "打開", "開啟", "開一下", "開個", "切到", "切過去", "切一下",
+    "聚焦", "focus", "列出", "列一下", "看一下視窗", "視窗列表",
+    "關掉", "關閉",
+    # Clipboard
+    "複製", "貼上", "貼", "剪貼簿", "clipboard",
+    # Screen / vision
+    "截圖", "拍一下", "截一下", "screenshot",
+    "看螢幕", "看我的螢幕", "看畫面", "看一下畫面", "分析畫面",
+    "這是什麼", "這錯誤", "這 error",
+    # Voice (D5 — we missed these first pass, which meant "唸出..."
+    # slipped through as pure conversation)
+    "唸出", "唸", "念出", "念", "說出", "講出", "讀出", "讀一下",
+    "播放", "播一下", "播", "發聲", "出聲", "speak", "say it",
+    "聽我說", "聽我講", "聽一下", "錄一下", "錄音", "listen", "record",
+    # Web / URL
+    "網站", "網頁", "打開網", "開網", "youtube", "google", "github",
+    # Generic English imperatives
+    "open", "launch", "run", "execute", "start", "kill",
+    "copy", "paste", "screenshot", "list windows", "close",
 )
 
 
@@ -373,11 +390,28 @@ def _user_might_want_action(user_text: str) -> bool:
     which feels obnoxious. The hints list covers the common imperative
     shapes; missed ones get natural-language replies and the user can
     re-ask more directly.
+
+    Match is substring + case-insensitive for English hints; Chinese
+    hints match as-is (Chinese doesn't have case). A request doesn't
+    need to start with a hint — "那個檔案你能開嗎" still matches on
+    "你能" / "開". False positives are cheap (one extra prompt block)
+    and false negatives are the real cost (user asks for something,
+    slime just chats — what Peter hit with "唸出『今天天氣真好』"
+    the first time).
     """
     if not user_text:
         return False
-    t = user_text.lower()
-    return any(h in t or h in user_text for h in _ACTION_REQUEST_HINTS)
+    lowered = user_text.lower()
+    for h in _ACTION_REQUEST_HINTS:
+        # Lowercase hints (English) match the lowered text;
+        # mixed-case/Chinese hints match the raw text directly.
+        if h == h.lower():
+            if h in lowered:
+                return True
+        else:
+            if h in user_text:
+                return True
+    return False
 
 
 def _retrieve_memory_block(query: str, k: int = 3) -> str:
