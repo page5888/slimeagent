@@ -262,6 +262,21 @@ _ACTION_BLOCK_RE = re.compile(
 )
 
 
+# Fallback regex for when the LLM forgets (or mangles) the <action>
+# tags but still emits a JSON object with the right shape. Seen live:
+# Gemini flash writes things like
+#   stance.interpret_screen\n{"type": "vision.interpret_screen", ...}
+# where the tag got tokenized into garbage but the JSON is still
+# correct. Matching bare `{"type": ...}` objects with a non-greedy
+# body lets us recover those without forcing the LLM to be perfect.
+# The DOTALL flag keeps multi-line JSON (common when the LLM pretty-
+# prints) working.
+_BARE_JSON_RE = re.compile(
+    r'\{\s*"type"\s*:\s*"[^"]+"\s*,\s*"payload"\s*:\s*\{.*?\}\s*(?:,[^{}]*?)?\}',
+    re.DOTALL,
+)
+
+
 @dataclass
 class ActionProposal:
     """One parsed <action> block. Raw JSON body kept for debugging."""
@@ -302,46 +317,88 @@ def _try_repair_json(body: str) -> Optional[dict]:
         return None
 
 
+def _coerce_block(body: str, span: tuple[int, int]) -> Optional[ActionProposal]:
+    """Shared body → ActionProposal converter. Returns None if the
+    body is malformed, unknown, or wrong-shape — caller just skips.
+    """
+    try:
+        data = json.loads(body)
+    except json.JSONDecodeError:
+        data = _try_repair_json(body)
+        if data is None:
+            return None
+    if not isinstance(data, dict):
+        return None
+    action_type = data.get("type")
+    payload = data.get("payload") or {}
+    if not action_type or not isinstance(payload, dict):
+        return None
+    if action_type not in CATALOG:
+        return None
+    return ActionProposal(
+        action_type=action_type,
+        payload=payload,
+        title=data.get("title") or action_type,
+        reason=data.get("reason") or "使用者要求",
+        span=span,
+        raw_json=body,
+    )
+
+
 def parse_action_blocks(text: str) -> list[ActionProposal]:
-    """Extract all <action>…</action> proposals from LLM text.
+    """Extract all action proposals from LLM text.
 
-    Malformed blocks (not valid JSON, missing required fields, unknown
-    action_type) are skipped with a log line. We prefer "quietly drop
-    the bad one" over "fail the whole chat reply" — better to show the
-    user the LLM's natural-language reply minus one broken block than
-    an error about tag parsing.
+    Two passes:
+      1. Strict: `<action>…</action>` wrapped JSON. What the prompt
+         asks the LLM for; what a well-behaved LLM emits.
+      2. Lenient fallback: bare `{"type": "...", "payload": {...}}`
+         anywhere in the text. Real Gemini flash runs were emitting
+         valid JSON but mangling the <action> tag into noise like
+         "stance.interpret_screen" — the JSON still parses and still
+         references a known action type, so we salvage it instead of
+         dropping the whole action.
 
-    Before giving up on a JSON parse error we try one repair pass for
-    the common Windows-path backslash case (see _try_repair_json).
+    The fallback is scoped carefully: only JSON objects whose "type"
+    field names a key in CATALOG count. Arbitrary {"type":"..."}
+    objects in chat (someone pasting a schema example) won't
+    accidentally submit actions — only the handful of registered
+    action types do.
+
+    Malformed / unknown / wrong-shape blocks are silently dropped.
+    Better to show the user the LLM's natural-language reply minus
+    one broken block than to error out on tag parsing.
     """
     proposals: list[ActionProposal] = []
+    covered: list[tuple[int, int]] = []  # spans already claimed by strict pass
+
+    # Pass 1: strict <action>...</action>
     for m in _ACTION_BLOCK_RE.finditer(text or ""):
         body = m.group("body")
-        try:
-            data = json.loads(body)
-        except json.JSONDecodeError as e:
-            data = _try_repair_json(body)
-            if data is None:
-                log.warning(f"action block not valid JSON: {e!r}; body={body[:100]}")
-                continue
-        action_type = data.get("type")
-        payload = data.get("payload") or {}
-        title = data.get("title", "")
-        reason = data.get("reason", "")
-        if not action_type or not isinstance(payload, dict):
-            log.warning(f"action block missing type/payload: {data}")
+        prop = _coerce_block(body, m.span())
+        if prop is not None:
+            proposals.append(prop)
+            covered.append(m.span())
+
+    # Pass 2: bare JSON fallback. Skip anything already inside a span
+    # the strict pass claimed so we don't double-count.
+    def _overlaps(span: tuple[int, int]) -> bool:
+        for cs, ce in covered:
+            if span[0] < ce and span[1] > cs:
+                return True
+        return False
+
+    for m in _BARE_JSON_RE.finditer(text or ""):
+        if _overlaps(m.span()):
             continue
-        if action_type not in CATALOG:
-            log.warning(f"action block references unknown type: {action_type}")
-            continue
-        proposals.append(ActionProposal(
-            action_type=action_type,
-            payload=payload,
-            title=title or action_type,
-            reason=reason or "使用者要求",
-            span=m.span(),
-            raw_json=body,
-        ))
+        body = m.group(0)
+        prop = _coerce_block(body, m.span())
+        if prop is not None:
+            proposals.append(prop)
+            covered.append(m.span())
+
+    # Keep deterministic order: earliest-first so the splicing logic
+    # in parse_and_submit produces a predictable reply.
+    proposals.sort(key=lambda p: p.span[0])
     return proposals
 
 
