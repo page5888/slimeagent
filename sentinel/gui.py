@@ -124,6 +124,58 @@ class SignalBridge(QObject):
 
 # ─── Chat Tab ────────────────────────────────────────────────────────────
 
+def _format_action_result_for_chat(audit_entry: dict) -> list[str]:
+    """Turn a Phase C1 "action_result" audit entry into 0-N chat lines.
+
+    Only action types known to carry meaningful payload get rendered;
+    others (focus_window, open_path, …) just produced the approval's
+    generic "✓ 已執行提案" line and don't need a follow-up.
+
+    Returns a list of already-formatted strings; caller appends each
+    as its own chat line. Empty list = nothing worth surfacing.
+    """
+    result = audit_entry.get("result") or {}
+    if not isinstance(result, dict):
+        return []
+    atype = audit_entry.get("action_type", "")
+
+    if atype == "vision.interpret_screen":
+        if result.get("ok") and result.get("analysis"):
+            provider = result.get("provider") or "VLM"
+            analysis = result["analysis"].strip()
+            # Truncate ruthlessly — chat lines over ~400 chars get
+            # wrapped weirdly in QTextEdit. VLM analyses are usually
+            # short, but defensive.
+            if len(analysis) > 400:
+                analysis = analysis[:400] + "…"
+            return [f"({provider} 看完螢幕：){analysis}"]
+        if not result.get("ok") and result.get("error"):
+            return [f"(VLM 沒看成：{result['error']})"]
+        return []
+
+    if atype == "surface.get_clipboard":
+        if result.get("ok"):
+            text = (result.get("text") or "").replace("\n", " ")
+            if not text:
+                return ["(剪貼簿是空的)"]
+            return [f"(目前剪貼簿：{text[:200]}{'…' if len(text) > 200 else ''})"]
+        return []
+
+    if atype == "surface.list_windows":
+        if result.get("ok"):
+            count = result.get("count", 0)
+            windows = result.get("windows", []) or []
+            if not windows:
+                return [f"(沒有可見視窗)"]
+            sample = ", ".join(w.get("title", "?")[:30] for w in windows[:5])
+            more = f"，還有 {count - 5}" if count > 5 else ""
+            return [f"(目前 {count} 個視窗：{sample}{more})"]
+        return []
+
+    # Other action types: nothing extra to say beyond "✓ executed".
+    return []
+
+
 class ChatTab(QWidget):
     def __init__(self, bridge: SignalBridge):
         super().__init__()
@@ -379,28 +431,80 @@ class ChatTab(QWidget):
 
     def _on_approve_click(self, approval_id: str) -> None:
         """Approve handler: invoke the handler registered with the
-        approval queue (in our case a surface.* executor). Any result
-        shows up in the chat transcript as a small system-italic line
-        so the user sees what happened without opening the audit log.
+        approval queue (in our case a surface.* or vision.* executor).
+        Any result shows up in the chat transcript as a small
+        system-italic line so the user sees what happened without
+        opening the audit log.
+
+        Phase D3: for action types whose result carries rich content
+        (e.g. vision.interpret_screen → analysis string), we pull the
+        result from the audit log tail and append it to chat as a
+        second system line. The approval queue already writes an
+        "action_result" audit entry with the handler's return value;
+        we read that instead of plumbing a new callback channel.
         """
+        # Capture the proposal's action_type BEFORE approval since
+        # approve() archives the pending file out of the pending dir.
+        action_type = ""
+        try:
+            from sentinel.growth.approval import get_pending
+            pend = get_pending(approval_id)
+            if pend is not None:
+                action_type = pend.action_type
+        except Exception:
+            pass
+
         def _do() -> None:
             from sentinel.growth import approve
+            from sentinel.growth.approval import audit_tail
             try:
                 ok = approve(approval_id, approver="user_chat")
             except Exception as e:
                 log.warning(f"approve({approval_id}) raised: {e}")
                 ok = False
-            # Marshal the UI update back onto the main thread.
+
+            # Generic result line — always shown.
             msg = (
                 t("chat_approval_ok").format(id=approval_id)
                 if ok else t("chat_approval_failed").format(id=approval_id)
             )
-            QTimer.singleShot(0, lambda: self._append_system(msg))
-            QTimer.singleShot(0, self._refresh_approval_panel)
 
-        # Run off the UI thread: executors may block (e.g. a slow
-        # subprocess.run or a Win32 focus call on a stuck window).
+            # Rich-result follow-up: fetch the matching "action_result"
+            # audit entry and format its meaningful fields. Kept to a
+            # small allowlist of action types so we don't accidentally
+            # dump huge result dicts into chat.
+            extra_lines: list[str] = []
+            if ok:
+                try:
+                    for entry in reversed(audit_tail(n=20)):
+                        if (entry.get("id") == approval_id
+                                and entry.get("action") == "action_result"):
+                            extra_lines = _format_action_result_for_chat(entry)
+                            break
+                except Exception as e:
+                    log.warning(f"audit tail read failed: {e}")
+
+            def _update() -> None:
+                self._append_system(msg)
+                for line in extra_lines:
+                    self._append_bot_note(line)
+                self._refresh_approval_panel()
+            QTimer.singleShot(0, _update)
+
         threading.Thread(target=_do, daemon=True).start()
+
+    def _append_bot_note(self, text: str) -> None:
+        """A slightly stronger-styled system line used to surface
+        action results (e.g. VLM analysis). Italic like system lines
+        but coloured so it stands out as "this is what the slime just
+        learned" rather than a mere status message.
+        """
+        safe = (text.replace("&", "&amp;").replace("<", "&lt;")
+                    .replace(">", "&gt;").replace("\n", "<br>"))
+        self.chat_display.append(
+            f'<p style="color:#a3d9a5; font-style:italic;">↳ {safe}</p>'
+        )
+        self.chat_display.moveCursor(QTextCursor.End)
 
     def _on_deny_click(self, approval_id: str) -> None:
         def _do() -> None:

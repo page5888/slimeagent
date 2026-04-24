@@ -197,17 +197,80 @@ def _exec_open_path(payload: dict) -> dict:
     return get_surface().open_path(payload.get("path", ""))
 
 
+# ── Vision (Phase D3) ──────────────────────────────────────────────
+# Lives here instead of a separate vision handlers module because it
+# shares the same "screenshot-as-side-effect" audit path: the user
+# approves each vision call individually, the result goes into both
+# the audit log and the Context Bus, and it's one handler to reason
+# about.
+
+
+def _policy_interpret_screen(payload: dict) -> tuple[bool, list[dict]]:
+    """Require a non-empty prompt ≤ 500 chars so the LLM call has
+    concrete direction and we don't accidentally proxy a huge
+    user-supplied string through as the VLM prompt.
+
+    Adds a warn-level finding (not blocking) to flag that this action
+    will send a live screen capture to a cloud provider — user should
+    see this in the approval card before clicking approve.
+    """
+    prompt = (payload or {}).get("prompt") or ""
+    if not isinstance(prompt, str) or not prompt.strip():
+        return False, [{
+            "level": "error",
+            "msg": "prompt must be a non-empty string",
+        }]
+    if len(prompt) > 500:
+        return False, [{
+            "level": "error",
+            "msg": f"prompt too long ({len(prompt)} chars; max 500)",
+        }]
+    return True, [{
+        "level": "warn",
+        "msg": "會截取目前螢幕並傳送到雲端 VLM 分析 — 確認畫面上沒有敏感資訊",
+    }]
+
+
+def _exec_interpret_screen(payload: dict) -> dict:
+    """Run the vision pipeline + publish result to the Context Bus.
+
+    Publishing to the bus (SOURCE_SCREEN bucket) means the slime's
+    next chat turn automatically has the analysis available without
+    the user having to ask a follow-up. The handler also returns the
+    analysis so the approval audit log captures what was observed.
+    """
+    from sentinel.vision import interpret_current_screen
+    from sentinel.context_bus import get_bus
+
+    prompt = (payload or {}).get("prompt") or None
+    result = interpret_current_screen(prompt=prompt, cleanup=True)
+    if result.get("ok"):
+        analysis = result.get("analysis") or ""
+        if analysis:
+            # Publish so the next LLM call sees the fresh screen read
+            # without requiring the chat caller to marshal it manually.
+            get_bus().publish(
+                "screen",
+                f"[由 {result.get('provider', '?')} 分析]\n{analysis}",
+            )
+    return result
+
+
 # ── Registration ──────────────────────────────────────────────────
 
 
 _REGISTERED: list[tuple[str, Any]] = [
     # (action_type, policy_fn_or_None, executor)
-    ("surface.list_windows",    None,                 _exec_list_windows),
-    ("surface.focus_window",    _policy_focus_window, _exec_focus_window),
-    ("surface.get_clipboard",   None,                 _exec_get_clipboard),
-    ("surface.set_clipboard",   _policy_set_clipboard, _exec_set_clipboard),
-    ("surface.take_screenshot", None,                 _exec_take_screenshot),
-    ("surface.open_path",       _policy_open_path,    _exec_open_path),
+    ("surface.list_windows",    None,                     _exec_list_windows),
+    ("surface.focus_window",    _policy_focus_window,     _exec_focus_window),
+    ("surface.get_clipboard",   None,                     _exec_get_clipboard),
+    ("surface.set_clipboard",   _policy_set_clipboard,    _exec_set_clipboard),
+    ("surface.take_screenshot", None,                     _exec_take_screenshot),
+    ("surface.open_path",       _policy_open_path,        _exec_open_path),
+    # Phase D3 — vision pipeline as an action. Policy surfaces a
+    # warning (screenshot → cloud VLM) so the approval card shows
+    # what the user is consenting to.
+    ("vision.interpret_screen", _policy_interpret_screen, _exec_interpret_screen),
 ]
 
 
