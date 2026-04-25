@@ -151,6 +151,29 @@ def _policy_open_url(payload: dict) -> tuple[bool, list[dict]]:
     }]
 
 
+# ── Voice gate (Phase D5 master toggle) ──────────────────────────
+# config.VOICE_ENABLED controls whether voice.listen / voice.speak
+# can be proposed AND whether they can be approved. The catalog
+# layer hides them from the LLM; this layer enforces the same rule
+# at the handler. If a user manually triggers a voice action via
+# script / API after disabling voice, they get a policy denial with
+# a clear "voice disabled in settings" message instead of executing.
+
+def _voice_disabled_finding() -> list[dict]:
+    return [{
+        "level": "error",
+        "msg": "語音功能在設定裡被關掉了。要用就到「設定」分頁打開「啟用語音聽說」。",
+    }]
+
+
+def _voice_enabled() -> bool:
+    try:
+        from sentinel import config as _cfg
+        return bool(getattr(_cfg, "VOICE_ENABLED", True))
+    except Exception:
+        return True
+
+
 def _policy_open_path(payload: dict) -> tuple[bool, list[dict]]:
     """Enforce: path exists, path is under a whitelisted root.
 
@@ -323,7 +346,13 @@ _VOICE_SPEAK_MAX_CHARS = 1_000
 
 
 def _policy_voice_listen(payload: dict) -> tuple[bool, list[dict]]:
-    """Bound the recording window + warn that mic will open on approve."""
+    """Bound the recording window + warn that mic will open on approve.
+
+    Master toggle check first — if voice is disabled in settings, the
+    action is refused before any payload validation runs.
+    """
+    if not _voice_enabled():
+        return False, _voice_disabled_finding()
     dur = (payload or {}).get("duration_s", 5)
     try:
         dur = float(dur)
@@ -353,7 +382,13 @@ def _policy_voice_listen(payload: dict) -> tuple[bool, list[dict]]:
 
 
 def _policy_voice_speak(payload: dict) -> tuple[bool, list[dict]]:
-    """Text must be non-empty + under the TTS budget."""
+    """Text must be non-empty + under the TTS budget.
+
+    Master toggle check first — if voice is disabled in settings, the
+    action is refused before any payload validation runs.
+    """
+    if not _voice_enabled():
+        return False, _voice_disabled_finding()
     text = (payload or {}).get("text") or ""
     if not isinstance(text, str) or not text.strip():
         return False, [{

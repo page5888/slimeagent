@@ -255,9 +255,24 @@ PROMPT_INSTRUCTIONS_ZH = """
 
 
 def _catalog_list_text() -> str:
-    """Render the catalog into bullet lines for the system prompt."""
+    """Render the catalog into bullet lines for the system prompt.
+
+    Honors the user's master toggles — when voice is disabled in
+    settings, voice.* entries don't appear in what the LLM sees, so
+    it can't even propose them. The handler-side policy still gates
+    too (defense in depth).
+    """
+    # Read live toggle state from config so a runtime change (settings
+    # tab → save) takes effect on the next chat turn without restart.
+    try:
+        from sentinel import config as _cfg
+        voice_on = bool(getattr(_cfg, "VOICE_ENABLED", True))
+    except Exception:
+        voice_on = True
     lines = []
     for action_type, spec in CATALOG.items():
+        if action_type.startswith("voice.") and not voice_on:
+            continue
         lines.append(f"- `{action_type}` — {spec['desc_zh']}")
         if spec.get("payload"):
             payload_str = ", ".join(f"{k}: {v}" for k, v in spec["payload"].items())
