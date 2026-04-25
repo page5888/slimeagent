@@ -372,6 +372,10 @@ _ACTION_REQUEST_HINTS = (
     "唸出", "唸", "念出", "念", "說出", "講出", "讀出", "讀一下",
     "播放", "播一下", "播", "發聲", "出聲", "speak", "say it",
     "聽我說", "聽我講", "聽一下", "錄一下", "錄音", "listen", "record",
+    # Bare imperatives — covers "說X" / "講X" / "讀X" patterns where
+    # the user just types the verb followed by content. Trailing
+    # space prevents matching mid-word like "聽說" or "說明".
+    "說 ", "講 ", "讀 ", "唸 ", "念 ", "播 ",
     # Web / URL
     "網站", "網頁", "打開網", "開網", "youtube", "google", "github",
     # Generic English imperatives
@@ -519,6 +523,32 @@ def handle_message(user_text: str) -> str:
 
     reply = call_llm(prompt, temperature=0.7, max_tokens=1000,
                      model_pref=config.CHAT_MODEL_PREF)
+
+    # Trim "next-turn" continuations the LLM sometimes writes after
+    # its actual reply. Symptom from live test: after Slime's real
+    # answer, the LLM kept going with "\n主人：你能聽得到嗎\n..." —
+    # pattern-completing the conversation log we put in the prompt.
+    # Without per-provider stop-token support (would need code in
+    # each of _call_gemini / _call_openai_compat / _call_anthropic),
+    # the cheapest defense is to post-process: any line starting
+    # with one of the conversation prefixes means the LLM is past
+    # its own turn → chop there.
+    if reply:
+        # Both half-width ":" (used by the conversation log) and
+        # full-width "：" (which the LLM might naturally produce in
+        # Chinese context) need to be caught.
+        cut_markers = (
+            "\n主人:", "\n主人\uff1a",
+            "\nSlime:", "\nSlime\uff1a",
+            "\n[輸入]", "\n[正確回覆]",
+        )
+        earliest = -1
+        for marker in cut_markers:
+            idx = reply.find(marker)
+            if idx >= 0 and (earliest == -1 or idx < earliest):
+                earliest = idx
+        if earliest > 0:
+            reply = reply[:earliest].rstrip()
 
     if reply is None:
         import random
