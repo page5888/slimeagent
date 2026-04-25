@@ -499,12 +499,21 @@ def handle_message(user_text: str) -> str:
         except Exception as e:
             log.warning(f"could not load action catalog: {e}")
 
+    # Order matters: action_block goes RIGHT BEFORE the "Slime:"
+    # generation prompt so the LLM sees it last (recency bias). With
+    # the previous order [system → memory → actions → conversation
+    # → Slime:] the LLM read the conversation last and forgot about
+    # the action protocol, falling back to its observation-mode
+    # personality and dumping system stats instead of proposing.
+    # New order: [system → memory → conversation → actions → Slime:]
+    # the action protocol is the last thing in context before
+    # generation, so even a small/cheap model picks it up.
     parts = [system_prompt]
     if memory_block:
         parts.append(memory_block)
+    parts.append(f"=== 對話紀錄 ===\n{conversation_text}")
     if action_block:
         parts.append(action_block)
-    parts.append(f"=== 對話紀錄 ===\n{conversation_text}")
     parts.append("Slime:")
     prompt = "\n\n".join(parts)
 
