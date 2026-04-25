@@ -27,6 +27,36 @@ def _get_token() -> str:
     return _load_auth().get("token", "")
 
 
+def _clear_token_due_to_expiry() -> None:
+    """Drop the stored token after the relay rejected it.
+
+    A user's `aislime_auth.json` can sit with a JWT that the relay
+    no longer accepts (relay restarted with a new signing secret,
+    Google revoked the underlying token, the JWT's exp passed). The
+    file's presence tells the GUI "we're logged in", but every API
+    call returns 401. This helper rewrites the file to a clean
+    "logged out" state so the GUI's auth probe (`load_auth().get
+    ("token")`) correctly shows the user as logged out, and the
+    re-login flow becomes the visible next step.
+
+    We keep the email + display_name + uid so the next login screen
+    can show "歡迎回來，<name>" rather than starting from blank.
+    """
+    data = _load_auth()
+    if not data.get("token"):
+        return  # already cleared
+    cleared = {k: v for k, v in data.items() if k != "token"}
+    cleared["token_expired_at"] = __import__("time").time()
+    try:
+        AUTH_FILE.write_text(
+            json.dumps(cleared, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        log.info("auth token cleared after 401 from relay")
+    except OSError as e:
+        log.warning(f"could not clear stale token: {e}")
+
+
 def _relay_url() -> str:
     return (config.RELAY_SERVER_URL or "").rstrip("/")
 
@@ -70,6 +100,19 @@ def _request(method: str, endpoint: str, body: dict | None = None,
             err = json.loads(error_body)
         except json.JSONDecodeError:
             err = {"detail": error_body[:200]}
+        # If the relay rejected our auth header, drop the stored
+        # token so the GUI's "are we logged in?" probe stops lying.
+        # Without this, a stale aislime_auth.json with an unsigned-
+        # by-relay token leaves the user stuck: settings shows "logged
+        # in", every call returns 401, no clear next step. After the
+        # clear, the auth status flips to "尚未登入" and the Google
+        # 登入 button becomes the obvious thing to click.
+        if e.code == 401 and auth:
+            detail_lower = (
+                err.get("detail", err.get("message", "")).lower()
+            )
+            if any(k in detail_lower for k in ("expir", "invalid", "token")):
+                _clear_token_due_to_expiry()
         raise RelayError(
             str(e.code), err.get("detail", err.get("message", str(err)))
         ) from e

@@ -90,6 +90,18 @@ DISTILL_INTERVAL = 300  # 5 min
 SCREEN_CAPTURE_MIN = 120   # 2 min
 SCREEN_CAPTURE_MAX = 600   # 10 min
 
+# Voice features (Phase D5). Master toggle for voice.listen + voice.speak
+# action types. When False:
+#   - format_catalog_for_prompt strips voice.* from the LLM-visible
+#     action menu (slime won't propose voice actions)
+#   - the policy gates in surface/handlers.py refuse voice.* even if
+#     somehow proposed (defense in depth — covers script callers, the
+#     bare-JSON parser, etc.)
+# Default True because the actions are already shipped enabled and the
+# user opted into the dependency install. The setting tab exposes a
+# checkbox so users who never want their mic touched can flip it off.
+VOICE_ENABLED = True
+
 # Event buffer - collect events before asking LLM to analyze
 EVENT_BUFFER_SECONDS = 10
 
@@ -152,6 +164,7 @@ def _load_persisted_settings():
     global CHAT_MODEL_PREF, ANALYSIS_MODEL_PREF
     global SYSTEM_CHECK_INTERVAL, IDLE_REPORT_INTERVAL, WATCH_DIRS
     global DISTILL_INTERVAL, SCREEN_CAPTURE_MIN, SCREEN_CAPTURE_MAX
+    global VOICE_ENABLED
 
     settings_file = Path.home() / ".hermes" / "sentinel_settings.json"
     if not settings_file.exists():
@@ -176,6 +189,9 @@ def _load_persisted_settings():
                                  int(s.get("screen_capture_max", SCREEN_CAPTURE_MAX)))
         if "watch_dirs" in s:
             WATCH_DIRS = [Path(d) for d in s["watch_dirs"]]
+        # Phase D5 voice toggle. Stored as a plain bool; bool() coerces
+        # legacy values (truthy strings, ints) sensibly.
+        VOICE_ENABLED = bool(s.get("voice_enabled", VOICE_ENABLED))
         _log.debug("Settings loaded from %s", settings_file)
     except Exception as e:
         _log.warning("Failed to load settings: %s", e)

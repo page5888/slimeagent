@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QTextEdit, QLineEdit, QPushButton, QLabel, QProgressBar, QGroupBox,
     QFormLayout, QComboBox, QPlainTextEdit, QSystemTrayIcon, QMenu,
     QScrollArea, QFrame, QSpinBox, QMessageBox, QInputDialog,
-    QListWidget, QListWidgetItem, QSplitter, QDialog,
+    QListWidget, QListWidgetItem, QSplitter, QDialog, QCheckBox,
 )
 from PySide6.QtCore import Qt, QTimer, Signal, Slot, QObject, QThread, QSize, QRect, QPoint
 from PySide6.QtWidgets import QLayout, QSizePolicy
@@ -3911,6 +3911,33 @@ class SettingsTab(QWidget):
         autostart_group.setLayout(autostart_layout)
         form.addWidget(autostart_group)
 
+        # Voice features (Phase D5 master toggle).
+        # One checkbox controls both voice.listen (mic capture + STT)
+        # and voice.speak (TTS). Off by default — voice features are
+        # privacy-sensitive and we'd rather have users opt in.
+        # The catalog layer hides voice.* from the LLM when off, so
+        # the slime won't propose it; the action policy denies as
+        # defense in depth if something tries to bypass.
+        voice_group = QGroupBox("語音功能")
+        voice_layout = QVBoxLayout()
+        self.voice_enabled_check = QCheckBox(
+            "啟用語音聽說（voice.listen + voice.speak）"
+        )
+        self.voice_enabled_check.setChecked(
+            bool(getattr(config, "VOICE_ENABLED", True))
+        )
+        voice_layout.addWidget(self.voice_enabled_check)
+        voice_hint = QLabel(
+            "<span style='color:#888; font-size:11px;'>"
+            "關閉後 Slime 不會提案麥克風錄音或 TTS 唸出文字。<br>"
+            "聊天裡叫他「唸出X」「聽我說」會被拒絕並提示要在這裡開。"
+            "</span>"
+        )
+        voice_hint.setWordWrap(True)
+        voice_layout.addWidget(voice_hint)
+        voice_group.setLayout(voice_layout)
+        form.addWidget(voice_group)
+
         # Telegram
         tg_group = QGroupBox(t("settings_telegram"))
         tg_layout = QFormLayout()
@@ -4282,6 +4309,10 @@ class SettingsTab(QWidget):
             "watch_dirs": [
                 d.strip() for d in self.dirs_input.toPlainText().split("\n") if d.strip()
             ],
+            # Phase D5 master toggle. Saved as a plain bool; the load
+            # path coerces legacy values via bool() so old files don't
+            # need migration.
+            "voice_enabled": bool(self.voice_enabled_check.isChecked()),
         })
 
         settings_file.write_text(
@@ -4302,6 +4333,10 @@ class SettingsTab(QWidget):
         config.SCREEN_CAPTURE_MIN = settings["screen_capture_min"]
         config.SCREEN_CAPTURE_MAX = settings["screen_capture_max"]
         config.WATCH_DIRS = [Path(d) for d in settings["watch_dirs"]]
+        # Apply voice toggle live so a save takes effect on the next
+        # chat turn — both the catalog layer and the policy layer read
+        # from config at call time.
+        config.VOICE_ENABLED = settings["voice_enabled"]
 
         # Handle autostart
         from sentinel.autostart import enable_autostart, disable_autostart
