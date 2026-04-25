@@ -228,25 +228,27 @@ PROMPT_INSTRUCTIONS_ZH = """
 白名單 action types：
 <<CATALOG_LIST>>
 
-範例：
+────────────────────────────────────────────────────────────
+參考範例（這些不是真的對話，只是教你格式。下方「對話紀錄」才是當前真正要回應的）：
 
-主人：唸出「今天天氣真好」
-Slime：好，我幫你提案唸出這句話。
+[輸入] 唸出「今天天氣真好」
+[正確回覆] 好，我幫你提案唸出這句話。
 <action>
 {"type":"voice.speak","payload":{"text":"今天天氣真好"},"title":"唸出文字","reason":"主人要求"}
 </action>
 
-主人：幫我開 YouTube
-Slime：好，我提案在瀏覽器打開 YouTube。
+[輸入] 幫我開 YouTube
+[正確回覆] 好，我提案在瀏覽器打開 YouTube。
 <action>
 {"type":"surface.open_url","payload":{"url":"https://www.youtube.com"},"title":"開啟 YouTube","reason":"主人要求"}
 </action>
 
-主人：看一下我螢幕有什麼錯誤
-Slime：好，我提案截圖讓 VLM 看。
+[輸入] 看一下我螢幕有什麼錯誤
+[正確回覆] 好，我提案截圖讓 VLM 看。
 <action>
 {"type":"vision.interpret_screen","payload":{"prompt":"找出畫面上的錯誤訊息或紅色警告"},"title":"看螢幕找錯誤","reason":"主人要求"}
 </action>
+────────────────────────────────────────────────────────────
 
 ⚠ 再次提醒：本訊息最後**必須有 `<action>{...}</action>` 區塊**，否則你就只是閒聊，主人會以為你壞掉。
 """.strip()
