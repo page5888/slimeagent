@@ -200,12 +200,39 @@ class ChatTab(QWidget):
     def __init__(self, bridge: SignalBridge):
         super().__init__()
         self.bridge = bridge
+        from sentinel.ui import tokens as _tk
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setContentsMargins(
+            _tk.SPACE["lg"], _tk.SPACE["md"],
+            _tk.SPACE["lg"], _tk.SPACE["md"],
+        )
+        layout.setSpacing(_tk.SPACE["md"])
 
-        # Chat display
+        # Chat display — bubble-style messages, no harsh borders.
+        # Light vertical padding around the content so first/last
+        # messages aren't flush against the edges.
         self.chat_display = QTextEdit()
         self.chat_display.setReadOnly(True)
+        self.chat_display.setFrameShape(QFrame.NoFrame)
+        self.chat_display.setStyleSheet(
+            f"QTextEdit {{"
+            f" background:{_tk.PALETTE['bg']};"
+            f" color:{_tk.PALETTE['text']};"
+            f" border:none;"
+            f" padding:{_tk.SPACE['sm']}px {_tk.SPACE['md']}px;"
+            f" font-size:{_tk.FONT_SIZE['body']}px; }}"
+            f"QScrollBar:vertical {{"
+            f" background:transparent;"
+            f" width:8px; }}"
+            f"QScrollBar::handle:vertical {{"
+            f" background:{_tk.PALETTE['border']};"
+            f" border-radius:4px;"
+            f" min-height:20px; }}"
+            f"QScrollBar::handle:vertical:hover {{"
+            f" background:{_tk.PALETTE['text_muted']}; }}"
+            f"QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{"
+            f" height:0px; }}"
+        )
         layout.addWidget(self.chat_display, stretch=1)
 
         # Phase D2: inline approval panel. Lives between the chat
@@ -222,15 +249,32 @@ class ChatTab(QWidget):
         self.approval_container.setVisible(False)
         layout.addWidget(self.approval_container)
 
-        # Input area
+        # Input area — pill-shaped field that matches the bubble
+        # aesthetic of the messages above. Send button is the only
+        # primary CTA in this tab; uses the design-token primary
+        # treatment.
         input_layout = QHBoxLayout()
+        input_layout.setSpacing(_tk.SPACE["sm"])
         self.input_field = QLineEdit()
         self.input_field.setPlaceholderText(t("chat_placeholder"))
         self.input_field.returnPressed.connect(self.send_message)
+        self.input_field.setStyleSheet(
+            f"QLineEdit {{"
+            f" background:{_tk.PALETTE['bg_elev']};"
+            f" color:{_tk.PALETTE['text']};"
+            f" border:1px solid {_tk.PALETTE['border']};"
+            f" border-radius:{_tk.RADIUS['pill']}px;"
+            f" padding:8px 14px;"
+            f" font-size:{_tk.FONT_SIZE['body']}px; }}"
+            f"QLineEdit:focus {{"
+            f" border-color:{_tk.PALETTE['cyan_dim']}; }}"
+        )
         input_layout.addWidget(self.input_field, stretch=1)
 
         self.send_btn = QPushButton(t("chat_send"))
+        self.send_btn.setCursor(Qt.PointingHandCursor)
         self.send_btn.clicked.connect(self.send_message)
+        self.send_btn.setStyleSheet(_tk.btn_primary())
         input_layout.addWidget(self.send_btn)
 
         layout.addLayout(input_layout)
@@ -254,33 +298,64 @@ class ChatTab(QWidget):
         # from a previous session the user never got to).
         self._refresh_approval_panel()
 
-    def _append_system(self, text: str):
-        self.chat_display.append(f'<p style="color:#888;"><i>{text}</i></p>')
+    # ── Chat rendering (Phase L visual cohesion) ──────────────────
+    # Pre-Phase L this was four flavors of `<p style="...">…</p>`
+    # with hand-coded colors. Now everything goes through
+    # sentinel.ui.tokens.bubble_* helpers so message styling stays
+    # consistent and any palette adjustment is a one-place change.
 
-    def _append_user(self, text: str):
-        self.chat_display.append(
-            f'<p style="color:#00dcff;"><b>You:</b> {text}</p>'
+    @staticmethod
+    def _escape_html(text: str) -> str:
+        """HTML-escape user-supplied text so a backtick or literal `<`
+        in the chat doesn't break rendering or open injection vectors.
+        Newlines preserved as <br> for natural multiline display."""
+        return (
+            text.replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace("\n", "<br>")
         )
 
+    def _append_system(self, text: str):
+        from sentinel.ui import bubble_system
+        self.chat_display.append(bubble_system(self._escape_html(text)))
+        self.chat_display.moveCursor(QTextCursor.End)
+
+    def _append_user(self, text: str):
+        from sentinel.ui import bubble_user
+        self.chat_display.append(bubble_user(self._escape_html(text)))
+        self.chat_display.moveCursor(QTextCursor.End)
+
     def _show_thinking(self):
+        # The thinking indicator is intentionally distinct from
+        # bubble_system so we can find + remove it before the real
+        # reply lands.
         self.chat_display.append(
-            '<p id="thinking" style="color:#ffa502;"><i>大賢者分析中...</i></p>'
+            '<div id="thinking" style="margin:6px 0; text-align:center;">'
+            '<span style="color:#f0c674; font-size:11px; font-style:italic;">'
+            '大賢者分析中…</span></div>'
         )
         self.chat_display.moveCursor(QTextCursor.End)
 
     def _remove_thinking(self):
+        # Strip the latest thinking bubble. We use a marker rather
+        # than scanning by content because the previous "stripping
+        # by exact HTML" approach broke when Qt normalized our HTML
+        # under the hood. The id="thinking" survives Qt's normalizer.
         html = self.chat_display.toHtml()
-        html = html.replace('<p id="thinking" style="color:#ffa502;"><i>大賢者分析中...</i></p>', '')
+        # Match the entire div block, tolerating Qt's reflow.
+        import re
+        html = re.sub(
+            r'<div[^>]*id="thinking"[^>]*>.*?</div>',
+            '', html, flags=re.DOTALL,
+        )
         self.chat_display.setHtml(html)
         self.chat_display.moveCursor(QTextCursor.End)
 
     def _append_bot(self, text: str):
+        from sentinel.ui import bubble_slime
         self._remove_thinking()
-        text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        text = text.replace("\n", "<br>")
-        self.chat_display.append(
-            f'<p style="color:#e0e0e0;"><b>AI Slime:</b> {text}</p>'
-        )
+        self.chat_display.append(bubble_slime(self._escape_html(text)))
         self.chat_display.moveCursor(QTextCursor.End)
 
     def send_message(self):
@@ -532,15 +607,12 @@ class ChatTab(QWidget):
 
     def _append_bot_note(self, text: str) -> None:
         """A slightly stronger-styled system line used to surface
-        action results (e.g. VLM analysis). Italic like system lines
-        but coloured so it stands out as "this is what the slime just
-        learned" rather than a mere status message.
+        action results (e.g. VLM analysis). Italic + green tinted to
+        stand out as "this is what the slime just learned" rather
+        than a mere status message. Uses the bubble_note token.
         """
-        safe = (text.replace("&", "&amp;").replace("<", "&lt;")
-                    .replace(">", "&gt;").replace("\n", "<br>"))
-        self.chat_display.append(
-            f'<p style="color:#a3d9a5; font-style:italic;">↳ {safe}</p>'
-        )
+        from sentinel.ui import bubble_note
+        self.chat_display.append(bubble_note(self._escape_html(text)))
         self.chat_display.moveCursor(QTextCursor.End)
 
     def _on_deny_click(self, approval_id: str) -> None:
