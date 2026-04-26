@@ -44,6 +44,12 @@ from sentinel.routines.scheduler import (
     fire_routine,
 )
 from sentinel.routines.detector import propose_via_detector
+from sentinel.routines.reflection import (
+    reflect,
+    format_summary,
+    ReflectionReport,
+    RoutineStats,
+)
 
 __all__ = [
     "Routine",
@@ -51,4 +57,5 @@ __all__ = [
     "enable_routine", "disable_routine", "delete_routine",
     "start_scheduler", "stop_scheduler", "fire_routine",
     "propose_via_detector",
+    "reflect", "format_summary", "ReflectionReport", "RoutineStats",
 ]

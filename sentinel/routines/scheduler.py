@@ -57,10 +57,16 @@ CHECK_INTERVAL_SECONDS = 60
 # we don't want to ping the LLM every loop tick.
 DETECTOR_INTERVAL_SECONDS = 24 * 60 * 60
 
+# Reflection cadence (Phase J). Once per 7 days catches stale routines
+# / chronic skip-rate problems without nagging the user with weekly
+# "look at my stats" notifications.
+REFLECTION_INTERVAL_SECONDS = 7 * 24 * 60 * 60
+
 _scheduler_thread: Optional[threading.Thread] = None
 _stop_event = threading.Event()
 _storage_lock = threading.RLock()
 _last_detector_run = 0.0
+_last_reflection_run = 0.0
 
 
 # ── Trigger evaluation ────────────────────────────────────────────
@@ -285,6 +291,29 @@ def _scan_once() -> None:
                 log.info(f"detector queued {len(queued)} routine proposals")
         except Exception:
             log.exception("routine detector failed")
+
+    # Phase J reflection — once per REFLECTION_INTERVAL_SECONDS,
+    # builds stats + queues self-suggestions through the approval
+    # queue. The user sees stale-routine disables as approval cards
+    # alongside everything else; "review skip rate" / "fail rate"
+    # surface only when they explicitly ask in chat. This split keeps
+    # passive reflection from spamming the queue while still letting
+    # the slime act on the strongest signal (stale = clearly broken).
+    global _last_reflection_run
+    if (time.time() - _last_reflection_run) >= REFLECTION_INTERVAL_SECONDS:
+        _last_reflection_run = time.time()
+        try:
+            from sentinel.routines.reflection import (
+                reflect, queue_suggestions_as_proposals,
+            )
+            report = reflect()
+            queued = queue_suggestions_as_proposals(report)
+            if queued:
+                log.info(
+                    f"reflection queued {len(queued)} self-suggestions"
+                )
+        except Exception:
+            log.exception("reflection pass failed")
 
 
 def start_scheduler() -> None:
