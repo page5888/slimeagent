@@ -721,8 +721,14 @@ class HomeTab(QWidget):
         avatar_row = QHBoxLayout()
         avatar_row.addStretch()
         self.slime_widget = SlimeWidget()
-        self.slime_widget.setMinimumSize(140, 140)
-        self.slime_widget.setMaximumSize(180, 180)
+        # SlimeWidget's paintEvent assumes a baseline of 200x200 (see
+        # __init__ default minimum) and the body+glow+particles extend
+        # beyond the body proper. Earlier we tried 140x140/180x180 to
+        # keep the home tab compact, but that clipped the slime's
+        # body off at the bottom. Use 240x240 fixed so the rendering
+        # always has room — the widget centers within avatar_row so
+        # it doesn't dominate the column.
+        self.slime_widget.setFixedSize(240, 240)
         avatar_row.addWidget(self.slime_widget)
         avatar_row.addStretch()
         layout.addLayout(avatar_row)
