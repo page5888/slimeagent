@@ -170,6 +170,58 @@ def _policy_routine_create(payload: dict) -> tuple[bool, list[dict]]:
                 "msg": f"step {idx}: payload must be a dict",
             }]
 
+    # Phase K — optional cross-routine dependencies.
+    deps = (payload or {}).get("depends_on")
+    if deps is not None:
+        if not isinstance(deps, list):
+            return False, [{
+                "level": "error",
+                "msg": "depends_on must be a list of routine ids",
+            }]
+        if len(deps) > 3:
+            return False, [{
+                "level": "error",
+                "msg": "depends_on max 3 routines (avoid complex graphs)",
+            }]
+        for d in deps:
+            if not isinstance(d, str) or not d.startswith("rou_"):
+                return False, [{
+                    "level": "error",
+                    "msg": f"depends_on items must be 'rou_*' strings (got {d!r})",
+                }]
+        # Self-dependency is a definite bug — would deadlock since
+        # the routine waits for itself to have succeeded.
+        existing_ids = {
+            r.id for r in _store.list_routines()
+        }
+        # We can't know our own id at create-time, but we can warn
+        # if any dep references a non-existent routine. Don't reject
+        # — chain creation order may legitimately reference siblings
+        # that exist but were just submitted in a separate proposal.
+        unknown = [d for d in deps if d not in existing_ids]
+        if unknown:
+            findings.append({
+                "level": "warn",
+                "msg": (
+                    f"depends_on 引用尚不存在的 routine: {unknown}。"
+                    f"等他們先建好,這個 routine 才會真的觸發。"
+                ),
+            })
+    win = (payload or {}).get("depends_on_window_minutes")
+    if win is not None:
+        try:
+            win_int = int(win)
+        except (TypeError, ValueError):
+            return False, [{
+                "level": "error",
+                "msg": "depends_on_window_minutes must be int",
+            }]
+        if win_int < 1 or win_int > 24 * 60:
+            return False, [{
+                "level": "error",
+                "msg": "depends_on_window_minutes must be 1..1440",
+            }]
+
     # Phase H — optional judge_prompt. The LLM evaluates it against
     # current context before each fire and can decide "skip with
     # reason" instead of running blindly.
@@ -245,11 +297,26 @@ def _exec_routine_create(payload: dict) -> dict:
         enabled=True,
         evidence=payload.get("evidence", ""),
     )
-    # judge_prompt isn't a constructor arg of create_routine since it's
-    # an optional Phase H extension; set it after if provided.
+    # judge_prompt + Phase K depends_on aren't constructor args of
+    # create_routine since they're optional extensions; set them after
+    # if provided.
     judge_prompt = (payload.get("judge_prompt") or "").strip()
+    deps = payload.get("depends_on") or []
+    deps_window = payload.get("depends_on_window_minutes")
+    needs_save = False
     if judge_prompt:
         routine.judge_prompt = judge_prompt
+        needs_save = True
+    if deps:
+        routine.depends_on = list(deps)
+        needs_save = True
+    if deps_window is not None:
+        try:
+            routine.depends_on_window_minutes = int(deps_window)
+            needs_save = True
+        except (TypeError, ValueError):
+            pass
+    if needs_save:
         from sentinel.routines.storage import _save
         _save(routine)
     return {
@@ -258,6 +325,7 @@ def _exec_routine_create(payload: dict) -> dict:
         "name": routine.name,
         "trigger_summary": _render_trigger_zh(routine.trigger),
         "has_judge": bool(judge_prompt),
+        "deps": list(deps),
     }
 
 

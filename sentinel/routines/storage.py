@@ -99,6 +99,14 @@ class Routine:
     # "go"|"skip", "reason": "..."}. "skip" plus the reason gets
     # audit-logged so the user can see WHY the slime declined.
     judge_prompt: str = ""
+    # Phase K: cross-routine dependencies. Routine fires only if every
+    # listed routine_id has fired SUCCESSFULLY within
+    # depends_on_window_minutes of now. Use case: a "run tests" routine
+    # that depends on "open project + git pull" finishing first; a
+    # "backup" routine that only runs if "save all" succeeded today.
+    # Empty list = no deps (Phase F/G/H/I behavior).
+    depends_on: list = field(default_factory=list)
+    depends_on_window_minutes: int = 60
 
     @classmethod
     def from_dict(cls, data: dict) -> "Routine":
