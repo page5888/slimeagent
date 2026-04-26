@@ -6089,21 +6089,37 @@ class MainWindow(QMainWindow):
         # 裝備變更時刷新形象
         self.equipment_tab.equipment_changed.connect(self.evolution_tab.refresh)
 
+        # ── v0.7-alpha daily-mirror lite mode ─────────────────────
+        # We froze the wider feature surface to focus 2 weeks of
+        # dogfooding on one core wedge: a daily reflection card from
+        # the slime. The hidden tabs (equipment / memory / federation
+        # / market / approval) keep working behind the scenes — their
+        # code is intact, only the UI entry point is removed. Approval
+        # traffic still surfaces inline in the chat tab via Phase D2
+        # so any LLM-proposed action can still be reviewed without
+        # the dedicated tab.
+        #
+        # To restore any of these for development, just uncomment the
+        # corresponding addTab line. Index trackers
+        # (_federation_tab_index / _approval_tab_index) are set to -1
+        # so the existing change-handlers safely no-op.
         self.tabs.addTab(self.home_tab, t("tab_home"))
         self.tabs.addTab(self.evolution_tab, t("tab_evolution"))
-        self.tabs.addTab(self.equipment_tab, t("tab_equipment"))
+        # self.tabs.addTab(self.equipment_tab, t("tab_equipment"))   # frozen v0.7
         self.tabs.addTab(self.chat_tab, t("tab_chat"))
-        self.tabs.addTab(self.memory_tab, t("tab_memory"))
-        self._federation_tab_index = self.tabs.addTab(
-            self.federation_tab, t("tab_federation")
-        )
-        self.tabs.addTab(self.market_tab, t("tab_market"))
-        # Routines tab sits next to 待同意 — both are "stuff the
-        # slime is doing on your behalf, and you want to oversee".
+        # self.tabs.addTab(self.memory_tab, t("tab_memory"))         # frozen v0.7
+        # self._federation_tab_index = self.tabs.addTab(
+        #     self.federation_tab, t("tab_federation")                # frozen v0.7
+        # )
+        self._federation_tab_index = -1
+        # self.tabs.addTab(self.market_tab, t("tab_market"))         # frozen v0.7
         self._routines_tab_index = self.tabs.addTab(
             self.routines_tab, "📋 常規"
         )
-        self._approval_tab_index = self.tabs.addTab(self.approval_tab, t("tab_approval"))
+        # self._approval_tab_index = self.tabs.addTab(               # frozen v0.7
+        #     self.approval_tab, t("tab_approval")
+        # )
+        self._approval_tab_index = -1
         self.tabs.addTab(self.settings_tab, t("tab_settings"))
 
         # 待同意頁籤：切過去時主動刷新；動作後刷新 evolution + 標籤計數
@@ -6389,9 +6405,13 @@ class MainWindow(QMainWindow):
             self._refresh_approval_tab_label()
 
     def _refresh_approval_tab_label(self):
-        """在待同意頁籤標題後面顯示 pending 數量，像 `待同意 (3)`。"""
+        """在待同意頁籤標題後面顯示 pending 數量，像 `待同意 (3)`。
+
+        Returns early when the tab is frozen (index < 0 in v0.7-alpha
+        lite mode). Approval traffic still surfaces inline in chat.
+        """
         idx = getattr(self, "_approval_tab_index", None)
-        if idx is None:
+        if idx is None or idx < 0:
             return
         n = self.approval_tab.pending_count()
         base = t("tab_approval")
@@ -6450,7 +6470,7 @@ class MainWindow(QMainWindow):
         about candidates the user already saw and ignored.
         """
         idx = getattr(self, "_federation_tab_index", None)
-        if idx is None:
+        if idx is None or idx < 0:
             return
         base = t("tab_federation")
         try:
