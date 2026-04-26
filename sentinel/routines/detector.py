@@ -76,16 +76,28 @@ DETECTOR_PROMPT_TEMPLATE = """\
 4. 範圍要明確（什麼時候做、開哪個檔/網址、多長），不要含糊
 5. 不確定就**寧可不提**（空陣列） — 提錯誤的提案會讓主人覺得你亂猜
 
-回 JSON（純粹，不要 markdown wrap）：
+每個 routine **可以選擇性**加 `judge_prompt`(觸發後執行前 LLM 會用它判斷情境):
+
+什麼時候需要 judge_prompt:
+- 觸發了但情境可能不對(例:「打開 VS Code」可能是想看別的專案)
+- 主人習慣會變(例:「9 點開專案」但他可能放假在家不想被打擾)
+- 步驟裡有需要先確認的前提(例:「目標檔還在嗎」「Zoom 開著嗎」)
+
+不需要 judge_prompt 的時候(常見):
+- 純粹「閒置就提醒喝水」這種無腦 routine
+- 觸發已經很精確(on_file_pattern 看具體檔名)
+
+回 JSON(純粹,不要 markdown wrap):
 
 {
   "candidates": [
     {
       "name": "<簡短中文名,例 '早晨開發環境啟動'>",
-      "trigger": <上面三種觸發之一>,
+      "trigger": <上面所有觸發之一>,
       "steps": [
         {"action_type": "<從白名單挑>", "payload": {...}, "title": "<這步驟做什麼>"}
       ],
+      "judge_prompt": "<可選,40 字內中文,叫 LLM 判斷現在該不該做。空字串表示不用判斷>",
       "confidence": 0.0~1.0,
       "evidence": "<為什麼這是固定流程的證據,1-2 句>"
     }
@@ -272,12 +284,16 @@ def _validate_candidate(c: dict) -> Optional[dict]:
         # Below this threshold the LLM is flagging coincidence, not
         # routine. Skip rather than spam the user.
         return None
+    judge_prompt = (c.get("judge_prompt") or "").strip()
+    if len(judge_prompt) > 600:
+        judge_prompt = judge_prompt[:600]
     return {
         "name": name,
         "trigger": trig,
         "steps": steps,
         "confidence": confidence,
         "evidence": (c.get("evidence") or "")[:300],
+        "judge_prompt": judge_prompt,
     }
 
 
@@ -338,6 +354,7 @@ def propose_via_detector() -> list[str]:
                     "trigger": normalized["trigger"],
                     "steps": normalized["steps"],
                     "evidence": normalized["evidence"],
+                    "judge_prompt": normalized.get("judge_prompt", ""),
                     "auto_proposed": True,
                 },
             )

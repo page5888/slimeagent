@@ -83,6 +83,22 @@ class Routine:
     # triggers. Cron-style triggers (daily_at etc.) ignore this since
     # their natural rate is already low. None = use DEFAULT_COOLDOWN_SECONDS.
     cooldown_seconds: Optional[int] = None
+    # Phase H: optional natural-language judge. When set, after the
+    # trigger condition matches but before the steps run, the slime
+    # asks the LLM "given current context, should this routine fire
+    # right now?" and only proceeds on "go". Empty/None means
+    # unconditional fire (the Phase F/G behavior).
+    #
+    # Examples (what the user / detector might write):
+    #   "今天主人有在電腦前嗎? 看最近 30 分鐘有沒有輸入活動。"
+    #   "主人現在看起來在開會嗎? Zoom 視窗是不是 active?"
+    #   "確認專案資料夾真的存在 D:\\srbow_bots 才執行。"
+    #
+    # The judge sees: routine name + steps + current context bus
+    # render + recent memory. It outputs structured JSON {"decide":
+    # "go"|"skip", "reason": "..."}. "skip" plus the reason gets
+    # audit-logged so the user can see WHY the slime declined.
+    judge_prompt: str = ""
 
     @classmethod
     def from_dict(cls, data: dict) -> "Routine":

@@ -133,11 +133,49 @@ def _matches_time_today(routine: Routine, now: datetime, target: str) -> bool:
 def fire_routine(routine: Routine) -> dict:
     """Run a routine's steps via the workflow engine.
 
+    Phase H — if the routine has a judge_prompt, call the LLM judge
+    first. On "skip" we record the decision in the audit log + bump
+    last_fired_at (so cooldown still applies, no infinite re-judging
+    every minute) but DON'T run the steps. On "go" the workflow runs
+    as before.
+
     Public for testing + for "fire now" buttons in future GUIs.
     Returns the workflow run summary (same shape as chain.run's
-    handler result so existing chat formatters render it).
+    handler result so existing chat formatters render it). When the
+    judge skips, the return shape is {"ok": False, "skipped": True,
+    "reason": "..."} — caller (scheduler / chat) can distinguish
+    "didn't run" from "ran and failed".
     """
     log.info(f"firing routine {routine.id} ({routine.name})")
+
+    # Phase H: judge gate. Empty judge_prompt → unconditional fire.
+    if (routine.judge_prompt or "").strip():
+        from sentinel.routines.judge import evaluate
+        from sentinel.routines.storage import record_fire
+        decision = evaluate(
+            routine_name=routine.name,
+            judge_prompt=routine.judge_prompt,
+            steps=routine.steps or [],
+            trigger=routine.trigger or {},
+        )
+        if not decision.go:
+            log.info(
+                f"routine {routine.id} skipped by judge: {decision.reason}"
+            )
+            # Record as a fire event so cooldown applies. The audit
+            # log and result both carry skipped=True so the user can
+            # tell "judge said no" from "ran successfully".
+            record_fire(routine, success=False, detail={
+                "skipped_by_judge": True,
+                "reason": decision.reason,
+            })
+            return {
+                "ok": False,
+                "skipped": True,
+                "reason": decision.reason,
+                "judge_raw": decision.raw[:300] if decision.raw else "",
+            }
+
     from sentinel.workflow import Workflow, Step, WorkflowEngine
     from sentinel.growth.approval import _action_handlers
 
