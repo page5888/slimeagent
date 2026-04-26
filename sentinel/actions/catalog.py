@@ -155,8 +155,12 @@ CATALOG: dict[str, dict[str, Any]] = {
     "routine.create": {
         "desc_zh": (
             "把一組重複動作存成『常規』,等同意後排程自動執行。"
-            "可以是每天某時、每週某幾天、或每隔幾分鐘。"
-            "用在主人明確說「以後每天/每週/每隔 N 分鐘幫我 X」時。"
+            "支援兩類觸發："
+            "(1) 時間類:daily_at HH:MM / weekly_at + days / interval N 分鐘 "
+            "(2) 事件類:on_app_open(打開某視窗時) / "
+            "on_file_pattern(某檔案變動時) / on_idle(閒置 N 分鐘時)。"
+            "事件類比時間類更貼近主人實際情境—例如「打開 VS Code 後」"
+            "比「每天 9 點」更準。"
         ),
         "desc_en": (
             "Save a recurring action sequence as a routine. "
