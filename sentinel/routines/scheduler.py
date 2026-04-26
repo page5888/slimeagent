@@ -33,6 +33,7 @@ thread.
 """
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
@@ -136,28 +137,108 @@ def _matches_time_today(routine: Routine, now: datetime, target: str) -> bool:
 # ── Firing ────────────────────────────────────────────────────────
 
 
+def _deps_satisfied(routine: Routine) -> tuple[bool, str]:
+    """Phase K — verify every routine in `depends_on` has fired
+    successfully within `depends_on_window_minutes`.
+
+    Returns (ok, reason). ok=False means at least one dep is
+    unsatisfied — caller logs + skips. Empty depends_on always
+    returns (True, "").
+
+    The check is "fire" event in the audit log only — we deliberately
+    don't accept "fire_failed" or judge skips, because the dep
+    semantics are "the previous routine SUCCEEDED" not "the previous
+    routine ran". Otherwise a chain like [A, B-needs-A] could B
+    incorrectly when A failed and you actually want B to wait for
+    a successful A.
+    """
+    deps = routine.depends_on or []
+    if not deps:
+        return True, ""
+    window = (routine.depends_on_window_minutes or 60) * 60
+    cutoff = time.time() - window
+    audit = _read_routine_audit()
+    for dep_id in deps:
+        last_success = None
+        for e in reversed(audit):
+            if e.get("id") == dep_id and e.get("event") == "fire":
+                last_success = float(e.get("at", 0) or 0)
+                break
+        if last_success is None or last_success < cutoff:
+            return False, (
+                f"depends_on {dep_id} hasn't successfully fired in the "
+                f"last {routine.depends_on_window_minutes} minutes"
+            )
+    return True, ""
+
+
+def _read_routine_audit() -> list[dict]:
+    """Read the routine audit log into a list of dicts. Shared with
+    reflection.py — duplicated here as an inner helper to avoid a
+    circular import (reflection imports scheduler for fire_routine).
+    """
+    from sentinel.routines.storage import AUDIT_LOG
+    if not AUDIT_LOG.exists():
+        return []
+    out: list[dict] = []
+    try:
+        text = AUDIT_LOG.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    for line in text.split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            out.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return out
+
+
 def fire_routine(routine: Routine) -> dict:
     """Run a routine's steps via the workflow engine.
 
-    Phase H — if the routine has a judge_prompt, call the LLM judge
-    first. On "skip" we record the decision in the audit log + bump
-    last_fired_at (so cooldown still applies, no infinite re-judging
-    every minute) but DON'T run the steps. On "go" the workflow runs
-    as before.
+    Two pre-checks before workflow execution:
+      Phase K — dependencies: every routine in `depends_on` must
+        have fired successfully recently. Skip with explicit reason
+        if any dep is unsatisfied.
+      Phase H — judge: if `judge_prompt` is set, ask the LLM whether
+        firing makes sense given current context. Skip on "skip".
+
+    Each skip path records to audit + bumps last_fired_at (cooldown
+    applies, no infinite re-checking) but DOESN'T run steps.
 
     Public for testing + for "fire now" buttons in future GUIs.
     Returns the workflow run summary (same shape as chain.run's
-    handler result so existing chat formatters render it). When the
-    judge skips, the return shape is {"ok": False, "skipped": True,
-    "reason": "..."} — caller (scheduler / chat) can distinguish
-    "didn't run" from "ran and failed".
+    handler result so existing chat formatters render it). When a
+    skip path triggers, the return shape is {"ok": False, "skipped":
+    True, "reason": "..."}.
     """
     log.info(f"firing routine {routine.id} ({routine.name})")
 
+    # Phase K: dependency gate runs FIRST so a missing prereq doesn't
+    # waste an LLM judge call. record_fire is imported at module-
+    # level — DON'T re-import locally or Python turns it into a
+    # function-scoped name and later usages UnboundLocalError.
+    deps_ok, deps_reason = _deps_satisfied(routine)
+    if not deps_ok:
+        log.info(f"routine {routine.id} skipped — {deps_reason}")
+        record_fire(routine, success=False, detail={
+            "skipped_by_deps": True,
+            "reason": deps_reason,
+        })
+        return {
+            "ok": False,
+            "skipped": True,
+            "reason": deps_reason,
+        }
+
     # Phase H: judge gate. Empty judge_prompt → unconditional fire.
+    # record_fire comes from module-level import (not re-imported
+    # locally — see Phase K note above for why).
     if (routine.judge_prompt or "").strip():
         from sentinel.routines.judge import evaluate
-        from sentinel.routines.storage import record_fire
         decision = evaluate(
             routine_name=routine.name,
             judge_prompt=routine.judge_prompt,
