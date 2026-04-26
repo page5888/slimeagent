@@ -5789,6 +5789,19 @@ class MainWindow(QMainWindow):
             except Exception as _e:
                 log.warning(f"surface handler registration failed: {_e}")
 
+            # Phase F: routine.* action handlers + scheduler daemon.
+            # Routines fire automatically at trigger times, running
+            # their step list through the same workflow engine + action
+            # handlers used by one-off chat actions. The scheduler is
+            # one shared daemon thread; safe to start once per process.
+            try:
+                from sentinel.routines.handlers import register_all as _register_routine_actions
+                from sentinel.routines import start_scheduler as _start_routine_scheduler
+                _register_routine_actions()
+                _start_routine_scheduler()
+            except Exception as _e:
+                log.warning(f"routine subsystem init failed: {_e}")
+
             evo = load_evolution()
             equip_state = load_equipment()
             obs_since_drop = 0  # Track observations for drop trigger
