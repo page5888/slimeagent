@@ -5629,7 +5629,13 @@ class RoutinesTab(QWidget):
 
     def _fire_now(self, routine_id: str) -> None:
         """Run a routine immediately, off the UI thread (steps may
-        block — Win32 / subprocess / network)."""
+        block — Win32 / subprocess / network).
+
+        UX-pass-1: result is shown in-place via QMessageBox at the
+        end (the user explicitly asked to fire, they want to know
+        what happened — a status-bar flash is too transient). Status
+        bar still gets a brief echo for context.
+        """
         from sentinel.routines import get_routine, fire_routine
 
         def _do():
@@ -5641,13 +5647,48 @@ class RoutinesTab(QWidget):
             except Exception as e:
                 log.warning(f"manual fire {routine_id} raised: {e}")
                 result = {"ok": False, "error": str(e)}
-            # Marshal UI update back to Qt thread
-            QTimer.singleShot(0, self.refresh)
-            QTimer.singleShot(
-                0, lambda: self.bridge.status_update.emit(
-                    f"○ 常規「{r.name}」已執行：{'成功' if result.get('ok') else result.get('reason') or result.get('error') or '失敗'}"
-                ),
+
+            # Build a user-facing summary distinguishing the three
+            # outcomes: success / skipped (deps or judge) / failed.
+            if result.get("ok"):
+                title_emoji = "✓"
+                summary = "執行成功"
+                detail = ""
+                steps_info = result.get("steps") or []
+                if steps_info:
+                    parts = []
+                    marks = {"success": "✓", "failed": "✗",
+                             "skipped": "⤻", "pending": "…"}
+                    for i, s in enumerate(steps_info, 1):
+                        m = marks.get(s.get("status"), "?")
+                        parts.append(f"  {m} {i}. {s.get('action_type', '?')}")
+                    detail = "\n".join(parts)
+            elif result.get("skipped"):
+                title_emoji = "⤻"
+                summary = "略過,沒有實際執行"
+                detail = result.get("reason", "")
+            else:
+                title_emoji = "✗"
+                summary = "執行失敗"
+                detail = (
+                    result.get("reason")
+                    or result.get("error")
+                    or "未知錯誤"
+                )
+
+            popup_text = (
+                f"{title_emoji} 常規「{r.name}」{summary}"
+                + (f"\n\n{detail}" if detail else "")
             )
+            status_text = (
+                f"○ 常規「{r.name}」: {summary}"
+            )
+
+            def _ui():
+                self.refresh()
+                self.bridge.status_update.emit(status_text)
+                QMessageBox.information(self, "AI Slime", popup_text)
+            QTimer.singleShot(0, _ui)
         threading.Thread(target=_do, daemon=True).start()
 
     def _toggle_routine(self, routine_id: str, currently_enabled: bool) -> None:
@@ -5720,17 +5761,29 @@ class RoutinesTab(QWidget):
 
     def _run_detector_now(self) -> None:
         """Manually invoke the routine detector. Runs off the UI thread
-        because it makes an LLM call and reads activity logs."""
+        because it makes an LLM call and reads activity logs.
+
+        UX-pass-1: uses propose_via_detector_verbose so the "no
+        result" path can give a real reason instead of the generic
+        "再用幾天看看" — distinguishing "no activity log yet" from
+        "LLM unreachable" from "low confidence" gives the user
+        actionable next steps.
+        """
         self.detect_btn.setEnabled(False)
         self.detect_btn.setText("偵測中…")
 
         def _do():
             try:
-                from sentinel.routines import propose_via_detector
-                queued = propose_via_detector()
+                from sentinel.routines.detector import (
+                    propose_via_detector_verbose,
+                )
+                result = propose_via_detector_verbose()
             except Exception as e:
                 log.warning(f"manual detector run failed: {e}")
-                queued = []
+                result = {"queued_ids": [], "diagnostic": f"錯誤：{e}"}
+
+            queued = result.get("queued_ids", [])
+            diagnostic = result.get("diagnostic", "")
 
             def _ui():
                 self.detect_btn.setEnabled(True)
@@ -5738,15 +5791,16 @@ class RoutinesTab(QWidget):
                 if queued:
                     QMessageBox.information(
                         self, "AI Slime",
-                        f"提案了 {len(queued)} 個新常規。"
-                        f"到「待同意」分頁查看 + 同意。",
+                        f"提案了 {len(queued)} 個新常規。\n"
+                        f"到「⏳ 待同意」分頁查看細節 + 同意。",
                     )
                 else:
+                    msg = diagnostic or (
+                        "目前沒有看到值得自動化的固定流程。"
+                        "再用幾天看看。"
+                    )
                     QMessageBox.information(
-                        self, "AI Slime",
-                        "目前沒有看到值得自動化的固定流程。\n"
-                        "可能還沒累積夠多觀察,或最近的活動沒有重複模式。\n"
-                        "再用幾天看看。",
+                        self, "AI Slime", msg,
                     )
                 self.refresh()
             QTimer.singleShot(0, _ui)
@@ -5911,7 +5965,17 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(status_panel)
 
         # 狀態列即時更新
-        self.bridge.status_update.connect(self.status_bar.setText)
+        # UX-pass-1: emit format may include "<visible>\x00<tooltip>".
+        # Splitting here means a status producer can offer extra
+        # detail-on-hover without polluting the always-visible bar.
+        def _apply_status(text: str) -> None:
+            if "\x00" in text:
+                visible, tooltip = text.split("\x00", 1)
+            else:
+                visible, tooltip = text, ""
+            self.status_bar.setText(visible)
+            self.status_bar.setToolTip(tooltip)
+        self.bridge.status_update.connect(_apply_status)
         self.bridge.sensor_update.connect(self.sensor_bar.setText)
 
         # Language change
@@ -6518,12 +6582,28 @@ class MainWindow(QMainWindow):
                     # totals) read first, the countdown timers go
                     # last with smaller wording. Bullet-dot separator
                     # is less heavy than pipe-with-spaces.
+                    #
+                    # UX-pass-1: countdown timers (感知/蒸餾/報告) are
+                    # debug-y for normal users. Visible label kept
+                    # short; full timer breakdown moves to a tooltip
+                    # so power users can still see them on hover.
                     _status = (
                         f"● 觀察中  ·  {_now_str}"
                         f"  ·  觀察 {evo.total_observations:,}"
                         f"  ·  學習 {evo.total_learnings}"
                         f"  ·  緩衝 {_buf_count}"
-                        f"  ·  下次 感知 {_next_sense}s / 蒸餾 {_next_distill}s / 報告 {_next_report}s"
+                    )
+                    _status_tooltip = (
+                        f"下次感知：{_next_sense}s\n"
+                        f"下次蒸餾：{_next_distill}s\n"
+                        f"下次報告：{_next_report}s"
+                    )
+                    # Encode tooltip after a NUL so the receiver can
+                    # split (we control both ends) without adding a
+                    # second signal. The status-bar slot below
+                    # interprets text-after-NUL as tooltip.
+                    self.bridge.status_update.emit(
+                        _status + "\x00" + _status_tooltip
                     )
                     self.bridge.status_update.emit(_status)
 
