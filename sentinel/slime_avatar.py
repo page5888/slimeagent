@@ -129,6 +129,39 @@ class SlimeWidget(QWidget):
         # Particle system for glow
         self._particles = []
 
+        # Reactive state: a transient emoji (and slight bounce boost)
+        # rendered above the slime in response to events. Times out
+        # after ~2s so the avatar settles back to idle. The home tab
+        # calls `react("speak")` / `react("idea")` / etc. as user
+        # actions and slime events fire.
+        self._reaction_emoji: str | None = None
+        self._reaction_until: float = 0.0  # epoch seconds
+        self._reaction_started: float = 0.0
+
+    # Map of reaction kinds → emoji shown above the slime. Kept narrow
+    # on purpose: too many faces dilutes the meaning of any one of
+    # them. If a caller passes an unknown kind we just ignore it.
+    _REACTIONS: dict = {
+        "speak": "💭",   # slime replied / spoke
+        "idea":  "💡",   # slime proposed an action / detector hit
+        "happy": "✨",   # success / approved / evolved
+        "alert": "⚠",   # warning / danger detected
+        "think": "🤔",   # working on it
+    }
+
+    def react(self, kind: str, duration: float = 2.0):
+        """Trigger a brief visual reaction. Safe to call from any
+        thread context that ends up on the main loop (the timer-driven
+        paint will pick up the new state on the next tick).
+        """
+        emoji = self._REACTIONS.get(kind)
+        if not emoji:
+            return
+        now = time.time()
+        self._reaction_emoji = emoji
+        self._reaction_started = now
+        self._reaction_until = now + duration
+
     def set_state(self, form: str, title: str, traits: list, skill_count: int):
         """Update the slime's appearance based on evolution state."""
         self._form = form
@@ -396,5 +429,34 @@ class SlimeWidget(QWidget):
                             if k != "background"}
             equip_ctx["p"] = p
             render_equipment(p, equip_to_draw, equip_ctx)
+
+        # ── Transient reaction emoji ─────────────────────────────
+        # Drawn last so it floats above body and equipment. Fades out
+        # over the last 0.5s of its lifetime so the disappearance is
+        # graceful rather than a pop.
+        if self._reaction_emoji and time.time() < self._reaction_until:
+            now = time.time()
+            elapsed = now - self._reaction_started
+            remaining = self._reaction_until - now
+            # Bob up over the lifetime of the reaction so it feels
+            # like a thought drifting upward.
+            life_total = self._reaction_until - self._reaction_started
+            progress = max(0.0, min(1.0, elapsed / life_total)) if life_total > 0 else 1.0
+            float_offset = int(progress * 18)
+            alpha = 255
+            if remaining < 0.5:
+                alpha = max(0, int(255 * (remaining / 0.5)))
+            font = QFont()
+            font.setPointSize(22)
+            p.setFont(font)
+            # Shadow / faint glow for legibility on any background.
+            p.setPen(QColor(0, 0, 0, min(120, alpha)))
+            shadow_rect = QRect(cx - 30 + 1, cy - 80 - float_offset + 1, 60, 40)
+            p.drawText(shadow_rect, Qt.AlignCenter, self._reaction_emoji)
+            p.setPen(QColor(255, 255, 255, alpha))
+            text_rect = QRect(cx - 30, cy - 80 - float_offset, 60, 40)
+            p.drawText(text_rect, Qt.AlignCenter, self._reaction_emoji)
+        elif self._reaction_emoji and time.time() >= self._reaction_until:
+            self._reaction_emoji = None
 
         p.end()

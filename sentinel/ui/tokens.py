@@ -213,7 +213,18 @@ _USER_TINT = "rgba(95,215,232,0.14)"   # cyan
 _SLIME_TINT = "rgba(240,198,116,0.12)" # amber
 
 
-def bubble_user(html_body: str) -> str:
+def _timestamp_html(ts: str | None) -> str:
+    """Render an HH:MM timestamp suffix for a bubble. Returns empty
+    string if no timestamp passed (so callers can opt in)."""
+    if not ts:
+        return ""
+    return (
+        f'<br><span style="color:{PALETTE["text_muted"]};'
+        f' font-size:10px;">{ts}</span>'
+    )
+
+
+def bubble_user(html_body: str, timestamp: str | None = None) -> str:
     """Right-aligned cyan-tinted bubble for the user's messages.
 
     Qt's QTextEdit rich-text engine doesn't honor `display:inline-block`
@@ -223,6 +234,9 @@ def bubble_user(html_body: str) -> str:
     align attribute handles right-alignment without needing CSS flex
     or inline-block. width="60%" caps the bubble width — Qt honors
     table-width percentages.
+
+    Optional `timestamp` (HH:MM string) appears as muted small text
+    inside the bubble so users can scan when each message landed.
     """
     return (
         f'<table align="right" width="65%" cellpadding="10" '
@@ -232,6 +246,7 @@ def bubble_user(html_body: str) -> str:
         f' border-left:3px solid {PALETTE["cyan"]};'
         f' font-size:{FONT_SIZE["body"]}px;">'
         f'{html_body}'
+        f'{_timestamp_html(timestamp)}'
         f'</td></tr></table>'
         # Trailing line break clears the float so the next message
         # doesn't sit alongside this one (Qt's table flow inherits
@@ -240,7 +255,7 @@ def bubble_user(html_body: str) -> str:
     )
 
 
-def bubble_slime(html_body: str) -> str:
+def bubble_slime(html_body: str, timestamp: str | None = None) -> str:
     """Left-aligned amber-tinted bubble for the slime's messages."""
     return (
         f'<table align="left" width="65%" cellpadding="10" '
@@ -251,6 +266,7 @@ def bubble_slime(html_body: str) -> str:
         f' font-size:{FONT_SIZE["body"]}px;">'
         f'<b style="color:{PALETTE["amber"]};">史萊姆</b>　'
         f'{html_body}'
+        f'{_timestamp_html(timestamp)}'
         f'</td></tr></table>'
         f'<br clear="all">'
     )
