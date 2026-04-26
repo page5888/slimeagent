@@ -97,6 +97,46 @@ def _policy_routine_create(payload: dict) -> tuple[bool, list[dict]]:
                 "level": "error",
                 "msg": "interval must be 5..1440 minutes",
             }]
+    # Phase G — reactive triggers. Kept inline with cron-style
+    # validation so the user sees one approval card whether the
+    # routine is time-based or event-based.
+    elif kind == _store.TRIGGER_ON_APP_OPEN:
+        title_match = trig.get("title_match", "")
+        if not isinstance(title_match, str) or not title_match.strip():
+            return False, [{
+                "level": "error",
+                "msg": "on_app_open trigger needs title_match (window-title substring)",
+            }]
+        if len(title_match) > 200:
+            return False, [{
+                "level": "error",
+                "msg": "title_match too long (max 200 chars)",
+            }]
+    elif kind == _store.TRIGGER_ON_FILE_PATTERN:
+        pattern = trig.get("pattern", "")
+        if not isinstance(pattern, str) or not pattern.strip():
+            return False, [{
+                "level": "error",
+                "msg": "on_file_pattern trigger needs pattern (glob like '*.log')",
+            }]
+        if len(pattern) > 300:
+            return False, [{
+                "level": "error",
+                "msg": "pattern too long (max 300 chars)",
+            }]
+    elif kind == _store.TRIGGER_ON_IDLE:
+        try:
+            mins = int(trig.get("duration_minutes", 0))
+        except (TypeError, ValueError):
+            return False, [{
+                "level": "error",
+                "msg": "on_idle trigger needs duration_minutes (int)",
+            }]
+        if mins < 1 or mins > 8 * 60:
+            return False, [{
+                "level": "error",
+                "msg": "on_idle duration_minutes must be 1..480",
+            }]
     else:
         return False, [{
             "level": "error",
@@ -228,6 +268,12 @@ def _render_trigger_zh(trig: dict) -> str:
         return f"每週 {days} 的 {trig.get('time', '?')} 觸發"
     if kind == _store.TRIGGER_INTERVAL:
         return f"每 {trig.get('every_minutes', '?')} 分鐘觸發一次"
+    if kind == _store.TRIGGER_ON_APP_OPEN:
+        return f"當你打開「{trig.get('title_match', '?')}」時觸發"
+    if kind == _store.TRIGGER_ON_FILE_PATTERN:
+        return f"當符合 `{trig.get('pattern', '?')}` 的檔案變動時觸發"
+    if kind == _store.TRIGGER_ON_IDLE:
+        return f"當你閒置 {trig.get('duration_minutes', '?')} 分鐘時觸發"
     return "未知觸發條件"
 
 

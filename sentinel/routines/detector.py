@@ -42,10 +42,28 @@ DETECTOR_PROMPT_TEMPLATE = """\
 可用動作（routine 的 step 只能用這些）：
 <<ACTION_LIST>>
 
-可用觸發條件：
+可用觸發條件（時間 + 環境事件兩類；事件類比時間類更貼近主人實際情境）：
+
+時間類：
 - {"kind": "daily_at", "time": "HH:MM"}      — 每天固定時間（24h 制）
 - {"kind": "weekly_at", "time": "HH:MM", "days": ["mon","tue",...]}  — 每週指定幾天
 - {"kind": "interval", "every_minutes": N}    — 每隔 N 分鐘
+
+事件類（Phase G — 反應式觸發，比 cron 更聰明）：
+- {"kind": "on_app_open", "title_match": "VS Code"}
+   — 當主人打開符合標題的視窗時觸發
+   （比「每天 9 點開檔」更聰明：只在他真的有用電腦時才動）
+- {"kind": "on_file_pattern", "pattern": "*.log"}
+   — 當符合 glob 的檔案變動時觸發（適合「下載完就整理」之類）
+- {"kind": "on_idle", "duration_minutes": 15}
+   — 當主人閒置超過 N 分鐘時觸發（適合提醒喝水、休息、定期備份）
+
+選擇原則：
+* 如果觀察記錄顯示行為跟「特定 app 啟動」綁定 → 用 on_app_open
+* 如果是「下載/儲存某類檔案後該做什麼」→ 用 on_file_pattern
+* 如果是「閒一段時間該做的事」→ 用 on_idle
+* 真的純粹按時鐘的（晨間例行公事） → daily_at
+* 不確定就**寧可不提**
 
 最近幾天的活動 + 聊天記憶：
 <<ACTIVITY_LOG>>
@@ -227,6 +245,7 @@ def _validate_candidate(c: dict) -> Optional[dict]:
     normalized candidate, or None to drop."""
     from sentinel.routines.storage import (
         TRIGGER_DAILY_AT, TRIGGER_WEEKLY_AT, TRIGGER_INTERVAL,
+        TRIGGER_ON_APP_OPEN, TRIGGER_ON_FILE_PATTERN, TRIGGER_ON_IDLE,
     )
     if not isinstance(c, dict):
         return None
@@ -236,6 +255,7 @@ def _validate_candidate(c: dict) -> Optional[dict]:
     trig = c.get("trigger") or {}
     if not isinstance(trig, dict) or trig.get("kind") not in (
         TRIGGER_DAILY_AT, TRIGGER_WEEKLY_AT, TRIGGER_INTERVAL,
+        TRIGGER_ON_APP_OPEN, TRIGGER_ON_FILE_PATTERN, TRIGGER_ON_IDLE,
     ):
         return None
     steps = c.get("steps") or []

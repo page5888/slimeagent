@@ -53,6 +53,17 @@ AUDIT_LOG = ROUTINES_DIR / "routines.jsonl"
 TRIGGER_DAILY_AT = "daily_at"
 TRIGGER_WEEKLY_AT = "weekly_at"
 TRIGGER_INTERVAL = "interval"
+# Phase G — reactive triggers fire on environmental events, not clock.
+# See sentinel/routines/events.py for the event bus that delivers them.
+TRIGGER_ON_APP_OPEN = "on_app_open"        # window with matching title appears
+TRIGGER_ON_FILE_PATTERN = "on_file_pattern"  # file matching glob changes
+TRIGGER_ON_IDLE = "on_idle"                # user idle ≥ N minutes
+
+# Defaults for the cooldown_seconds field, applied if a routine doesn't
+# specify one. Reactive triggers can fire many times in quick succession
+# (file-change burst, idle start/stop), so without throttling the user
+# could see "did the same thing 30 times in 10 seconds".
+DEFAULT_COOLDOWN_SECONDS = 300            # 5 min between fires
 
 
 @dataclass
@@ -68,6 +79,10 @@ class Routine:
     fire_count: int = 0
     evidence: str = ""             # set by detector if auto-proposed
     approval_id: str = ""          # source proposal id, if applicable
+    # Phase G: minimum gap between successive fires for reactive
+    # triggers. Cron-style triggers (daily_at etc.) ignore this since
+    # their natural rate is already low. None = use DEFAULT_COOLDOWN_SECONDS.
+    cooldown_seconds: Optional[int] = None
 
     @classmethod
     def from_dict(cls, data: dict) -> "Routine":

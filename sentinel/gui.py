@@ -5797,8 +5797,14 @@ class MainWindow(QMainWindow):
             try:
                 from sentinel.routines.handlers import register_all as _register_routine_actions
                 from sentinel.routines import start_scheduler as _start_routine_scheduler
+                from sentinel.routines.reactive import register_reactive_triggers
                 _register_routine_actions()
                 _start_routine_scheduler()
+                # Phase G — subscribe reactive dispatcher to event
+                # types BEFORE the observation loop starts publishing.
+                # Idempotent so a future config-reload doesn't stack
+                # subscriptions.
+                register_reactive_triggers()
             except Exception as _e:
                 log.warning(f"routine subsystem init failed: {_e}")
 
@@ -5870,6 +5876,57 @@ class MainWindow(QMainWindow):
                     claude_act = get_claude_activity_summary()
                     user_act = tracker.get_activity_summary()
                     input_act = input_tracker.get_full_summary()
+
+                    # Phase G — feed environmental events to the
+                    # routine reactive dispatcher so on_app_open /
+                    # on_file_pattern routines fire when their
+                    # condition is met. Wrapped in try/except: a
+                    # subscriber crash shouldn't tear down the
+                    # observation loop. See sentinel/routines/events.py.
+                    try:
+                        from sentinel.routines import events as _rev
+                        for fe in file_events or []:
+                            _rev.publish(_rev.EVENT_FILE_CHANGE, {
+                                "path": fe.get("path", ""),
+                                "type": fe.get("type", ""),
+                            })
+                        # active-window change → app_open. tracker
+                        # already exposes the current window; we
+                        # cache the previous title so we only fire on
+                        # transitions, not every observation tick.
+                        cur_title, cur_proc = tracker._get_active_window()
+                        prev_title = getattr(self, "_last_active_window", None)
+                        if cur_title and cur_title != prev_title:
+                            _rev.publish(_rev.EVENT_APP_OPEN, {
+                                "title": cur_title,
+                                "process_name": cur_proc or "",
+                            })
+                            self._last_active_window = cur_title
+                        # Idle threshold synthesis: track the highest
+                        # threshold currently crossed and only fire
+                        # when we cross a NEW threshold (so a 30-min
+                        # idle doesn't keep emitting events at every
+                        # tick).
+                        idle_minutes = int(
+                            tracker.get_idle_duration() / 60
+                        )
+                        last_idle_emit = getattr(
+                            self, "_last_idle_emit_minutes", 0
+                        )
+                        if idle_minutes >= 1 and idle_minutes != last_idle_emit:
+                            # Only emit at coarse 5-min boundaries so
+                            # a routine waiting for "15 min idle" gets
+                            # exactly one event when crossed, not 60.
+                            bucket = (idle_minutes // 5) * 5
+                            if bucket > 0 and bucket != last_idle_emit:
+                                _rev.publish(_rev.EVENT_IDLE_REACHED, {
+                                    "duration_minutes": bucket,
+                                })
+                                self._last_idle_emit_minutes = bucket
+                        if idle_minutes == 0:
+                            self._last_idle_emit_minutes = 0
+                    except Exception as _e:
+                        log.warning(f"reactive event publish failed: {_e}")
                     # build_context now publishes system/files/claude/activity
                     # to the shared Context Bus. We then publish the remaining
                     # source-specific signals (input, screen) the same way,
