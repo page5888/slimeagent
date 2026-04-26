@@ -687,7 +687,25 @@ class HomeTab(QWidget):
         super().__init__()
         from sentinel.ui import tokens as _tk
 
-        layout = QVBoxLayout(self)
+        # Outer layout owns ONE child — the QScrollArea — so the home
+        # tab can grow vertically without squashing its sections.
+        # Without this, all the inline widgets (avatar + daily card +
+        # weekly card + 3 status cards + wallet group + LLM group)
+        # end up sharing the available pixels and the text squeezes
+        # together unreadably on smaller windows.
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        outer.addWidget(scroll)
+
+        inner = QWidget()
+        scroll.setWidget(inner)
+
+        layout = QVBoxLayout(inner)
         layout.setContentsMargins(
             _tk.SPACE["lg"], _tk.SPACE["lg"],
             _tk.SPACE["lg"], _tk.SPACE["lg"],
@@ -712,6 +730,13 @@ class HomeTab(QWidget):
         # ── 每日反思卡（核心 wedge） ──
         from sentinel.reflection.widget import DailyCardWidget, WeeklyCardWidget
         self.daily_card = DailyCardWidget(self)
+        # Make sure the card never gets compressed — its content is
+        # the centerpiece and squeezing it makes the 3 sections run
+        # into each other.
+        self.daily_card.setMinimumHeight(260)
+        self.daily_card.setSizePolicy(
+            QSizePolicy.Expanding, QSizePolicy.Preferred,
+        )
         layout.addWidget(self.daily_card)
 
         # ── 本週觀察（每週一早上才會出現） ──
