@@ -712,37 +712,20 @@ class HomeTab(QWidget):
         )
         layout.setSpacing(_tk.SPACE["md"])
 
-        # ── 史萊姆形象 (small avatar at top) ─────────────────────
-        # We render the slime widget here too so the morning ritual
-        # has a face attached to it — the card alone reads like a
-        # report; with the avatar above it the card reads like
-        # someone speaking.
-        from sentinel.slime_avatar import SlimeWidget
-        avatar_row = QHBoxLayout()
-        avatar_row.addStretch()
-        self.slime_widget = SlimeWidget()
-        # SlimeWidget's paintEvent assumes a baseline of 200x200 (see
-        # __init__ default minimum) and the body+glow+particles extend
-        # beyond the body proper. Earlier we tried 140x140/180x180 to
-        # keep the home tab compact, but that clipped the slime's
-        # body off at the bottom. Use 240x240 fixed so the rendering
-        # always has room — the widget centers within avatar_row so
-        # it doesn't dominate the column.
-        self.slime_widget.setFixedSize(240, 240)
-        avatar_row.addWidget(self.slime_widget)
-        avatar_row.addStretch()
-        layout.addLayout(avatar_row)
-
         # ── 每日反思卡（核心 wedge） ──
+        # Note: we used to render a SlimeWidget here as well so the
+        # card felt like "a face speaking", but at 240x240 it pushed
+        # the home tab's minimum height past 900 px and forced the
+        # whole window to grow. The slime widget is already on the
+        # 🧬 進化 tab at full size; the reflection card's amber accent
+        # stripe already signals "this is FROM the slime". Removing
+        # the duplicate avatar is the easy win.
+        #
+        # Existing chat_response → home_tab.slime_widget.react()
+        # wires in MainWindow are guarded with try/except, so they
+        # silently no-op now that the attribute is gone.
         from sentinel.reflection.widget import DailyCardWidget, WeeklyCardWidget
         self.daily_card = DailyCardWidget(self)
-        # Make sure the card never gets compressed — its content is
-        # the centerpiece and squeezing it makes the 3 sections run
-        # into each other.
-        self.daily_card.setMinimumHeight(260)
-        self.daily_card.setSizePolicy(
-            QSizePolicy.Expanding, QSizePolicy.Preferred,
-        )
         layout.addWidget(self.daily_card)
 
         # ── 本週觀察（每週一早上才會出現） ──
@@ -843,22 +826,6 @@ class HomeTab(QWidget):
             evo = load_evolution()
             self.evo_card["value"].setText(f"{evo.title}")
             self.obs_card["value"].setText(f"{evo.total_observations:,}")
-            # Sync the home-tab avatar so its form matches current
-            # evolution. Same trait list / skill count it gets on
-            # the evolution tab.
-            try:
-                trait_names = [
-                    name for name, _ in sorted(
-                        evo.traits.items(),
-                        key=lambda kv: kv[1],
-                        reverse=True,
-                    )
-                ] if isinstance(getattr(evo, "traits", None), dict) else []
-                self.slime_widget.set_state(
-                    evo.form, evo.title, trait_names, len(getattr(evo, "skills", []) or []),
-                )
-            except Exception as e:
-                log.debug("home avatar set_state failed: %s", e)
         except Exception:
             pass
 
