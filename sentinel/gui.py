@@ -277,6 +277,17 @@ class ChatTab(QWidget):
         self.send_btn.setStyleSheet(_tk.btn_primary())
         input_layout.addWidget(self.send_btn)
 
+        # Clear button — ghost-style, intentionally tiny so it doesn't
+        # compete with Send. Only the transcript view is cleared;
+        # conversation memory survives so the slime stays itself.
+        self.clear_btn = QPushButton("🧹")
+        self.clear_btn.setToolTip("清空對話畫面（記憶保留）")
+        self.clear_btn.setCursor(Qt.PointingHandCursor)
+        self.clear_btn.setFixedWidth(36)
+        self.clear_btn.clicked.connect(self.clear_chat)
+        self.clear_btn.setStyleSheet(_tk.btn_ghost())
+        input_layout.addWidget(self.clear_btn)
+
         layout.addLayout(input_layout)
 
         # Connect response signal
@@ -316,6 +327,13 @@ class ChatTab(QWidget):
                 .replace("\n", "<br>")
         )
 
+    @staticmethod
+    def _now_hhmm() -> str:
+        """HH:MM timestamp for chat bubbles. Local time so users see
+        their own clock — UTC would be confusing for personal chat."""
+        from datetime import datetime
+        return datetime.now().strftime("%H:%M")
+
     def _append_system(self, text: str):
         from sentinel.ui import bubble_system
         self.chat_display.append(bubble_system(self._escape_html(text)))
@@ -323,7 +341,9 @@ class ChatTab(QWidget):
 
     def _append_user(self, text: str):
         from sentinel.ui import bubble_user
-        self.chat_display.append(bubble_user(self._escape_html(text)))
+        self.chat_display.append(
+            bubble_user(self._escape_html(text), timestamp=self._now_hhmm())
+        )
         self.chat_display.moveCursor(QTextCursor.End)
 
     def _show_thinking(self):
@@ -355,8 +375,20 @@ class ChatTab(QWidget):
     def _append_bot(self, text: str):
         from sentinel.ui import bubble_slime
         self._remove_thinking()
-        self.chat_display.append(bubble_slime(self._escape_html(text)))
+        self.chat_display.append(
+            bubble_slime(self._escape_html(text), timestamp=self._now_hhmm())
+        )
         self.chat_display.moveCursor(QTextCursor.End)
+
+    def clear_chat(self):
+        """Wipe the chat display. We deliberately don't touch
+        conversation memory / evolution stats — those live in
+        sentinel.chat / sentinel.evolution and are independent of
+        what's currently rendered. This is purely a visual reset
+        for when the transcript gets long and noisy.
+        """
+        self.chat_display.clear()
+        self._append_system("(對話畫面已清空，記憶仍保留)")
 
     def send_message(self):
         text = self.input_field.text().strip()
@@ -2495,32 +2527,39 @@ class FederationTab(QWidget):
 
     def __init__(self):
         super().__init__()
+        from sentinel.ui import tokens as _tk
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 18, 20, 16)
-        layout.setSpacing(14)
+        layout.setContentsMargins(
+            _tk.SPACE["xl"], _tk.SPACE["lg"],
+            _tk.SPACE["xl"], _tk.SPACE["lg"],
+        )
+        layout.setSpacing(_tk.SPACE["md"])
 
         # ── Page title ────────────────────────────────────────────────
         # Single line. The tab name "公頻" already labels this tab, so
         # we don't need a second "史萊姆之間的共同觀察" heading + a
         # separate description paragraph — that doubled the chrome at
         # the top of the screen.
+        _cyan = _tk.PALETTE['cyan']
+        _muted = _tk.PALETTE['text_muted']
+        _meta_size = _tk.FONT_SIZE['meta']
         self.header_lbl = QLabel(
-            f"<span style='color:#00dcff; font-weight:600;'>"
+            f"<span style='color:{_cyan}; font-weight:600;'>"
             f"{t('fed_header')}</span>"
-            f"  <span style='color:#666; font-weight:400; font-size:11px;'>"
+            f"  <span style='color:{_muted};"
+            f" font-weight:400; font-size:{_meta_size}px;'>"
             f"{t('fed_subtitle')}</span>"
         )
-        self.header_lbl.setStyleSheet("font-size: 15px; padding-bottom: 2px;")
+        self.header_lbl.setStyleSheet(
+            f"font-size:{_tk.FONT_SIZE['title']}px; padding-bottom: 2px;"
+        )
         layout.addWidget(self.header_lbl)
 
         # ── Pending section (your slime's proposals) ─────────────────
         # Hidden entirely when queue is empty & session_count > 0 — see
         # _rebuild_pending. Takes 0 visual weight when not in use.
         self.pending_header = QLabel("")  # text set in _rebuild_pending
-        self.pending_header.setStyleSheet(
-            "color:#ffd166; font-size: 12px; "
-            "font-weight:600; letter-spacing: 0.3px;"
-        )
+        self.pending_header.setStyleSheet(_tk.text_section())
         self.pending_header.setVisible(False)
         layout.addWidget(self.pending_header)
 
@@ -2538,21 +2577,29 @@ class FederationTab(QWidget):
         # ── Thin divider between "your slime" and "others" ─────────
         self.divider = QFrame()
         self.divider.setFrameShape(QFrame.HLine)
-        self.divider.setStyleSheet("color:#2a2a2a; background:#2a2a2a;")
+        self.divider.setStyleSheet(
+            f"color:{_tk.PALETTE['border_subtle']};"
+            f" background:{_tk.PALETTE['border_subtle']};"
+        )
         self.divider.setFixedHeight(1)
         self.divider.setVisible(False)   # only shown when pending visible
         layout.addWidget(self.divider)
 
         # ── Community section ────────────────────────────────────────
+        # Community header is a "system / federation" theme so it uses
+        # cyan (text_section is amber for own-slime; for the federation
+        # we override to cyan via inline call to text_title).
         self.community_header = QLabel(t("fed_community_header"))
         self.community_header.setStyleSheet(
-            "color:#00dcff; font-size: 12px; "
-            "font-weight:600; letter-spacing: 0.3px;"
+            f"color:{_tk.PALETTE['cyan']};"
+            f" font-size:{_tk.FONT_SIZE['section']}px;"
+            f" font-weight:600;"
+            f" letter-spacing:0.3px;"
         )
         layout.addWidget(self.community_header)
 
         self.status_lbl = QLabel(t("fed_loading"))
-        self.status_lbl.setStyleSheet("color:#666; font-size: 11px; padding: 4px 0;")
+        self.status_lbl.setStyleSheet(_tk.text_meta() + " padding:4px 0;")
         layout.addWidget(self.status_lbl)
 
         self.scroll = QScrollArea()
@@ -3839,13 +3886,19 @@ class SettingsTab(QWidget):
 
     def __init__(self):
         super().__init__()
+        from sentinel.ui import tokens as _tk
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setContentsMargins(
+            _tk.SPACE["lg"], _tk.SPACE["md"],
+            _tk.SPACE["lg"], _tk.SPACE["md"],
+        )
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
         inner = QWidget()
         form = QVBoxLayout(inner)
+        form.setSpacing(_tk.SPACE["md"])
 
         # Language
         lang_group = QGroupBox(t("settings_language"))
@@ -3889,7 +3942,7 @@ class SettingsTab(QWidget):
         status_row.addWidget(self.ollama_refresh_btn)
         ollama_layout.addLayout(status_row)
         self.ollama_models_label = QLabel("")
-        self.ollama_models_label.setStyleSheet("color: #888; font-size: 12px;")
+        self.ollama_models_label.setStyleSheet(_tk.text_meta())
         ollama_layout.addWidget(self.ollama_models_label)
         ollama_group.setLayout(ollama_layout)
         form.addWidget(ollama_group)
@@ -6131,6 +6184,16 @@ class MainWindow(QMainWindow):
         self.bridge.status_update.connect(_apply_status)
         self.bridge.sensor_update.connect(self.sensor_bar.setText)
 
+        # Avatar speaks visually whenever a chat reply lands. Decoupled
+        # from chat tab so the home avatar reacts even if the user is
+        # on a different tab.
+        def _slime_speaks(_text: str) -> None:
+            try:
+                self.home_tab.slime_widget.react("speak")
+            except Exception:
+                pass
+        self.bridge.chat_response.connect(_slime_speaks)
+
         # Language change
         self.settings_tab.language_changed.connect(self._retranslate_all)
 
@@ -6407,6 +6470,13 @@ class MainWindow(QMainWindow):
         """
         QTimer.singleShot(0, self.approval_tab.refresh)
         QTimer.singleShot(0, self._refresh_approval_tab_label)
+        # Avatar reacts so the user sees something happen even if
+        # they're not on the 待同意 tab. The signal is intentionally
+        # quiet — a 💡 floating above the slime, not a popup.
+        try:
+            QTimer.singleShot(0, lambda: self.home_tab.slime_widget.react("idea"))
+        except Exception:
+            pass
         try:
             from sentinel.notifier import send_notification
             kind_zh = "新技能" if approval.kind == "skill_gen" else "自我改良"
