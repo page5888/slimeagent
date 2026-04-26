@@ -5427,20 +5427,37 @@ class MainWindow(QMainWindow):
         self.bridge.advice_received.connect(self._show_advice)
 
         # ── 底部即時狀態面板（兩行） ──
+        # Phase L2 — softer rendering. Translucent surface, no harsh
+        # 1-px border, generous padding. The two text rows use the
+        # token-driven dim/muted colors so the status bar reads as a
+        # quiet ambient frame rather than a "control panel" that
+        # draws the eye away from the active tab.
+        from sentinel.ui import tokens as _tk
         status_panel = QWidget()
         status_panel.setStyleSheet(
-            "background-color: rgba(0,0,0,0.3); border-top: 1px solid #333;"
+            f"background-color:{_tk.PALETTE['bg_sunken']};"
+            f"border-top:1px solid {_tk.PALETTE['border_subtle']};"
         )
         sp_layout = QVBoxLayout(status_panel)
-        sp_layout.setContentsMargins(12, 4, 12, 4)
+        sp_layout.setContentsMargins(
+            _tk.SPACE["lg"], _tk.SPACE["sm"],
+            _tk.SPACE["lg"], _tk.SPACE["sm"],
+        )
         sp_layout.setSpacing(2)
 
-        self.status_bar = QLabel("○ 等待甦醒...")
-        self.status_bar.setStyleSheet("color: #888; font-size: 11px;")
+        self.status_bar = QLabel("○ 等待甦醒…")
+        self.status_bar.setStyleSheet(
+            f"color:{_tk.PALETTE['text_dim']};"
+            f"font-size:{_tk.FONT_SIZE['meta']}px;"
+            f"letter-spacing:0.3px;"
+        )
         sp_layout.addWidget(self.status_bar)
 
         self.sensor_bar = QLabel("")
-        self.sensor_bar.setStyleSheet("color: #666; font-size: 10px;")
+        self.sensor_bar.setStyleSheet(
+            f"color:{_tk.PALETTE['text_muted']};"
+            f"font-size:10px;"
+        )
         sp_layout.addWidget(self.sensor_bar)
 
         main_layout.addWidget(status_panel)
@@ -6032,14 +6049,16 @@ class MainWindow(QMainWindow):
                     _next_distill = max(0, int(config.DISTILL_INTERVAL - (now - last_distill)))
                     _next_report = max(0, int(config.IDLE_REPORT_INTERVAL - (now - last_idle)))
                     _buf_count = len(activity_buf)
+                    # Phase L2 — primary stats (state + observation
+                    # totals) read first, the countdown timers go
+                    # last with smaller wording. Bullet-dot separator
+                    # is less heavy than pipe-with-spaces.
                     _status = (
-                        f"● 觀察中　|　{_now_str}　|　"
-                        f"總觀察 {evo.total_observations:,}　|　"
-                        f"學習 {evo.total_learnings}　|　"
-                        f"緩衝 {_buf_count} 筆　|　"
-                        f"感知 {_next_sense}s　|　"
-                        f"蒸餾 {_next_distill}s　|　"
-                        f"報告 {_next_report}s"
+                        f"● 觀察中  ·  {_now_str}"
+                        f"  ·  觀察 {evo.total_observations:,}"
+                        f"  ·  學習 {evo.total_learnings}"
+                        f"  ·  緩衝 {_buf_count}"
+                        f"  ·  下次 感知 {_next_sense}s / 蒸餾 {_next_distill}s / 報告 {_next_report}s"
                     )
                     self.bridge.status_update.emit(_status)
 

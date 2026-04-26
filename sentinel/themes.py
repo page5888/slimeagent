@@ -8,59 +8,126 @@ Themes are inspired by isekai/anime aesthetics.
 def _build_style(bg1: str, bg2: str, bg3: str, text: str, accent: str,
                   accent_hover: str, accent_press: str, dim: str,
                   border: str, danger: str, success: str, warn: str) -> str:
-    """Build a full QSS stylesheet from color parameters."""
+    """Build a full QSS stylesheet from color parameters.
+
+    Phase L2 rewrite: align with sentinel/ui/tokens.py — bigger radii,
+    pill buttons, slim scrollbars, cleaner tab bar (no card edges,
+    underline-only active indicator), focus-state borders, better
+    tooltip + groupbox styling.
+
+    Per-theme parameters still control color so the user's chosen
+    palette (slime_blue / tempest_purple / etc.) keeps working — only
+    structure improved.
+    """
     return f"""
+/* ── Base ───────────────────────────────────────── */
 QMainWindow, QWidget {{
     background-color: {bg1};
     color: {text};
     font-family: "Segoe UI", "Microsoft JhengHei", sans-serif;
     font-size: 13px;
 }}
-QTabWidget::pane {{
+QToolTip {{
+    background-color: {bg3};
+    color: {text};
     border: 1px solid {border};
-    background-color: {bg2};
-    border-radius: 4px;
+    padding: 6px 10px;
+    border-radius: 6px;
+}}
+
+/* ── Tab bar (top-level navigation) ────────────────
+ * Underline-only active indicator + softer hover.
+ * No more boxy "tab cards"; nav reads as a clean menu.
+ */
+QTabWidget::pane {{
+    border: none;
+    border-top: 1px solid {border};
+    background-color: {bg1};
+    margin-top: -1px;
+}}
+QTabBar {{
+    qproperty-drawBase: 0;
+    background: transparent;
 }}
 QTabBar::tab {{
-    background-color: {bg1};
+    background: transparent;
     color: {dim};
-    padding: 8px 20px;
-    margin-right: 2px;
-    border-top-left-radius: 4px;
-    border-top-right-radius: 4px;
+    padding: 10px 18px;
+    margin: 0 2px;
+    border: none;
+    border-bottom: 2px solid transparent;
+    font-size: 13px;
+}}
+QTabBar::tab:hover {{
+    color: {text};
 }}
 QTabBar::tab:selected {{
-    background-color: {bg2};
     color: {accent};
     border-bottom: 2px solid {accent};
+    font-weight: 600;
 }}
+
+/* ── Text inputs ────────────────────────────────── */
 QTextEdit, QPlainTextEdit {{
     background-color: {bg3};
     color: {text};
     border: 1px solid {border};
-    border-radius: 4px;
-    padding: 8px;
-    font-family: "Cascadia Code", "Consolas", monospace;
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-family: "Segoe UI", "Microsoft JhengHei", sans-serif;
     font-size: 13px;
+    selection-background-color: {accent};
+    selection-color: {bg3};
+}}
+QTextEdit:focus, QPlainTextEdit:focus {{
+    border-color: {accent};
 }}
 QLineEdit {{
     background-color: {bg3};
     color: {text};
     border: 1px solid {border};
-    border-radius: 4px;
-    padding: 8px;
+    border-radius: 14px;
+    padding: 8px 14px;
     font-size: 13px;
+    selection-background-color: {accent};
+    selection-color: {bg3};
 }}
 QLineEdit:focus {{
-    border: 1px solid {accent};
+    border-color: {accent};
 }}
+QSpinBox, QComboBox {{
+    background-color: {bg3};
+    color: {text};
+    border: 1px solid {border};
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 13px;
+    min-height: 18px;
+}}
+QSpinBox:focus, QComboBox:focus {{
+    border-color: {accent};
+}}
+QComboBox::drop-down {{
+    border: none;
+    width: 22px;
+}}
+QComboBox QAbstractItemView {{
+    background-color: {bg2};
+    color: {text};
+    border: 1px solid {border};
+    selection-background-color: {accent};
+    selection-color: {bg3};
+    padding: 4px;
+}}
+
+/* ── Buttons ────────────────────────────────────── */
 QPushButton {{
     background-color: {accent};
     color: {bg3};
     border: none;
-    border-radius: 4px;
-    padding: 8px 16px;
-    font-weight: bold;
+    border-radius: 14px;
+    padding: 7px 16px;
+    font-weight: 600;
     font-size: 13px;
 }}
 QPushButton:hover {{
@@ -69,6 +136,10 @@ QPushButton:hover {{
 QPushButton:pressed {{
     background-color: {accent_press};
 }}
+QPushButton:disabled {{
+    background-color: {border};
+    color: {dim};
+}}
 QPushButton#stopBtn {{
     background-color: {danger};
     color: white;
@@ -76,18 +147,83 @@ QPushButton#stopBtn {{
 QPushButton#stopBtn:hover {{
     background-color: #ff6b81;
 }}
+
+/* ── Group box ──────────────────────────────────── */
 QGroupBox {{
     border: 1px solid {border};
-    border-radius: 4px;
-    margin-top: 12px;
-    padding-top: 16px;
-    font-weight: bold;
+    border-radius: 8px;
+    margin-top: 16px;
+    padding: 18px 14px 14px 14px;
+    font-weight: 600;
     color: {accent};
+    font-size: 12px;
 }}
 QGroupBox::title {{
     subcontrol-origin: margin;
-    left: 10px;
-    padding: 0 5px;
+    subcontrol-position: top left;
+    left: 12px;
+    padding: 0 6px;
+    background-color: {bg1};
+}}
+
+/* ── Scrollbars (slim, unobtrusive) ─────────────── */
+QScrollBar:vertical {{
+    background: transparent;
+    width: 8px;
+    margin: 0;
+}}
+QScrollBar::handle:vertical {{
+    background: {border};
+    border-radius: 4px;
+    min-height: 20px;
+}}
+QScrollBar::handle:vertical:hover {{
+    background: {dim};
+}}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+    height: 0;
+}}
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+    background: transparent;
+}}
+QScrollBar:horizontal {{
+    background: transparent;
+    height: 8px;
+    margin: 0;
+}}
+QScrollBar::handle:horizontal {{
+    background: {border};
+    border-radius: 4px;
+    min-width: 20px;
+}}
+QScrollBar::handle:horizontal:hover {{
+    background: {dim};
+}}
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
+    width: 0;
+}}
+
+/* ── Lists / labels ─────────────────────────────── */
+QListWidget {{
+    background-color: {bg3};
+    color: {text};
+    border: 1px solid {border};
+    border-radius: 8px;
+    padding: 4px;
+}}
+QListWidget::item {{
+    padding: 6px 8px;
+    border-radius: 4px;
+}}
+QListWidget::item:selected {{
+    background-color: {accent};
+    color: {bg3};
+}}
+QListWidget::item:hover {{
+    background-color: {bg2};
+}}
+QFrame[frameShape="4"], QFrame[frameShape="5"] {{
+    color: {border};
 }}
 QProgressBar {{
     border: 1px solid {border};
