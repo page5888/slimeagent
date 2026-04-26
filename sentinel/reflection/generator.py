@@ -415,3 +415,221 @@ def get_or_generate_morning_card(force: bool = False) -> Optional[DailyCard]:
     the GUI should call.
     """
     return generate_yesterday(force=force)
+
+
+# ── Weekly card ───────────────────────────────────────────────────
+# A weekly observation that distills the past 7 daily cards. Triggers
+# automatically when 7+ daily cards exist and the most recent week-end
+# (today's previous Sunday) hasn't been written yet.
+#
+# Storage: ~/.hermes/daily_cards/weekly-YYYY-MM-DD.json  (week-end date)
+# Schema is intentionally similar to DailyCard so the same widget can
+# render either with minimal branching:
+#   {
+#     "kind": "weekly",
+#     "week_end": "2026-04-26",
+#     "week_start": "2026-04-20",
+#     "generated_at": <unix>,
+#     "form_at_generation": "...",
+#     "title_at_generation": "...",
+#     "summary": "...",      // 1-2 sentence overall arc
+#     "patterns": "...",     // 2-3 lines of recurring patterns
+#     "ahead": "...",        // 1 sentence look-ahead
+#     "feedback": {...}      // same shape as daily
+#   }
+
+
+WEEKLY_SYSTEM_PROMPT = """你是一隻名叫「{slime_name}」的史萊姆，現在的形態是「{form}」。
+你已經陪主人走了一週，現在要寫一張「本週觀察」。
+
+語氣：{voice_hint}
+
+任務：根據過去 7 天主人的活動模式 + 你每天寫過的反思，產出**三段內容**：
+
+[總結]
+（這週主人整體的樣子，1-2 句。不要列數字，要講一個故事。）
+
+[模式]
+（你看到的 2-3 個重複出現的習慣或趨勢。每個 1 行。）
+
+[展望]
+（給主人下週一個方向，1 句。不要叫主人努力，要點出他下週可能會卡住或可以更好的地方。）
+
+絕對禁止：
+  - 把每天的 micro_task 念一遍
+  - 用「主人辛苦了」「加油」這類空話
+  - 寫超過三段
+"""
+
+
+def _format_card_summary(card: DailyCard) -> str:
+    """Compact one-paragraph view of a daily card for the weekly
+    prompt. We don't include raw_metrics — the LLM doesn't need them
+    again at the weekly level."""
+    fb_label = {
+        "accurate": "✅準",
+        "partial":  "🤔部分",
+        "wrong":    "❌錯",
+        "pending":  "(未答)",
+    }.get(card.feedback_state, "(未答)")
+    return (
+        f"{card.date} [{fb_label}]\n"
+        f"  觀察: {(card.observation or '').strip()[:120]}\n"
+        f"  洞察: {(card.insight or '').strip()[:120]}\n"
+        f"  微任務: {(card.micro_task or '').strip()[:80]}"
+    )
+
+
+def weekly_card_path(week_end_iso: str) -> Path:
+    return CARDS_DIR / f"weekly-{week_end_iso}.json"
+
+
+def load_weekly_card(week_end_iso: str) -> Optional[dict]:
+    path = weekly_card_path(week_end_iso)
+    if not path.exists():
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        log.warning("weekly card load failed for %s: %s", week_end_iso, e)
+        return None
+
+
+def _save_weekly_card(card_dict: dict) -> None:
+    target = weekly_card_path(card_dict["week_end"])
+    tmp = target.with_suffix(".json.tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(card_dict, f, ensure_ascii=False, indent=2)
+        tmp.replace(target)
+    except OSError as e:
+        log.error("weekly card save failed: %s", e)
+
+
+def _parse_weekly_sections(text: str) -> tuple[str, str, str]:
+    """Same pattern as parse_sections but with [總結]/[模式]/[展望]."""
+    if not text:
+        return "", "", ""
+    pattern = re.compile(r"\[?(總結|模式|展望)\]?\s*[:：]?", re.MULTILINE)
+    matches = list(pattern.finditer(text))
+    sections: dict[str, str] = {}
+    for i, m in enumerate(matches):
+        name = m.group(1)
+        start = m.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        sections[name] = text[start:end].strip().lstrip("]：: ").rstrip("*").strip()
+    return (
+        sections.get("總結", ""),
+        sections.get("模式", ""),
+        sections.get("展望", ""),
+    )
+
+
+def generate_weekly_card_for(week_end: date, force: bool = False) -> Optional[dict]:
+    """Generate a weekly recap covering the 7 days ending on
+    `week_end` (inclusive). Returns the saved dict or None on failure.
+    """
+    week_end_iso = week_end.isoformat()
+    if not force:
+        existing = load_weekly_card(week_end_iso)
+        if existing:
+            return existing
+
+    week_start = week_end - timedelta(days=6)
+
+    # Load the 7 daily cards in the window. Skip days that don't have
+    # a card — we don't want to re-trigger generation here.
+    from sentinel.reflection.daily_card import load_card
+    daily_cards: list[DailyCard] = []
+    cursor = week_start
+    while cursor <= week_end:
+        c = load_card(cursor.isoformat())
+        if c:
+            daily_cards.append(c)
+        cursor = cursor + timedelta(days=1)
+
+    if len(daily_cards) < 5:
+        # Need at least 5 of 7 days to make a real weekly recap. Less
+        # than that and we'd just be padding.
+        log.info("weekly card skipped — only %d daily cards in window",
+                 len(daily_cards))
+        return None
+
+    # Identity for voice.
+    try:
+        from sentinel.evolution import load_evolution
+        evo = load_evolution()
+        form, title = evo.form, evo.title
+        slime_name = evo.display_name() if hasattr(evo, "display_name") else evo.title
+    except Exception:
+        form, title, slime_name = "Slime", "初生史萊姆", "史萊姆"
+
+    voice = _VOICE_HINTS.get(form, _VOICE_HINTS["Slime"])
+    sys_prompt = WEEKLY_SYSTEM_PROMPT.format(
+        slime_name=slime_name, form=form, voice_hint=voice,
+    )
+    user_prompt = (
+        f"週期：{week_start.isoformat()} → {week_end_iso}\n"
+        f"共 {len(daily_cards)} 張每日卡。\n\n"
+        + "\n\n".join(_format_card_summary(c) for c in daily_cards)
+        + "\n\n請依規定格式產出三段。"
+    )
+
+    try:
+        from sentinel.llm import call_llm
+        reply = call_llm(
+            user_prompt,
+            system=sys_prompt,
+            temperature=0.7,
+            max_tokens=700,
+            task_type="reflection",
+        )
+    except Exception as e:
+        log.error("weekly card LLM call failed: %s", e)
+        reply = None
+
+    if not reply:
+        return None
+
+    summary, patterns, ahead = _parse_weekly_sections(reply)
+    if not (summary or patterns or ahead):
+        # Dump raw if parse failed entirely.
+        summary = reply.strip()[:400]
+
+    card_dict = {
+        "kind": "weekly",
+        "week_end": week_end_iso,
+        "week_start": week_start.isoformat(),
+        "generated_at": time.time(),
+        "form_at_generation": form,
+        "title_at_generation": title,
+        "summary": summary,
+        "patterns": patterns,
+        "ahead": ahead,
+        "feedback": {"state": "pending", "answered_at": None, "note": ""},
+        "daily_count": len(daily_cards),
+    }
+    _save_weekly_card(card_dict)
+    log.info("weekly card generated for week ending %s", week_end_iso)
+    return card_dict
+
+
+def maybe_generate_weekly_card() -> Optional[dict]:
+    """Called alongside the daily generation. Generates a weekly card
+    if today is a week boundary AND we have enough daily cards in the
+    window AND no weekly card exists for that boundary yet.
+
+    Boundary policy: every 7 days starting from today's most recent
+    Monday-as-week-start (i.e., week_end = yesterday if yesterday is a
+    Sunday). This avoids the tyranny of partial weeks at install time
+    and gives the user a predictable Monday-morning ritual.
+    """
+    today = date.today()
+    yesterday = today - timedelta(days=1)
+    # Sunday == 6 in Python's weekday() (Mon=0). We want the weekly
+    # card to fire on Monday morning summarizing the week that just
+    # ended on Sunday.
+    if yesterday.weekday() != 6:  # not Sunday
+        return None
+    return generate_weekly_card_for(yesterday)

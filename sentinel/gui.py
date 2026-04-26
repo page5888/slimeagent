@@ -710,9 +710,16 @@ class HomeTab(QWidget):
         layout.addLayout(avatar_row)
 
         # ── 每日反思卡（核心 wedge） ──
-        from sentinel.reflection.widget import DailyCardWidget
+        from sentinel.reflection.widget import DailyCardWidget, WeeklyCardWidget
         self.daily_card = DailyCardWidget(self)
         layout.addWidget(self.daily_card)
+
+        # ── 本週觀察（每週一早上才會出現） ──
+        # WeeklyCardWidget hides itself when there's nothing to show
+        # (no weekly card on disk, or the most recent one is > 7 days
+        # old) so on most days this widget takes 0 vertical space.
+        self.weekly_card = WeeklyCardWidget(self)
+        layout.addWidget(self.weekly_card)
 
         # ── 狀態小列（縮成 1 行） ──
         cards = QHBoxLayout()
@@ -832,6 +839,11 @@ class HomeTab(QWidget):
             self.daily_card.refresh()
         except Exception as e:
             log.debug("daily card refresh failed: %s", e)
+
+        try:
+            self.weekly_card.refresh()
+        except Exception as e:
+            log.debug("weekly card refresh failed: %s", e)
 
         try:
             from sentinel.wallet.equipment import load_equipment
@@ -3965,7 +3977,14 @@ class SettingsTab(QWidget):
         theme_group = QGroupBox(t("settings_theme"))
         theme_layout = QHBoxLayout()
         self.theme_combo = QComboBox()
+        # v0.7-alpha lite: only surface 2 themes in the picker. The
+        # other 4 are still in THEMES (and saved settings still load
+        # them if previously chosen) — they're just hidden from new
+        # selections during dogfood. Restore by deleting this filter.
+        _LITE_THEMES = {"slime_blue", "predator_dark"}
         for tid, tname in list_themes():
+            if tid not in _LITE_THEMES:
+                continue
             self.theme_combo.addItem(tname, tid)
         # Set current
         current_theme = get_theme()
@@ -4130,7 +4149,23 @@ class SettingsTab(QWidget):
         form.addWidget(llm_label)
 
         self.provider_rows = []
+        # v0.7-alpha lite: only surface Gemini + Ollama as configurable
+        # in the UI. The other 6 providers (claude, openai, openrouter,
+        # groq, deepseek, deepinfra) keep working in config.LLM_PROVIDERS
+        # — saved settings + LLM call routing all still see them — they
+        # just don't get a row in the settings tab during dogfood, so
+        # the surface area is "set one of two keys, done".
+        _LITE_PROVIDERS = {"gemini", "ollama"}
         for provider in config.LLM_PROVIDERS:
+            pname = (provider.get("name") or "").lower()
+            if pname not in _LITE_PROVIDERS:
+                # Still keep the underlying config — just don't render
+                # a row. The provider list_loop in settings save (line
+                # ~4465) zips provider_rows with config.LLM_PROVIDERS,
+                # so we keep an invisible placeholder to preserve the
+                # alignment.
+                self.provider_rows.append(None)
+                continue
             row = ProviderRow(provider)
             self.provider_rows.append(row)
             form.addWidget(row)
@@ -4451,6 +4486,11 @@ class SettingsTab(QWidget):
 
         updated_providers = []
         for row, original in zip(self.provider_rows, config.LLM_PROVIDERS):
+            if row is None:
+                # v0.7 lite mode: this provider has no UI row. Keep
+                # whatever's already in config.LLM_PROVIDERS for it.
+                updated_providers.append(dict(original))
+                continue
             updated_providers.append(row.to_dict(original))
 
         # Parse chat_id defensively — empty string or non-numeric falls

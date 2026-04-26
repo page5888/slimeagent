@@ -221,6 +221,23 @@ class DailyCardWidget(QWidget):
             return
         self._card = card
         self._render_card()
+        # If today happens to be a week boundary, generate the weekly
+        # recap too — also off-thread so the daily card can render
+        # immediately. The weekly card surfaces via WeeklyCardWidget
+        # if the home tab embeds one; otherwise it just sits on disk
+        # for inspection.
+        threading.Thread(
+            target=self._maybe_generate_weekly,
+            daemon=True,
+            name="weekly-card-gen",
+        ).start()
+
+    def _maybe_generate_weekly(self):
+        try:
+            from sentinel.reflection.generator import maybe_generate_weekly_card
+            maybe_generate_weekly_card()
+        except Exception as e:
+            log.warning("weekly card generation failed: %s", e)
 
     # ── Rendering ────────────────────────────────────────────────
 
@@ -296,18 +313,172 @@ class DailyCardWidget(QWidget):
             log.error("could not save feedback: %s", e)
             return
 
-        # Hook into the routine preferences system so feedback can
-        # eventually feed back into detection / judging. Keep this
-        # best-effort — the card's value is in the user feedback
-        # loop itself, not in connected systems firing.
+        # Pipe feedback into the routines/preferences card-feedback
+        # log so a future generator iteration can avoid re-making the
+        # kind of observation the user said WRONG to. We pass a small
+        # snapshot of the card content (truncated) so downstream code
+        # can correlate "user disliked observations about focus blocks"
+        # with the actual text rather than just the date.
         try:
             from sentinel.routines import preferences
             if hasattr(preferences, "record_card_feedback"):
+                snapshot = {
+                    "observation": (self._card.observation or "")[:200],
+                    "insight":     (self._card.insight or "")[:200],
+                    "micro_task":  (self._card.micro_task or "")[:120],
+                    "form":        self._card.form_at_generation,
+                    # Pull a few high-signal raw metric flags so the
+                    # feedback log is searchable by metric type.
+                    "had_focus_blocks": bool(
+                        self._card.raw_metrics.get("focus_blocks")
+                    ),
+                    "switch_count": self._card.raw_metrics.get("switch_count"),
+                }
                 preferences.record_card_feedback(
                     date_iso=self._card.date,
                     state=state,
+                    snapshot=snapshot,
                 )
         except Exception as e:
-            log.debug("preferences hook not available yet: %s", e)
+            log.debug("card feedback hook failed: %s", e)
 
         self._lock_feedback_to(state)
+
+
+# ── Weekly card widget ────────────────────────────────────────────
+
+
+class WeeklyCardWidget(QWidget):
+    """Compact weekly recap card.
+
+    Only visible when a weekly card exists for the most recent
+    completed week. The home tab embeds this widget below the daily
+    card; the widget hides itself when there's nothing to show.
+    """
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        from sentinel.ui import tokens as _tk
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(_tk.SPACE["sm"])
+
+        # A second elevated frame, this time with cyan accent (instead
+        # of amber) so the user instantly distinguishes "weekly recap"
+        # from "today's reflection".
+        self.frame = QFrame()
+        self.frame.setStyleSheet(
+            f"QFrame {{"
+            f" background-color: {_tk.PALETTE['bg_elev']};"
+            f" border: 1px solid {_tk.PALETTE['border_subtle']};"
+            f" border-left: 3px solid {_tk.PALETTE['cyan']};"
+            f" border-radius: {_tk.RADIUS['card']}px;"
+            f" }}"
+        )
+        fl = QVBoxLayout(self.frame)
+        fl.setContentsMargins(
+            _tk.SPACE["lg"], _tk.SPACE["md"],
+            _tk.SPACE["lg"], _tk.SPACE["md"],
+        )
+        fl.setSpacing(_tk.SPACE["sm"])
+
+        head = QHBoxLayout()
+        self.title_lbl = QLabel("📅 本週觀察")
+        self.title_lbl.setStyleSheet(
+            f"color: {_tk.PALETTE['cyan']};"
+            f" font-size: {_tk.FONT_SIZE['title']}px;"
+            f" font-weight: 600;"
+        )
+        head.addWidget(self.title_lbl)
+        head.addStretch()
+        self.range_lbl = QLabel("")
+        self.range_lbl.setStyleSheet(_tk.text_meta())
+        head.addWidget(self.range_lbl)
+        fl.addLayout(head)
+
+        self.summary_lbl = self._mk_section("總結")
+        self.summary_body = self._mk_body()
+        self.patterns_lbl = self._mk_section("模式")
+        self.patterns_body = self._mk_body()
+        self.ahead_lbl = self._mk_section("展望")
+        self.ahead_body = self._mk_body()
+
+        for w in (
+            self.summary_lbl, self.summary_body,
+            self.patterns_lbl, self.patterns_body,
+            self.ahead_lbl, self.ahead_body,
+        ):
+            fl.addWidget(w)
+
+        layout.addWidget(self.frame)
+
+        self.refresh()
+
+    def _mk_section(self, text: str) -> QLabel:
+        from sentinel.ui import tokens as _tk
+        lbl = QLabel(text)
+        lbl.setStyleSheet(
+            f"color: {_tk.PALETTE['text_dim']};"
+            f" font-size: {_tk.FONT_SIZE['section']}px;"
+            f" font-weight: 600;"
+            f" letter-spacing: 0.3px;"
+            f" margin-top: 4px;"
+        )
+        return lbl
+
+    def _mk_body(self) -> QLabel:
+        from sentinel.ui import tokens as _tk
+        lbl = QLabel("")
+        lbl.setWordWrap(True)
+        lbl.setStyleSheet(
+            f"color: {_tk.PALETTE['text']};"
+            f" font-size: {_tk.FONT_SIZE['body']}px;"
+            f" line-height: 1.5;"
+        )
+        return lbl
+
+    def refresh(self):
+        """Find the latest weekly card on disk; show + populate, or
+        hide self if there isn't one yet."""
+        try:
+            from sentinel.reflection.daily_card import CARDS_DIR
+            files = sorted(
+                CARDS_DIR.glob("weekly-*.json"),
+                reverse=True,
+            ) if CARDS_DIR.exists() else []
+        except Exception:
+            files = []
+
+        if not files:
+            self.setVisible(False)
+            return
+
+        # Newest. Check it's recent (within 7 days) — older weekly
+        # cards stay on disk but don't take up space on the home tab.
+        try:
+            import json as _json
+            with open(files[0], "r", encoding="utf-8") as f:
+                data = _json.load(f)
+        except Exception as e:
+            log.warning("could not load weekly card %s: %s", files[0], e)
+            self.setVisible(False)
+            return
+
+        from datetime import date as _date, timedelta as _td
+        try:
+            week_end = _date.fromisoformat(data.get("week_end", ""))
+            if (_date.today() - week_end).days > 7:
+                self.setVisible(False)
+                return
+        except ValueError:
+            self.setVisible(False)
+            return
+
+        self.range_lbl.setText(
+            f"{data.get('week_start', '')} → {data.get('week_end', '')}"
+        )
+        self.summary_body.setText(data.get("summary", "") or "(這部分沒寫出來)")
+        self.patterns_body.setText(data.get("patterns", "") or "(這部分沒寫出來)")
+        self.ahead_body.setText(data.get("ahead", "") or "(這部分沒寫出來)")
+        self.setVisible(True)

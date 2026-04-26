@@ -260,3 +260,69 @@ def register_with_approval_queue() -> None:
     duplicates)."""
     from sentinel.growth import register_on_reject
     register_on_reject(_on_routine_rejection)
+
+
+# ── Daily card feedback (v0.7-alpha) ──────────────────────────────
+# Card feedback is a separate signal channel from routine preferences:
+# it learns what KIND of OBSERVATION the slime made that landed (or
+# didn't), not what kind of routine the user accepts. We keep the two
+# logs separate so future detector / generator tweaks don't have to
+# discriminate by parsing one merged file.
+
+CARD_FEEDBACK_FILE = Path.home() / ".hermes" / "routines" / "card_feedback.jsonl"
+
+
+def record_card_feedback(
+    date_iso: str,
+    state: str,
+    note: str = "",
+    snapshot: dict | None = None,
+) -> None:
+    """Append a daily-card feedback signal.
+
+    `state` should be one of `accurate` / `partial` / `wrong`. We
+    don't validate too strictly — log everything, let downstream
+    consumers filter.
+
+    `snapshot` is an optional small dict of card content (e.g. truncated
+    observation/insight text + raw_metric tags) so a future generator
+    can tell "the user said WRONG when I commented on focus blocks"
+    not just "the user said WRONG on 2026-04-26".
+    """
+    payload = {
+        "at": time.time(),
+        "date": date_iso,
+        "state": state,
+        "note": str(note or "")[:300],
+        "snapshot": snapshot or {},
+    }
+    try:
+        _ensure_dir()
+        with open(CARD_FEEDBACK_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        log.info("card feedback recorded: %s on %s", state, date_iso)
+    except OSError as e:
+        log.warning("could not record card feedback: %s", e)
+
+
+def list_recent_card_feedback(limit: int = 30) -> list[dict]:
+    """Most recent card feedback entries, newest first. Used by the
+    next-iteration generator to avoid re-making the same kind of
+    observation the user already rejected."""
+    if not CARD_FEEDBACK_FILE.exists():
+        return []
+    out: list[dict] = []
+    try:
+        with open(CARD_FEEDBACK_FILE, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    out.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+    except OSError as e:
+        log.warning("could not read card feedback: %s", e)
+        return []
+    return list(reversed(out))[:limit]
