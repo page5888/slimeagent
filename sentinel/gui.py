@@ -675,25 +675,48 @@ class ChatTab(QWidget):
 # ─── Home Tab (首頁) ─────────────────────────────────────────────────────
 
 class HomeTab(QWidget):
-    """首頁：史萊姆狀態總覽 + 錢包連結。"""
+    """首頁：史萊姆每日反思卡（v0.7-alpha 主舞台）+ 狀態 + 錢包。
+
+    v0.7-alpha 把首頁整理成「先看卡、再看狀態」的順序：
+      1. DailyCardWidget — 史萊姆早晨的反思卡（核心 wedge）
+      2. 進化 / 觀察次數狀態列（縮成單行）
+      3. 錢包 / LLM 狀態（保留但低調，非首要焦點）
+    """
 
     def __init__(self):
         super().__init__()
+        from sentinel.ui import tokens as _tk
+
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(12)
-
-        # ── 歡迎區 ──
-        welcome = QLabel(
-            "<b style='font-size:20px; color:#00dcff;'>AI Slime Agent</b><br>"
-            "<span style='color:#aaa;'>你的轉生守護靈，正在觀察並學習中</span>"
+        layout.setContentsMargins(
+            _tk.SPACE["lg"], _tk.SPACE["lg"],
+            _tk.SPACE["lg"], _tk.SPACE["lg"],
         )
-        welcome.setAlignment(Qt.AlignCenter)
-        layout.addWidget(welcome)
+        layout.setSpacing(_tk.SPACE["md"])
 
-        # ── 狀態卡片 ──
+        # ── 史萊姆形象 (small avatar at top) ─────────────────────
+        # We render the slime widget here too so the morning ritual
+        # has a face attached to it — the card alone reads like a
+        # report; with the avatar above it the card reads like
+        # someone speaking.
+        from sentinel.slime_avatar import SlimeWidget
+        avatar_row = QHBoxLayout()
+        avatar_row.addStretch()
+        self.slime_widget = SlimeWidget()
+        self.slime_widget.setMinimumSize(140, 140)
+        self.slime_widget.setMaximumSize(180, 180)
+        avatar_row.addWidget(self.slime_widget)
+        avatar_row.addStretch()
+        layout.addLayout(avatar_row)
+
+        # ── 每日反思卡（核心 wedge） ──
+        from sentinel.reflection.widget import DailyCardWidget
+        self.daily_card = DailyCardWidget(self)
+        layout.addWidget(self.daily_card)
+
+        # ── 狀態小列（縮成 1 行） ──
         cards = QHBoxLayout()
-        cards.setSpacing(12)
+        cards.setSpacing(_tk.SPACE["sm"])
 
         self.evo_card = self._make_card("🧬 進化", "載入中...")
         cards.addWidget(self.evo_card["frame"])
@@ -701,6 +724,7 @@ class HomeTab(QWidget):
         self.obs_card = self._make_card("👁 觀察", "載入中...")
         cards.addWidget(self.obs_card["frame"])
 
+        # 裝備 tab 已凍結，但首頁仍顯示總數（"養"成果的一部分）
         self.equip_card = self._make_card("⚔ 裝備", "載入中...")
         cards.addWidget(self.equip_card["frame"])
 
@@ -781,8 +805,33 @@ class HomeTab(QWidget):
             evo = load_evolution()
             self.evo_card["value"].setText(f"{evo.title}")
             self.obs_card["value"].setText(f"{evo.total_observations:,}")
+            # Sync the home-tab avatar so its form matches current
+            # evolution. Same trait list / skill count it gets on
+            # the evolution tab.
+            try:
+                trait_names = [
+                    name for name, _ in sorted(
+                        evo.traits.items(),
+                        key=lambda kv: kv[1],
+                        reverse=True,
+                    )
+                ] if isinstance(getattr(evo, "traits", None), dict) else []
+                self.slime_widget.set_state(
+                    evo.form, evo.title, trait_names, len(getattr(evo, "skills", []) or []),
+                )
+            except Exception as e:
+                log.debug("home avatar set_state failed: %s", e)
         except Exception:
             pass
+
+        # Daily card may need to repaint if it just generated in a
+        # background thread mid-session, or if the user clicked
+        # feedback in another widget. refresh() is called every 30s
+        # by evo_timer, so this is the catch-all.
+        try:
+            self.daily_card.refresh()
+        except Exception as e:
+            log.debug("daily card refresh failed: %s", e)
 
         try:
             from sentinel.wallet.equipment import load_equipment
