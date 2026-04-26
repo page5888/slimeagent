@@ -152,6 +152,50 @@ CATALOG: dict[str, dict[str, Any]] = {
         "example": {"text": "提醒主人該休息囉"},
         "policy_note": "會從喇叭發出聲音；如果主人戴著耳機就只有主人聽到",
     },
+    "routine.create": {
+        "desc_zh": (
+            "把一組重複動作存成『常規』,等同意後排程自動執行。"
+            "可以是每天某時、每週某幾天、或每隔幾分鐘。"
+            "用在主人明確說「以後每天/每週/每隔 N 分鐘幫我 X」時。"
+        ),
+        "desc_en": (
+            "Save a recurring action sequence as a routine. "
+            "Triggers: daily_at HH:MM, weekly_at HH:MM days=[mon,...], "
+            "or interval every N minutes."
+        ),
+        "payload": {
+            "name": "string — 簡短中文名（如『早晨開發環境』）",
+            "trigger": "dict — {kind: daily_at|weekly_at|interval, time: HH:MM, days: [...], every_minutes: N}",
+            "steps": "list — 同 chain.run 的 steps 格式,最多 5 步",
+        },
+        "example": {
+            "name": "早晨打開專案",
+            "trigger": {"kind": "daily_at", "time": "09:00"},
+            "steps": [
+                {"action_type": "surface.open_path",
+                 "payload": {"path": "C:/Users/me/proj"},
+                 "title": "開專案"},
+            ],
+        },
+        "policy_note": (
+            "同意後 routine 會自動執行 — 不能含麥克風錄音或敏感檔操作。"
+            "想停用到「設定」分頁找該 routine 關掉。"
+        ),
+    },
+    "routine.disable": {
+        "desc_zh": "暫停一個既有的 routine（保留紀錄,可以再開）",
+        "desc_en": "Pause an existing routine (kept on disk, can be re-enabled)",
+        "payload": {"id": "string — routine 的 ID（rou_xxxxxx）"},
+        "example": {"id": "rou_a3f7b2c1"},
+        "policy_note": "不會刪除設定,只是停止觸發",
+    },
+    "routine.delete": {
+        "desc_zh": "永久刪除一個 routine",
+        "desc_en": "Permanently delete a routine",
+        "payload": {"id": "string — routine 的 ID"},
+        "example": {"id": "rou_a3f7b2c1"},
+        "policy_note": "刪了就找不回來,只想暫停請用 routine.disable",
+    },
     "chain.run": {
         "desc_zh": (
             "一次提案多個動作串起來跑（最多 5 步）。每一步都是上面其他的 action type，"
