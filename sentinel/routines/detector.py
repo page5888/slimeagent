@@ -302,16 +302,18 @@ def _validate_candidate(c: dict) -> Optional[dict]:
 # ── Public API ────────────────────────────────────────────────────
 
 
-def propose_via_detector() -> list[str]:
-    """Run the detector once. Returns the list of approval IDs created.
+def propose_via_detector_verbose() -> dict:
+    """Verbose variant: returns {queued_ids, diagnostic} so the GUI's
+    "立即偵測新常規" button can explain WHY a run produced 0 candidates.
+    Same code path as propose_via_detector — that wraps this one for
+    the legacy list-only return shape used by the daemon scheduler.
 
-    Each approval, when approved by the user, calls the
-    `routine.create` action handler which actually persists the
-    routine to disk and starts scheduling.
-
-    Failures (LLM down, no activity yet, parse errors) return an
-    empty list silently — the detector is best-effort and never
-    blocks the daemon.
+    Diagnostic strings are user-facing Chinese so the GUI can surface
+    them verbatim. Examples:
+      "history yet — keep using the slime for a few hours / days"
+      "history exists but no recurring patterns clear enough yet"
+      "candidates found but all dropped under 0.4 confidence"
+      "LLM unreachable / no API key configured"
     """
     from sentinel import config
     from sentinel.llm import call_llm
@@ -328,6 +330,20 @@ def propose_via_detector() -> list[str]:
     except Exception as e:
         log.warning(f"detector: couldn't load preferences: {e}")
         negative_signals = ""
+
+    # Pre-LLM diagnostic: if there's literally no activity log we can
+    # short-circuit + tell the user "give me time" instead of pinging
+    # the LLM with nothing useful in context.
+    if "(no activity data yet)" in activity or activity.strip() == "":
+        return {
+            "queued_ids": [],
+            "diagnostic": (
+                "還沒有任何觀察記錄可以分析。"
+                "讓 AI Slime 在背景運行幾個小時 / 天,"
+                "等蒸餾器整理過你的活動後再試。"
+            ),
+        }
+
     prompt = (DETECTOR_PROMPT_TEMPLATE
               .replace("<<ACTION_LIST>>", action_list)
               .replace("<<ACTIVITY_LOG>>", activity)
@@ -343,15 +359,46 @@ def propose_via_detector() -> list[str]:
     )
     if not text:
         log.info("detector: no LLM response")
-        return []
+        return {
+            "queued_ids": [],
+            "diagnostic": (
+                "LLM 沒有回應。檢查「魔法陣」分頁的 API key 或網路連線。"
+                "如果用本地 Ollama 也要確認服務啟著。"
+            ),
+        }
 
     raw_candidates = _parse_candidates(text)
     log.info(f"detector: LLM produced {len(raw_candidates)} raw candidates")
 
+    if not raw_candidates:
+        return {
+            "queued_ids": [],
+            "diagnostic": (
+                "LLM 看完你最近的活動 log,沒有看到固定到值得自動化的流程。"
+                "可能因為:活動還太散、習慣還在變、或被「之前不喜歡」的偏好擋掉了。"
+                "再用幾天累積。"
+            ),
+        }
+
     queued_ids: list[str] = []
+    dropped_low_conf = 0
+    dropped_bad_shape = 0
+    denied_count = 0
     for raw in raw_candidates:
         normalized = _validate_candidate(raw)
         if normalized is None:
+            # _validate_candidate returns None for both missing fields
+            # and below-confidence-threshold. We can't easily tell
+            # apart from here, so treat below-threshold as dominant
+            # (most common case) and bucket the rest as bad shape.
+            conf_raw = raw.get("confidence", 0) if isinstance(raw, dict) else 0
+            try:
+                if 0 <= float(conf_raw) < 0.4:
+                    dropped_low_conf += 1
+                else:
+                    dropped_bad_shape += 1
+            except (TypeError, ValueError):
+                dropped_bad_shape += 1
             continue
         try:
             approval = submit_action(
@@ -372,6 +419,7 @@ def propose_via_detector() -> list[str]:
             )
             queued_ids.append(approval.id)
         except PolicyDenied as e:
+            denied_count += 1
             log.info(
                 f"detector candidate denied at submit: "
                 f"{[f.get('msg') for f in e.findings]}"
@@ -380,4 +428,32 @@ def propose_via_detector() -> list[str]:
             log.warning(f"detector candidate submit failed: {e}")
 
     log.info(f"detector: queued {len(queued_ids)} routine proposals")
-    return queued_ids
+
+    diagnostic = ""
+    if not queued_ids:
+        # Build a reason from the buckets so the user knows what
+        # happened to the LLM's candidates.
+        parts = []
+        if dropped_low_conf:
+            parts.append(f"{dropped_low_conf} 個信心不夠 (<40%)")
+        if dropped_bad_shape:
+            parts.append(f"{dropped_bad_shape} 個格式不對")
+        if denied_count:
+            parts.append(f"{denied_count} 個政策擋掉")
+        if parts:
+            diagnostic = (
+                f"LLM 提了 {len(raw_candidates)} 個候選,"
+                f"但 {' / '.join(parts)}。再累積幾天讓信心提高。"
+            )
+        else:
+            diagnostic = "候選全部處理完畢但沒一個成功進佇列(罕見路徑)。"
+
+    return {"queued_ids": queued_ids, "diagnostic": diagnostic}
+
+
+def propose_via_detector() -> list[str]:
+    """Legacy list-of-IDs return shape used by scheduler. Wraps
+    propose_via_detector_verbose and discards the diagnostic string.
+    GUI callers (RoutinesTab) should use the verbose variant directly.
+    """
+    return propose_via_detector_verbose().get("queued_ids", [])
