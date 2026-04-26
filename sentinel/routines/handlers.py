@@ -170,6 +170,26 @@ def _policy_routine_create(payload: dict) -> tuple[bool, list[dict]]:
                 "msg": f"step {idx}: payload must be a dict",
             }]
 
+    # Phase H — optional judge_prompt. The LLM evaluates it against
+    # current context before each fire and can decide "skip with
+    # reason" instead of running blindly.
+    judge_prompt = (payload or {}).get("judge_prompt", "")
+    if judge_prompt is not None and judge_prompt != "":
+        if not isinstance(judge_prompt, str):
+            return False, [{
+                "level": "error",
+                "msg": "judge_prompt must be a string (or omit/empty for none)",
+            }]
+        if len(judge_prompt) > 600:
+            return False, [{
+                "level": "error",
+                "msg": f"judge_prompt too long ({len(judge_prompt)} chars; max 600)",
+            }]
+        findings.append({
+            "level": "info",
+            "msg": f"觸發前會問 LLM：「{judge_prompt[:120]}」",
+        })
+
     # Auto-proposed routines surface their evidence as a warning so
     # the user sees WHY the slime thought this was a routine before
     # approving. Manually-created routines (no auto_proposed flag)
@@ -225,11 +245,19 @@ def _exec_routine_create(payload: dict) -> dict:
         enabled=True,
         evidence=payload.get("evidence", ""),
     )
+    # judge_prompt isn't a constructor arg of create_routine since it's
+    # an optional Phase H extension; set it after if provided.
+    judge_prompt = (payload.get("judge_prompt") or "").strip()
+    if judge_prompt:
+        routine.judge_prompt = judge_prompt
+        from sentinel.routines.storage import _save
+        _save(routine)
     return {
         "ok": True,
         "routine_id": routine.id,
         "name": routine.name,
         "trigger_summary": _render_trigger_zh(routine.trigger),
+        "has_judge": bool(judge_prompt),
     }
 
 
