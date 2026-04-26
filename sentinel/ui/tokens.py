@@ -209,64 +209,77 @@ def card_with_accent(accent_color: str) -> str:
 # body so the caller doesn't have to care about layout.
 
 
+_USER_TINT = "rgba(95,215,232,0.14)"   # cyan
+_SLIME_TINT = "rgba(240,198,116,0.12)" # amber
+
+
 def bubble_user(html_body: str) -> str:
-    """Right-aligned cyan-tinted bubble for the user's messages."""
+    """Right-aligned cyan-tinted bubble for the user's messages.
+
+    Qt's QTextEdit rich-text engine doesn't honor `display:inline-block`
+    or `max-width:%`, so we use HTML 4 patterns that Qt actually
+    renders: a right-aligned `<table>` with a single cell. cellpadding
+    + background-color on the cell give us the bubble; the table's
+    align attribute handles right-alignment without needing CSS flex
+    or inline-block. width="60%" caps the bubble width — Qt honors
+    table-width percentages.
+    """
     return (
-        f'<div style="margin:8px 0; text-align:right;">'
-        f'  <div style="display:inline-block; max-width:80%; '
-        f'background:{PALETTE["bubble_user"]};'
+        f'<table align="right" width="65%" cellpadding="10" '
+        f'cellspacing="0" style="margin:6px 0;">'
+        f'<tr><td style="background-color:{_USER_TINT};'
         f' color:{PALETTE["text"]};'
-        f' padding:8px 12px;'
-        f' border-radius:{RADIUS["card"]}px;'
-        f' border:1px solid rgba(95,215,232,0.18);'
-        f' font-size:{FONT_SIZE["body"]}px;'
-        f' text-align:left;">'
-        f'    {html_body}'
-        f'  </div>'
-        f'</div>'
+        f' border-left:3px solid {PALETTE["cyan"]};'
+        f' font-size:{FONT_SIZE["body"]}px;">'
+        f'{html_body}'
+        f'</td></tr></table>'
+        # Trailing line break clears the float so the next message
+        # doesn't sit alongside this one (Qt's table flow inherits
+        # HTML 4 quirks).
+        f'<br clear="all">'
     )
 
 
 def bubble_slime(html_body: str) -> str:
     """Left-aligned amber-tinted bubble for the slime's messages."""
     return (
-        f'<div style="margin:8px 0;">'
-        f'  <div style="display:inline-block; max-width:80%; '
-        f'background:{PALETTE["bubble_slime"]};'
+        f'<table align="left" width="65%" cellpadding="10" '
+        f'cellspacing="0" style="margin:6px 0;">'
+        f'<tr><td style="background-color:{_SLIME_TINT};'
         f' color:{PALETTE["text"]};'
-        f' padding:8px 12px;'
-        f' border-radius:{RADIUS["card"]}px;'
-        f' border:1px solid rgba(240,198,116,0.18);'
+        f' border-left:3px solid {PALETTE["amber"]};'
         f' font-size:{FONT_SIZE["body"]}px;">'
-        f'    {html_body}'
-        f'  </div>'
-        f'</div>'
+        f'<b style="color:{PALETTE["amber"]};">史萊姆</b>　'
+        f'{html_body}'
+        f'</td></tr></table>'
+        f'<br clear="all">'
     )
 
 
 def bubble_system(html_body: str) -> str:
     """Centered subtle line for system / status events
-    (login, action queued, etc.)."""
+    (login, action queued, etc.). `<p align="center">` is the
+    Qt-supported way to center; CSS text-align on a div doesn't
+    propagate reliably through Qt's renderer.
+    """
     return (
-        f'<div style="margin:6px 0; text-align:center;">'
-        f'  <span style="color:{PALETTE["text_muted"]};'
+        f'<p align="center" style="margin:6px 0;">'
+        f'<span style="color:{PALETTE["text_muted"]};'
         f' font-size:{FONT_SIZE["meta"]}px;'
         f' font-style:italic;">'
-        f'    {html_body}'
-        f'  </span>'
-        f'</div>'
+        f'{html_body}'
+        f'</span></p>'
     )
 
 
 def bubble_note(html_body: str) -> str:
-    """Green-tinted note used for action results that arrived after
-    an inline approval (e.g. VLM analysis, list_windows output)."""
+    """Green-tinted action-result line. Indented but not in a bubble —
+    these are *outputs* of approved actions, not separate messages."""
     return (
-        f'<div style="margin:4px 0 4px 18px;">'
-        f'  <span style="color:{PALETTE["ok"]};'
+        f'<p style="margin:2px 0 2px 24px;">'
+        f'<span style="color:{PALETTE["ok"]};'
         f' font-size:{FONT_SIZE["meta"]}px;'
         f' font-style:italic;">'
-        f'    ↳ {html_body}'
-        f'  </span>'
-        f'</div>'
+        f'↳ {html_body}'
+        f'</span></p>'
     )
