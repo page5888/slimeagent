@@ -675,25 +675,55 @@ class ChatTab(QWidget):
 # ─── Home Tab (首頁) ─────────────────────────────────────────────────────
 
 class HomeTab(QWidget):
-    """首頁：史萊姆狀態總覽 + 錢包連結。"""
+    """首頁：史萊姆每日反思卡（v0.7-alpha 主舞台）+ 狀態 + 錢包。
+
+    v0.7-alpha 把首頁整理成「先看卡、再看狀態」的順序：
+      1. DailyCardWidget — 史萊姆早晨的反思卡（核心 wedge）
+      2. 進化 / 觀察次數狀態列（縮成單行）
+      3. 錢包 / LLM 狀態（保留但低調，非首要焦點）
+    """
 
     def __init__(self):
         super().__init__()
+        from sentinel.ui import tokens as _tk
+
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(12)
-
-        # ── 歡迎區 ──
-        welcome = QLabel(
-            "<b style='font-size:20px; color:#00dcff;'>AI Slime Agent</b><br>"
-            "<span style='color:#aaa;'>你的轉生守護靈，正在觀察並學習中</span>"
+        layout.setContentsMargins(
+            _tk.SPACE["lg"], _tk.SPACE["lg"],
+            _tk.SPACE["lg"], _tk.SPACE["lg"],
         )
-        welcome.setAlignment(Qt.AlignCenter)
-        layout.addWidget(welcome)
+        layout.setSpacing(_tk.SPACE["md"])
 
-        # ── 狀態卡片 ──
+        # ── 史萊姆形象 (small avatar at top) ─────────────────────
+        # We render the slime widget here too so the morning ritual
+        # has a face attached to it — the card alone reads like a
+        # report; with the avatar above it the card reads like
+        # someone speaking.
+        from sentinel.slime_avatar import SlimeWidget
+        avatar_row = QHBoxLayout()
+        avatar_row.addStretch()
+        self.slime_widget = SlimeWidget()
+        self.slime_widget.setMinimumSize(140, 140)
+        self.slime_widget.setMaximumSize(180, 180)
+        avatar_row.addWidget(self.slime_widget)
+        avatar_row.addStretch()
+        layout.addLayout(avatar_row)
+
+        # ── 每日反思卡（核心 wedge） ──
+        from sentinel.reflection.widget import DailyCardWidget, WeeklyCardWidget
+        self.daily_card = DailyCardWidget(self)
+        layout.addWidget(self.daily_card)
+
+        # ── 本週觀察（每週一早上才會出現） ──
+        # WeeklyCardWidget hides itself when there's nothing to show
+        # (no weekly card on disk, or the most recent one is > 7 days
+        # old) so on most days this widget takes 0 vertical space.
+        self.weekly_card = WeeklyCardWidget(self)
+        layout.addWidget(self.weekly_card)
+
+        # ── 狀態小列（縮成 1 行） ──
         cards = QHBoxLayout()
-        cards.setSpacing(12)
+        cards.setSpacing(_tk.SPACE["sm"])
 
         self.evo_card = self._make_card("🧬 進化", "載入中...")
         cards.addWidget(self.evo_card["frame"])
@@ -701,6 +731,7 @@ class HomeTab(QWidget):
         self.obs_card = self._make_card("👁 觀察", "載入中...")
         cards.addWidget(self.obs_card["frame"])
 
+        # 裝備 tab 已凍結，但首頁仍顯示總數（"養"成果的一部分）
         self.equip_card = self._make_card("⚔ 裝備", "載入中...")
         cards.addWidget(self.equip_card["frame"])
 
@@ -781,8 +812,38 @@ class HomeTab(QWidget):
             evo = load_evolution()
             self.evo_card["value"].setText(f"{evo.title}")
             self.obs_card["value"].setText(f"{evo.total_observations:,}")
+            # Sync the home-tab avatar so its form matches current
+            # evolution. Same trait list / skill count it gets on
+            # the evolution tab.
+            try:
+                trait_names = [
+                    name for name, _ in sorted(
+                        evo.traits.items(),
+                        key=lambda kv: kv[1],
+                        reverse=True,
+                    )
+                ] if isinstance(getattr(evo, "traits", None), dict) else []
+                self.slime_widget.set_state(
+                    evo.form, evo.title, trait_names, len(getattr(evo, "skills", []) or []),
+                )
+            except Exception as e:
+                log.debug("home avatar set_state failed: %s", e)
         except Exception:
             pass
+
+        # Daily card may need to repaint if it just generated in a
+        # background thread mid-session, or if the user clicked
+        # feedback in another widget. refresh() is called every 30s
+        # by evo_timer, so this is the catch-all.
+        try:
+            self.daily_card.refresh()
+        except Exception as e:
+            log.debug("daily card refresh failed: %s", e)
+
+        try:
+            self.weekly_card.refresh()
+        except Exception as e:
+            log.debug("weekly card refresh failed: %s", e)
 
         try:
             from sentinel.wallet.equipment import load_equipment
@@ -3916,7 +3977,14 @@ class SettingsTab(QWidget):
         theme_group = QGroupBox(t("settings_theme"))
         theme_layout = QHBoxLayout()
         self.theme_combo = QComboBox()
+        # v0.7-alpha lite: only surface 2 themes in the picker. The
+        # other 4 are still in THEMES (and saved settings still load
+        # them if previously chosen) — they're just hidden from new
+        # selections during dogfood. Restore by deleting this filter.
+        _LITE_THEMES = {"slime_blue", "predator_dark"}
         for tid, tname in list_themes():
+            if tid not in _LITE_THEMES:
+                continue
             self.theme_combo.addItem(tname, tid)
         # Set current
         current_theme = get_theme()
@@ -4081,7 +4149,23 @@ class SettingsTab(QWidget):
         form.addWidget(llm_label)
 
         self.provider_rows = []
+        # v0.7-alpha lite: only surface Gemini + Ollama as configurable
+        # in the UI. The other 6 providers (claude, openai, openrouter,
+        # groq, deepseek, deepinfra) keep working in config.LLM_PROVIDERS
+        # — saved settings + LLM call routing all still see them — they
+        # just don't get a row in the settings tab during dogfood, so
+        # the surface area is "set one of two keys, done".
+        _LITE_PROVIDERS = {"gemini", "ollama"}
         for provider in config.LLM_PROVIDERS:
+            pname = (provider.get("name") or "").lower()
+            if pname not in _LITE_PROVIDERS:
+                # Still keep the underlying config — just don't render
+                # a row. The provider list_loop in settings save (line
+                # ~4465) zips provider_rows with config.LLM_PROVIDERS,
+                # so we keep an invisible placeholder to preserve the
+                # alignment.
+                self.provider_rows.append(None)
+                continue
             row = ProviderRow(provider)
             self.provider_rows.append(row)
             form.addWidget(row)
@@ -4402,6 +4486,11 @@ class SettingsTab(QWidget):
 
         updated_providers = []
         for row, original in zip(self.provider_rows, config.LLM_PROVIDERS):
+            if row is None:
+                # v0.7 lite mode: this provider has no UI row. Keep
+                # whatever's already in config.LLM_PROVIDERS for it.
+                updated_providers.append(dict(original))
+                continue
             updated_providers.append(row.to_dict(original))
 
         # Parse chat_id defensively — empty string or non-numeric falls
@@ -6089,21 +6178,37 @@ class MainWindow(QMainWindow):
         # 裝備變更時刷新形象
         self.equipment_tab.equipment_changed.connect(self.evolution_tab.refresh)
 
+        # ── v0.7-alpha daily-mirror lite mode ─────────────────────
+        # We froze the wider feature surface to focus 2 weeks of
+        # dogfooding on one core wedge: a daily reflection card from
+        # the slime. The hidden tabs (equipment / memory / federation
+        # / market / approval) keep working behind the scenes — their
+        # code is intact, only the UI entry point is removed. Approval
+        # traffic still surfaces inline in the chat tab via Phase D2
+        # so any LLM-proposed action can still be reviewed without
+        # the dedicated tab.
+        #
+        # To restore any of these for development, just uncomment the
+        # corresponding addTab line. Index trackers
+        # (_federation_tab_index / _approval_tab_index) are set to -1
+        # so the existing change-handlers safely no-op.
         self.tabs.addTab(self.home_tab, t("tab_home"))
         self.tabs.addTab(self.evolution_tab, t("tab_evolution"))
-        self.tabs.addTab(self.equipment_tab, t("tab_equipment"))
+        # self.tabs.addTab(self.equipment_tab, t("tab_equipment"))   # frozen v0.7
         self.tabs.addTab(self.chat_tab, t("tab_chat"))
-        self.tabs.addTab(self.memory_tab, t("tab_memory"))
-        self._federation_tab_index = self.tabs.addTab(
-            self.federation_tab, t("tab_federation")
-        )
-        self.tabs.addTab(self.market_tab, t("tab_market"))
-        # Routines tab sits next to 待同意 — both are "stuff the
-        # slime is doing on your behalf, and you want to oversee".
+        # self.tabs.addTab(self.memory_tab, t("tab_memory"))         # frozen v0.7
+        # self._federation_tab_index = self.tabs.addTab(
+        #     self.federation_tab, t("tab_federation")                # frozen v0.7
+        # )
+        self._federation_tab_index = -1
+        # self.tabs.addTab(self.market_tab, t("tab_market"))         # frozen v0.7
         self._routines_tab_index = self.tabs.addTab(
             self.routines_tab, "📋 常規"
         )
-        self._approval_tab_index = self.tabs.addTab(self.approval_tab, t("tab_approval"))
+        # self._approval_tab_index = self.tabs.addTab(               # frozen v0.7
+        #     self.approval_tab, t("tab_approval")
+        # )
+        self._approval_tab_index = -1
         self.tabs.addTab(self.settings_tab, t("tab_settings"))
 
         # 待同意頁籤：切過去時主動刷新；動作後刷新 evolution + 標籤計數
@@ -6389,9 +6494,13 @@ class MainWindow(QMainWindow):
             self._refresh_approval_tab_label()
 
     def _refresh_approval_tab_label(self):
-        """在待同意頁籤標題後面顯示 pending 數量，像 `待同意 (3)`。"""
+        """在待同意頁籤標題後面顯示 pending 數量，像 `待同意 (3)`。
+
+        Returns early when the tab is frozen (index < 0 in v0.7-alpha
+        lite mode). Approval traffic still surfaces inline in chat.
+        """
         idx = getattr(self, "_approval_tab_index", None)
-        if idx is None:
+        if idx is None or idx < 0:
             return
         n = self.approval_tab.pending_count()
         base = t("tab_approval")
@@ -6450,7 +6559,7 @@ class MainWindow(QMainWindow):
         about candidates the user already saw and ignored.
         """
         idx = getattr(self, "_federation_tab_index", None)
-        if idx is None:
+        if idx is None or idx < 0:
             return
         base = t("tab_federation")
         try:
