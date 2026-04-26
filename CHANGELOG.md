@@ -4,6 +4,77 @@
 
 ---
 
+## [0.6.0] — 2026-04-26
+
+### Added — Autonomy 思想驗證閉環完成
+
+- **每週反思（Phase J）** — 史萊姆會回顧自己跑過的常規：哪些被你拒絕、哪些觸發太吵、哪些根本沒在動，自動產生「建議停用」「建議調整」清單。建議直接顯示在「📋 常規」tab 上方，不只藏在審核佇列裡。
+- **跨常規相依（Phase K）** — 一個常規完成後可觸發另一個。例如「git pull」成功 → 「跑測試」。形成 DAG。
+- **「📋 常規」管理 tab** — 瀏覽 / 立即觸發 / 停用 / 刪除常規，每張卡顯示 trigger、steps、judge、deps、執行統計。
+- **反應頭像** — `react(kind)` API 讓 SlimeWidget 對事件浮一個 emoji 兩秒（💭 chat 回覆、💡 提議行動）。
+- **聊天時間戳** — 訊息泡泡顯示 HH:MM。
+- **聊天 🧹 清空鈕** — 只清畫面不清記憶，搭配系統訊息「(對話畫面已清空，記憶仍保留)」。
+
+### Changed — Phase L 視覺包裝
+- **設計 tokens**（`sentinel/ui/tokens.py`）：palette / spacing / radius / 字級 / button + bubble + card 助手。
+- **全域 QSS 重寫**：pill 按鈕、細捲軸、底線式 tab bar、主題化 tooltip / dropdown / focus 狀態。
+- **對話泡泡**：因 Qt QTextEdit rich-text 不支援 `display:inline-block` / `max-width:%`，改用 HTML 4 `<table align width>` + `cellpadding` + 背景色於 `<td>`。
+- **Settings / Federation tab** token 遷移：硬編碼顏色換成 tokens，間距改用 `SPACE`。
+
+### Fixed
+- **detector 結構化原因**：`propose_via_detector_verbose` 回傳 `{queued_ids, diagnostic}`，UI 端可顯示「為什麼被擋」。
+- **fire-now 結果彈窗**：手動觸發後顯示成功 / 失敗摘要，不只默默執行。
+- **狀態列 tooltip**：完整細節改用 hover tooltip 顯示，常駐文字維持精簡。
+- **Tab 圖示一致化**：所有 tab 加上對應 emoji 前綴。
+
+---
+
+## [0.5.0] — 2026-04-22
+
+### Added — Phase B-D + F-I：行動 + 自主性
+- **長期語意記憶（Phase B2）** — sqlite-vec 向量檢索，史萊姆記得幾週前的脈絡。
+- **Source-keyed 脈絡匯流排（Phase B1）** — 觀察源獨立可訂閱。
+- **泛化審核佇列（Phase C1）** — 從只審 code 變成審任何 ACTION。
+- **平台抽象動作原語（Phase C2）** — `surface.open_path / open_url / focus_window`。
+- **DAG 工作流引擎（Phase C3）** — checkpoint / retry / resume。
+- **LLM 提議動作（Phase D1）** — `<action>{...}</action>` 文字協議，自動進審核。
+- **聊天 inline 同意卡片（Phase D2）** — 不用切到審核 tab 就能批准 / 拒絕。
+- **VLM 視覺理解（Phase D3）** — Gemini / OpenAI / Anthropic 多供應商支援。
+- **動作鏈（Phase D4，`chain.run`）** — 多步驟動作打包進一個審核。
+- **語音聽寫 / 朗讀（Phase D5）** — sounddevice + pyttsx3，主開關可關。
+
+### Added — Autonomy v1
+- **常規系統（Phase F）** — 史萊姆主動提議週期任務（cron + handlers + storage）。
+- **反應式觸發（Phase G）** — EventBus pub/sub，檔案變動也能觸發。
+- **LLM judge gate（Phase H）** — 觸發前審一次條件。
+- **從拒絕學習（Phase I）** — 偵測器看你拒絕過什麼，下次少提。
+
+### Fixed
+- LLM emit 純 JSON 沒包 `<action>` tag 也能解析。
+- LLM echo 提示範例（"主人:" / "Slime:" 對話格式）— 改成 `[輸入] / [正確回覆]` 標記 + 後處理裁切。
+- Stale auth token 錯誤回報「已登入」— relay 401 時清 token。
+- start.bat 啟動前先殺舊 sentinel python 進程。
+
+---
+
+## [0.4.0] — 2026-04-19
+
+### Added
+- **公頻投稿管線（Phase A1）** — 蒸餾出的模式抽象化後進本地待審佇列，你按「分享」才真的上傳。Server 端 PII 過濾、長度上限、每使用者 24h rate limit。
+- **公頻投票 / 分享獎勵（Phase A2）** — 投 5 票 40% 掉裝備，分享 pattern 成功 80% 掉裝備。tab 標題顯示候選數量 badge。
+- **「🏆 我的貢獻」對話框（Phase A3）** — 自己送出的 pattern 目前投票狀況、審議中 / 共識 / 退回狀態。
+- **可調蒸餾 / 截圖間隔** 設定。
+- **技能審核歷史** sub-tab。
+- **start.sh** macOS / Linux 啟動腳本。
+- **Creator reward ledger（Phase 1）** — 過渡存錄，等 5888 `s2sCreatorRewardSettle` 上線後一次補齊。
+
+### Fixed
+- **macOS SIGTRAP 崩潰** — pynput `keyboard.Listener` 在 macOS 內部用 ctypes 呼叫 `TSMGetInputSourceProperty` 要求主 dispatch queue 執行；背景緒呼叫導致 SIGTRAP。修法：macOS 上整段跳過 pynput。
+- **一鍵更新「分叉分支」報錯** — 改用 `git fetch + git reset --hard origin/main` 取代 `git pull`。
+- **進化變回初生史萊姆** — load 失敗備份成 `aislime_evolution.broken.<ts>.json` 不再悄悄覆蓋；schema drift 加白名單過濾。
+
+---
+
 ## [Unreleased]
 
 ### Added
@@ -139,6 +210,9 @@
 
 ---
 
+[0.6.0]: https://github.com/page5888/slimeagent/releases/tag/v0.6.0
+[0.5.0]: https://github.com/page5888/slimeagent/releases/tag/v0.5.0
+[0.4.0]: https://github.com/page5888/slimeagent/releases/tag/v0.4.0
 [0.3.0]: https://github.com/page5888/slimeagent/releases/tag/v0.3.0
 [0.2.0]: https://github.com/page5888/slimeagent/releases/tag/v0.2.0
 [0.1.0]: https://github.com/page5888/slimeagent/releases/tag/v0.1.0

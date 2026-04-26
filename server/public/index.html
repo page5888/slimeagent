@@ -412,6 +412,39 @@
           AI 不會在你背後偷跑任何程式。
         </div>
       </div>
+      <div class="feature-card">
+        <div class="feature-icon">📋</div>
+        <div class="feature-title">自主常規（v0.5）</div>
+        <div class="feature-desc">
+          史萊姆觀察一段時間後，會主動提議「每天 9 點檢查專案 git 狀態」這類常規。
+          你同意才會排程執行。LLM judge 在每次觸發前再審一次條件，不對的時候會跳過。
+        </div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🪞</div>
+        <div class="feature-title">每週反思（v0.6）</div>
+        <div class="feature-desc">
+          每週史萊姆會回顧自己跑過的常規 — 哪些被你拒絕、哪些觸發太吵、哪些根本沒在動，
+          自動產生「建議停用」「建議調整」清單給你看。
+        </div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🎬</div>
+        <div class="feature-title">反應頭像（v0.6）</div>
+        <div class="feature-desc">
+          史萊姆會對事件有微小反應 — 收到回覆冒 💭、提議行動冒 💡，
+          兩秒淡出。不打擾，但讓你知道它在動。
+        </div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🎤</div>
+        <div class="feature-title">語音 + 視覺（v0.5）</div>
+        <div class="feature-desc">
+          可選的語音聽寫／朗讀（sounddevice + pyttsx3）。
+          截圖視覺理解（VLM）讓史萊姆「看得見」你螢幕在做什麼，
+          全部都要你同意才會執行。
+        </div>
+      </div>
     </div>
 
     <!-- How it works -->
@@ -514,9 +547,57 @@
     <div class="updates">
       <div class="update-item">
         <div class="update-head">
+          <span class="update-version">v0.6.0</span>
+          <span class="update-date">2026-04-26</span>
+          <span class="update-tag">NEW</span>
+        </div>
+        <ul class="update-list">
+          <li><span class="update-cat">新增</span>每週反思 — 史萊姆檢視自己常規的成功率／拒絕率，產生建議清單</li>
+          <li><span class="update-cat">新增</span>跨常規相依（Phase K）— 一個常規完成後可觸發另一個</li>
+          <li><span class="update-cat">新增</span>「📋 常規」管理 tab — 瀏覽／立即觸發／停用／刪除</li>
+          <li><span class="update-cat">新增</span>反應頭像 — 史萊姆對聊天回覆 / 提議事件有視覺反應</li>
+          <li><span class="update-cat">新增</span>聊天時間戳 + 🧹 清空鈕（保留記憶）</li>
+          <li><span class="update-cat">改善</span>視覺包裝 — 設計 tokens、pill 按鈕、底線式 tab、細捲軸</li>
+          <li><span class="update-cat">改善</span>對話泡泡重寫適配 Qt rich-text 限制</li>
+        </ul>
+      </div>
+      <div class="update-item">
+        <div class="update-head">
+          <span class="update-version">v0.5.0</span>
+          <span class="update-date">2026-04-22</span>
+        </div>
+        <ul class="update-list">
+          <li><span class="update-cat">新增</span>自主常規系統（Phase F-I）— 史萊姆主動提議週期任務，你同意後排程執行</li>
+          <li><span class="update-cat">新增</span>反應式觸發（Phase G）— 不只 cron，檔案變動 / 事件也能觸發常規</li>
+          <li><span class="update-cat">新增</span>LLM judge（Phase H）— 觸發前再審一次條件，不對就跳過</li>
+          <li><span class="update-cat">新增</span>從拒絕中學習（Phase I）— 偵測器看你拒絕過什麼，下次少提</li>
+          <li><span class="update-cat">新增</span>視覺理解（Phase D3）— VLM 讀螢幕截圖，多供應商支援</li>
+          <li><span class="update-cat">新增</span>動作鏈（Phase D4）— 多步驟動作打包進一個審核</li>
+          <li><span class="update-cat">新增</span>語音聽寫／朗讀（Phase D5，可選）</li>
+          <li><span class="update-cat">新增</span>聊天 inline 同意卡片（Phase D2）— 不用切到審核 tab</li>
+          <li><span class="update-cat">新增</span>長期語意記憶（Phase B2，sqlite-vec）+ 工作流 DAG（Phase C3）</li>
+        </ul>
+      </div>
+      <div class="update-item">
+        <div class="update-head">
+          <span class="update-version">v0.4.0</span>
+          <span class="update-date">2026-04-19</span>
+        </div>
+        <ul class="update-list">
+          <li><span class="update-cat">新增</span>公頻投稿管線（Phase A1）— 蒸餾出的模式抽象化後進待審佇列，你按「分享」才上傳</li>
+          <li><span class="update-cat">新增</span>公頻投票／分享獎勵（Phase A2）— 投 5 票 40% 掉裝備，分享成功 80% 掉裝備</li>
+          <li><span class="update-cat">新增</span>「我的貢獻」對話框（Phase A3）— 看到自己送出過的 pattern 投票狀況</li>
+          <li><span class="update-cat">新增</span>可調整蒸餾／截圖頻率</li>
+          <li><span class="update-cat">新增</span>技能審核歷史 sub-tab</li>
+          <li><span class="update-cat">修正</span>macOS SIGTRAP 崩潰（pynput dispatch queue 問題）</li>
+          <li><span class="update-cat">修正</span>進化資料 schema drift 不再悄悄重置</li>
+          <li><span class="update-cat">修正</span>一鍵更新「分叉分支」報錯</li>
+        </ul>
+      </div>
+      <div class="update-item">
+        <div class="update-head">
           <span class="update-version">v0.3.0</span>
           <span class="update-date">2026-04-16</span>
-          <span class="update-tag">NEW</span>
         </div>
         <ul class="update-list">
           <li><span class="update-cat">新增</span>公頻系統 — 跨史萊姆分享觀察模式和技能</li>
@@ -638,7 +719,7 @@
         <a href="https://github.com/page5888/slimeagent/issues">回報問題</a>
       </div>
       <div class="footer-meta">
-        AI Slime Agent v0.3.0 · Powered by 5888 Ecosystem · MIT License
+        AI Slime Agent v0.6.0 · Powered by 5888 Ecosystem · MIT License
       </div>
     </footer>
   </div>
