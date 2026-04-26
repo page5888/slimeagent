@@ -5322,6 +5322,441 @@ class SetupWizard(QWidget):
         self.close()
 
 
+# ─── Routines Tab (常規) ─────────────────────────────────────────────
+#
+# Phases F-K built the routine system (auto-detection, judge gates,
+# reactive triggers, dependencies, reflection, learning-from-rejection)
+# but with no GUI — routines lived only as ~/.hermes/routines/*.json
+# files. This tab makes the system visible:
+#
+#   - Lists every routine with its current status, trigger, steps,
+#     and audit (last fire result, hit rate, judge skip rate)
+#   - Per-routine actions: fire-now / disable / delete (last two go
+#     through the approval queue like any other side-effect change)
+#   - "Run detector now" button to manually trigger pattern
+#     detection (otherwise it runs once per 24h)
+#   - Top-of-tab summary (total routines / fires / suggestions from
+#     reflection pass)
+
+
+class RoutinesTab(QWidget):
+    """The 「常規」 tab — visible management of the auto-running
+    routines the slime has accumulated."""
+
+    def __init__(self, bridge: SignalBridge):
+        super().__init__()
+        self.bridge = bridge
+        from sentinel.ui import tokens as _tk
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(
+            _tk.SPACE["lg"], _tk.SPACE["lg"],
+            _tk.SPACE["lg"], _tk.SPACE["md"],
+        )
+        layout.setSpacing(_tk.SPACE["md"])
+
+        # Header — title + "this is what your slime is doing on its own".
+        title = QLabel(
+            f'<span style="{_tk.text_title()}">📋 常規</span>'
+            f'  <span style="{_tk.text_meta()}">'
+            f'史萊姆替你自動執行的事</span>'
+        )
+        title.setStyleSheet(f"font-size:{_tk.FONT_SIZE['title']}px;")
+        layout.addWidget(title)
+
+        # Summary line — fills in on refresh.
+        self.summary_lbl = QLabel("")
+        self.summary_lbl.setStyleSheet(_tk.text_body())
+        self.summary_lbl.setWordWrap(True)
+        layout.addWidget(self.summary_lbl)
+
+        # Scrollable card list.
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.NoFrame)
+        self.list_container = QWidget()
+        self.list_layout = QVBoxLayout(self.list_container)
+        self.list_layout.setContentsMargins(0, 0, 0, 0)
+        self.list_layout.setSpacing(_tk.SPACE["md"])
+        self.list_layout.addStretch()
+        self.scroll.setWidget(self.list_container)
+        layout.addWidget(self.scroll, stretch=1)
+
+        # Action row at the bottom.
+        btn_row = QHBoxLayout()
+        btn_row.setContentsMargins(0, _tk.SPACE["sm"], 0, 0)
+
+        self.detect_btn = QPushButton("🔍 立即偵測新常規")
+        self.detect_btn.setCursor(Qt.PointingHandCursor)
+        self.detect_btn.setStyleSheet(_tk.btn_secondary())
+        self.detect_btn.clicked.connect(self._run_detector_now)
+        btn_row.addWidget(self.detect_btn)
+
+        btn_row.addStretch()
+
+        self.refresh_btn = QPushButton("🔄 重新整理")
+        self.refresh_btn.setCursor(Qt.PointingHandCursor)
+        self.refresh_btn.setStyleSheet(_tk.btn_primary())
+        self.refresh_btn.clicked.connect(self.refresh)
+        btn_row.addWidget(self.refresh_btn)
+
+        layout.addLayout(btn_row)
+
+        self.refresh()
+
+    # ── Data refresh ──────────────────────────────────────────────
+
+    def refresh(self):
+        """Re-render the summary + card list from disk state."""
+        from sentinel.routines import list_routines, reflect
+
+        # Clear cards
+        while self.list_layout.count() > 1:
+            item = self.list_layout.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+
+        try:
+            routines = list_routines()
+        except Exception as e:
+            log.warning(f"routines tab: list_routines failed: {e}")
+            routines = []
+
+        # Summary line — "you have 3 active, 1 disabled, 12 fires total"
+        try:
+            report = reflect()
+        except Exception:
+            report = None
+
+        if not routines:
+            self.summary_lbl.setText(
+                "你還沒有任何常規。可以等史萊姆觀察一陣子,"
+                "或在聊天裡叫他「以後每天 9 點幫我 X」。"
+            )
+            empty = QLabel(
+                "（建議至少用兩三天累積觀察,讓偵測器看出你的固定行為。"
+                "或按下方「立即偵測新常規」現在就跑一次。）"
+            )
+            empty.setStyleSheet(_tk.text_meta())
+            empty.setWordWrap(True)
+            empty.setAlignment(Qt.AlignCenter)
+            self.list_layout.insertWidget(self.list_layout.count() - 1, empty)
+            return
+
+        active = [r for r in routines if r.enabled]
+        paused = [r for r in routines if not r.enabled]
+        total_fires = sum(r.fire_count for r in routines)
+        suggestion_n = len(report.suggestions) if report else 0
+        sugg_str = (
+            f" · 反思建議 {suggestion_n} 條" if suggestion_n else ""
+        )
+        self.summary_lbl.setText(
+            f"啟用 {len(active)} 個 · 停用 {len(paused)} 個 · "
+            f"累計觸發 {total_fires} 次{sugg_str}"
+        )
+
+        # Render cards — active first, then paused.
+        for r in active:
+            card = self._build_card(r, faded=False, report=report)
+            self.list_layout.insertWidget(self.list_layout.count() - 1, card)
+        if paused:
+            divider = QLabel("已停用")
+            divider.setStyleSheet(_tk.text_meta())
+            divider.setContentsMargins(0, 8, 0, 0)
+            self.list_layout.insertWidget(self.list_layout.count() - 1, divider)
+            for r in paused:
+                card = self._build_card(r, faded=True, report=report)
+                self.list_layout.insertWidget(self.list_layout.count() - 1, card)
+
+    # ── Card builder ──────────────────────────────────────────────
+
+    def _build_card(self, routine, *, faded: bool, report) -> QWidget:
+        """One routine = one card. faded=True for disabled routines."""
+        from sentinel.ui import tokens as _tk
+        from sentinel.routines.handlers import _render_trigger_zh
+
+        accent = _tk.PALETTE["text_muted"] if faded else _tk.PALETTE["amber"]
+        card = QFrame()
+        card.setStyleSheet(_tk.card_with_accent(accent))
+        v = QVBoxLayout(card)
+        v.setContentsMargins(14, 10, 12, 12)
+        v.setSpacing(_tk.SPACE["xs"])
+
+        # Title row: name + (id) on left, status pill on right.
+        top = QHBoxLayout()
+        title_lbl = QLabel(
+            f"<b style='color:{_tk.PALETTE['text']};'>{routine.name}</b>"
+            f" <span style='{_tk.text_meta()}'>{routine.id}</span>"
+        )
+        title_lbl.setStyleSheet(f"font-size:{_tk.FONT_SIZE['body']}px;")
+        top.addWidget(title_lbl, stretch=1)
+
+        status_text = "停用" if not routine.enabled else "啟用中"
+        status_color = (
+            _tk.PALETTE["text_muted"] if not routine.enabled
+            else _tk.PALETTE["ok"]
+        )
+        status_lbl = QLabel(
+            f"<span style='color:{status_color}; "
+            f"font-size:{_tk.FONT_SIZE['meta']}px;'>● {status_text}</span>"
+        )
+        top.addWidget(status_lbl)
+        v.addLayout(top)
+
+        # Trigger description
+        trig_lbl = QLabel(
+            f"<span style='{_tk.text_meta()}'>觸發：</span>"
+            f"<span style='{_tk.text_body()}'>"
+            f"{_render_trigger_zh(routine.trigger)}</span>"
+        )
+        trig_lbl.setStyleSheet(f"font-size:{_tk.FONT_SIZE['meta']}px;")
+        trig_lbl.setWordWrap(True)
+        v.addWidget(trig_lbl)
+
+        # Steps
+        steps_text = " → ".join(
+            (s.get("title") or s.get("action_type", "?"))
+            for s in (routine.steps or []) if isinstance(s, dict)
+        )
+        if steps_text:
+            steps_lbl = QLabel(
+                f"<span style='{_tk.text_meta()}'>步驟：</span>"
+                f"<span style='{_tk.text_body()}'>{steps_text}</span>"
+            )
+            steps_lbl.setStyleSheet(f"font-size:{_tk.FONT_SIZE['meta']}px;")
+            steps_lbl.setWordWrap(True)
+            v.addWidget(steps_lbl)
+
+        # Judge prompt (Phase H) — only show if set.
+        if (routine.judge_prompt or "").strip():
+            jp_lbl = QLabel(
+                f"<span style='{_tk.text_meta()}'>判斷規則：</span>"
+                f"<span style='color:{_tk.PALETTE['cyan']};"
+                f" font-size:{_tk.FONT_SIZE['meta']}px;'>"
+                f"{routine.judge_prompt[:120]}</span>"
+            )
+            jp_lbl.setWordWrap(True)
+            v.addWidget(jp_lbl)
+
+        # Dependencies (Phase K)
+        if routine.depends_on:
+            dep_lbl = QLabel(
+                f"<span style='{_tk.text_meta()}'>依賴：</span>"
+                f"<span style='{_tk.text_body()}'>"
+                f"{', '.join(routine.depends_on)} "
+                f"({routine.depends_on_window_minutes} 分鐘窗口)</span>"
+            )
+            dep_lbl.setStyleSheet(f"font-size:{_tk.FONT_SIZE['meta']}px;")
+            v.addWidget(dep_lbl)
+
+        # Stats / last-fire summary from reflection report
+        stats = None
+        if report is not None:
+            for s in report.routine_stats:
+                if s.routine_id == routine.id:
+                    stats = s
+                    break
+        if stats and stats.total_fires > 0:
+            from datetime import datetime
+            last_str = "—"
+            if routine.last_fired_at:
+                dt = datetime.fromtimestamp(routine.last_fired_at)
+                last_str = dt.strftime("%m/%d %H:%M")
+            stats_text = (
+                f"觸發 {stats.total_fires} 次  ·  "
+                f"成功 {stats.success_count}  ·  "
+                f"判斷略過 {stats.skipped_by_judge_count}  ·  "
+                f"失敗 {stats.fail_count}  ·  "
+                f"上次 {last_str}"
+            )
+            stats_lbl = QLabel(stats_text)
+            stats_lbl.setStyleSheet(_tk.text_meta())
+            stats_lbl.setWordWrap(True)
+            v.addWidget(stats_lbl)
+        elif routine.fire_count == 0:
+            never_lbl = QLabel("尚未觸發過")
+            never_lbl.setStyleSheet(_tk.text_meta())
+            v.addWidget(never_lbl)
+
+        # Action buttons row
+        btn_row = QHBoxLayout()
+        btn_row.setContentsMargins(0, 6, 0, 0)
+        btn_row.setSpacing(_tk.SPACE["xs"])
+
+        if routine.enabled:
+            fire_btn = QPushButton("立即執行")
+            fire_btn.setCursor(Qt.PointingHandCursor)
+            fire_btn.setStyleSheet(_tk.btn_ghost())
+            fire_btn.clicked.connect(
+                lambda _checked, rid=routine.id: self._fire_now(rid)
+            )
+            btn_row.addWidget(fire_btn)
+
+        toggle_label = "啟用" if not routine.enabled else "停用"
+        toggle_btn = QPushButton(toggle_label)
+        toggle_btn.setCursor(Qt.PointingHandCursor)
+        toggle_btn.setStyleSheet(_tk.btn_ghost())
+        toggle_btn.clicked.connect(
+            lambda _checked, rid=routine.id, en=routine.enabled:
+                self._toggle_routine(rid, currently_enabled=en)
+        )
+        btn_row.addWidget(toggle_btn)
+
+        delete_btn = QPushButton("刪除")
+        delete_btn.setCursor(Qt.PointingHandCursor)
+        delete_btn.setStyleSheet(
+            f"QPushButton {{"
+            f" background:transparent;"
+            f" color:{_tk.PALETTE['danger']};"
+            f" padding:5px 12px;"
+            f" border:1px solid {_tk.PALETTE['border']};"
+            f" border-radius:{_tk.RADIUS['pill']}px;"
+            f" font-size:{_tk.FONT_SIZE['meta']}px; }}"
+            f"QPushButton:hover {{"
+            f" border-color:{_tk.PALETTE['danger']}; }}"
+        )
+        delete_btn.clicked.connect(
+            lambda _checked, rid=routine.id: self._delete_routine(rid)
+        )
+        btn_row.addWidget(delete_btn)
+
+        btn_row.addStretch()
+        v.addLayout(btn_row)
+        return card
+
+    # ── Action handlers ───────────────────────────────────────────
+
+    def _fire_now(self, routine_id: str) -> None:
+        """Run a routine immediately, off the UI thread (steps may
+        block — Win32 / subprocess / network)."""
+        from sentinel.routines import get_routine, fire_routine
+
+        def _do():
+            r = get_routine(routine_id)
+            if r is None:
+                return
+            try:
+                result = fire_routine(r)
+            except Exception as e:
+                log.warning(f"manual fire {routine_id} raised: {e}")
+                result = {"ok": False, "error": str(e)}
+            # Marshal UI update back to Qt thread
+            QTimer.singleShot(0, self.refresh)
+            QTimer.singleShot(
+                0, lambda: self.bridge.status_update.emit(
+                    f"○ 常規「{r.name}」已執行：{'成功' if result.get('ok') else result.get('reason') or result.get('error') or '失敗'}"
+                ),
+            )
+        threading.Thread(target=_do, daemon=True).start()
+
+    def _toggle_routine(self, routine_id: str, currently_enabled: bool) -> None:
+        """Enable/disable goes through the approval queue — same path
+        as any other state-changing action."""
+        from sentinel.growth import submit_action, PolicyDenied
+        action_type = "routine.disable" if currently_enabled else "routine.create"
+        # Note: enable doesn't have its own action — disabling and
+        # re-enabling uses storage.enable_routine directly. To keep
+        # the audit story consistent we use storage helper for the
+        # enable case (a previously-disabled routine doesn't need
+        # re-approval to flip on; the ORIGINAL approval still holds).
+        if not currently_enabled:
+            # Direct re-enable (no new approval — original consent persists)
+            from sentinel.routines import enable_routine
+            enable_routine(routine_id)
+            self.refresh()
+            return
+        # Disable: queue an approval (so the audit log records who
+        # turned it off and triggers the preferences signal).
+        try:
+            submit_action(
+                action_type="routine.disable",
+                title=f"停用常規 {routine_id}",
+                reason="從常規管理頁停用",
+                payload={"id": routine_id, "reason": "manual disable"},
+            )
+            QMessageBox.information(
+                self, "AI Slime",
+                "已建立停用提案,到「待同意」分頁批准後才會真的停用。",
+            )
+        except PolicyDenied as e:
+            QMessageBox.warning(
+                self, "AI Slime",
+                "; ".join(f.get("msg", "") for f in e.findings),
+            )
+        except Exception as e:
+            QMessageBox.warning(self, "AI Slime", f"提案失敗：{e}")
+
+    def _delete_routine(self, routine_id: str) -> None:
+        """Delete via approval queue. Confirmation dialog first since
+        delete is permanent."""
+        reply = QMessageBox.question(
+            self, "AI Slime",
+            "確定要刪除這個 routine 嗎？\n"
+            "刪除後無法復原。如果只是想暫時停用,請用「停用」按鈕。",
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        from sentinel.growth import submit_action, PolicyDenied
+        try:
+            submit_action(
+                action_type="routine.delete",
+                title=f"刪除常規 {routine_id}",
+                reason="從常規管理頁刪除",
+                payload={"id": routine_id, "reason": "manual delete"},
+            )
+            QMessageBox.information(
+                self, "AI Slime",
+                "已建立刪除提案,到「待同意」分頁批准後才會真的刪除。",
+            )
+        except PolicyDenied as e:
+            QMessageBox.warning(
+                self, "AI Slime",
+                "; ".join(f.get("msg", "") for f in e.findings),
+            )
+        except Exception as e:
+            QMessageBox.warning(self, "AI Slime", f"提案失敗：{e}")
+
+    def _run_detector_now(self) -> None:
+        """Manually invoke the routine detector. Runs off the UI thread
+        because it makes an LLM call and reads activity logs."""
+        self.detect_btn.setEnabled(False)
+        self.detect_btn.setText("偵測中…")
+
+        def _do():
+            try:
+                from sentinel.routines import propose_via_detector
+                queued = propose_via_detector()
+            except Exception as e:
+                log.warning(f"manual detector run failed: {e}")
+                queued = []
+
+            def _ui():
+                self.detect_btn.setEnabled(True)
+                self.detect_btn.setText("🔍 立即偵測新常規")
+                if queued:
+                    QMessageBox.information(
+                        self, "AI Slime",
+                        f"提案了 {len(queued)} 個新常規。"
+                        f"到「待同意」分頁查看 + 同意。",
+                    )
+                else:
+                    QMessageBox.information(
+                        self, "AI Slime",
+                        "目前沒有看到值得自動化的固定流程。\n"
+                        "可能還沒累積夠多觀察,或最近的活動沒有重複模式。\n"
+                        "再用幾天看看。",
+                    )
+                self.refresh()
+            QTimer.singleShot(0, _ui)
+        threading.Thread(target=_do, daemon=True).start()
+
+    def retranslate(self):
+        # Tab is mostly already in zh-TW; minimal i18n for now.
+        self.refresh()
+
+
 # ─── Main Window ─────────────────────────────────────────────────────────
 
 class MainWindow(QMainWindow):
@@ -5384,6 +5819,11 @@ class MainWindow(QMainWindow):
         self.equipment_tab = EquipmentTab()
         self.market_tab = MarketTab()
         self.approval_tab = ApprovalTab()
+        # Phase F-K's routine system was invisible without a GUI —
+        # this tab makes auto-detected / approved / fired routines
+        # surveyable + actionable from the GUI instead of from
+        # ~/.hermes/routines/*.json.
+        self.routines_tab = RoutinesTab(self.bridge)
         self.settings_tab = SettingsTab()
 
         # 裝備變更時刷新形象
@@ -5398,13 +5838,21 @@ class MainWindow(QMainWindow):
             self.federation_tab, t("tab_federation")
         )
         self.tabs.addTab(self.market_tab, t("tab_market"))
+        # Routines tab sits next to 待同意 — both are "stuff the
+        # slime is doing on your behalf, and you want to oversee".
+        self._routines_tab_index = self.tabs.addTab(
+            self.routines_tab, "📋 常規"
+        )
         self._approval_tab_index = self.tabs.addTab(self.approval_tab, t("tab_approval"))
         self.tabs.addTab(self.settings_tab, t("tab_settings"))
 
         # 待同意頁籤：切過去時主動刷新；動作後刷新 evolution + 標籤計數
         # 公頻頁籤：切過去時清除「新訊息」badge
+        # 常規頁籤：切過去時刷新（背景 scheduler 可能跑過 routine,
+        #          fire_count 已更新但 GUI 不知道）
         self.tabs.currentChanged.connect(self._on_approval_tab_changed)
         self.tabs.currentChanged.connect(self._on_federation_tab_changed)
+        self.tabs.currentChanged.connect(self._on_routines_tab_changed)
         self.approval_tab.proposals_changed.connect(self.evolution_tab.refresh)
         self.approval_tab.proposals_changed.connect(self._refresh_approval_tab_label)
 
@@ -5695,6 +6143,23 @@ class MainWindow(QMainWindow):
             self.federation_tab._rebuild_pending()
         except Exception:
             pass
+
+    def _on_routines_tab_changed(self, index: int):
+        """Refresh routine cards when the user opens the tab.
+
+        Background schedulers fire routines / update fire_count
+        without notifying the GUI. Refreshing on tab-click is the
+        cheapest way to keep cards accurate without polling
+        constantly. Cost is one disk read of ~/.hermes/routines/*.json
+        plus one reflection pass — both fast, both already cached.
+        """
+        idx = getattr(self, "_routines_tab_index", None)
+        if idx is None or index != idx:
+            return
+        try:
+            self.routines_tab.refresh()
+        except Exception as e:
+            log.warning(f"routines tab refresh on switch failed: {e}")
 
     def _refresh_federation_tab_label(self):
         """在公頻頁籤標題後面顯示待分享候選數量，像 `🌍 公頻 (2)`。
