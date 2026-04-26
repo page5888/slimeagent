@@ -5456,7 +5456,19 @@ class RoutinesTab(QWidget):
             f"累計觸發 {total_fires} 次{sugg_str}"
         )
 
-        # Render cards — active first, then paused.
+        # Reflection suggestions panel (Phase J surfaced inline).
+        # Used to live only behind 待同意 + the format_summary chat
+        # output. Now it sits at the top of the routines tab so the
+        # user sees what the slime has noticed about its own
+        # performance without a tab switch.
+        if report and report.suggestions:
+            for sug in report.suggestions[:5]:
+                card = self._build_suggestion_card(sug)
+                self.list_layout.insertWidget(
+                    self.list_layout.count() - 1, card
+                )
+
+        # Render routine cards — active first, then paused.
         for r in active:
             card = self._build_card(r, faded=False, report=report)
             self.list_layout.insertWidget(self.list_layout.count() - 1, card)
@@ -5624,6 +5636,147 @@ class RoutinesTab(QWidget):
         btn_row.addStretch()
         v.addLayout(btn_row)
         return card
+
+    # ── Suggestion card builder (Phase J surfaced inline) ─────────
+
+    def _build_suggestion_card(self, sug: dict) -> QWidget:
+        """Render one reflection suggestion as a card.
+
+        Suggestion kinds (set in routines/reflection.py):
+          disable_stale     — routine hasn't fired in 30+ days,
+                              recommend stopping it. Action: queue
+                              routine.disable approval.
+          review_skip_rate  — judge keeps declining. Advisory only;
+                              fix is contextual (loosen judge or
+                              narrow trigger), not a one-button fix.
+          review_fail_rate  — steps keep erroring. Advisory; user
+                              should investigate path / handler /
+                              network. Action: queue disable so the
+                              routine doesn't keep failing.
+          detector_noisy    — system-level: too many proposals
+                              rejected. Advisory; encourages user
+                              to rethink scope.
+        """
+        from sentinel.ui import tokens as _tk
+
+        kind = sug.get("kind", "")
+        kind_meta = {
+            "disable_stale":    ("💤", _tk.PALETTE["text_muted"]),
+            "review_skip_rate": ("⚙",  _tk.PALETTE["amber"]),
+            "review_fail_rate": ("⚠",  _tk.PALETTE["danger"]),
+            "detector_noisy":   ("📊", _tk.PALETTE["cyan"]),
+        }
+        icon, accent = kind_meta.get(kind, ("💡", _tk.PALETTE["cyan"]))
+
+        card = QFrame()
+        card.setStyleSheet(_tk.card_with_accent(accent))
+        v = QVBoxLayout(card)
+        v.setContentsMargins(14, 8, 12, 10)
+        v.setSpacing(_tk.SPACE["xs"])
+
+        title_lbl = QLabel(
+            f"<span style='font-size:13px;'>{icon}</span>"
+            f"  <span style='color:{_tk.PALETTE['text']};"
+            f" font-weight:600;'>{sug.get('title', '(untitled)')}</span>"
+            f"  <span style='{_tk.text_meta()}'>"
+            f"  · 來自史萊姆每週反思</span>"
+        )
+        title_lbl.setStyleSheet(f"font-size:{_tk.FONT_SIZE['body']}px;")
+        title_lbl.setWordWrap(True)
+        v.addWidget(title_lbl)
+
+        detail = sug.get("detail", "")
+        if detail:
+            detail_lbl = QLabel(detail)
+            detail_lbl.setStyleSheet(_tk.text_meta())
+            detail_lbl.setWordWrap(True)
+            v.addWidget(detail_lbl)
+
+        # Actions row — depends on suggestion kind.
+        btn_row = QHBoxLayout()
+        btn_row.setContentsMargins(0, 4, 0, 0)
+        btn_row.setSpacing(_tk.SPACE["xs"])
+
+        rid = sug.get("routine_id")
+
+        if kind == "disable_stale" and rid:
+            disable_btn = QPushButton("好,停用它")
+            disable_btn.setCursor(Qt.PointingHandCursor)
+            disable_btn.setStyleSheet(_tk.btn_secondary())
+            disable_btn.clicked.connect(
+                lambda _checked, r=rid: self._suggest_disable(r)
+            )
+            btn_row.addWidget(disable_btn)
+
+            keep_btn = QPushButton("先留著")
+            keep_btn.setCursor(Qt.PointingHandCursor)
+            keep_btn.setStyleSheet(_tk.btn_ghost())
+            keep_btn.clicked.connect(self._dismiss_suggestion)
+            btn_row.addWidget(keep_btn)
+
+        elif kind == "review_fail_rate" and rid:
+            disable_btn = QPushButton("停用直到修好")
+            disable_btn.setCursor(Qt.PointingHandCursor)
+            disable_btn.setStyleSheet(_tk.btn_secondary())
+            disable_btn.clicked.connect(
+                lambda _checked, r=rid: self._suggest_disable(r)
+            )
+            btn_row.addWidget(disable_btn)
+
+            keep_btn = QPushButton("我自己看")
+            keep_btn.setCursor(Qt.PointingHandCursor)
+            keep_btn.setStyleSheet(_tk.btn_ghost())
+            keep_btn.clicked.connect(self._dismiss_suggestion)
+            btn_row.addWidget(keep_btn)
+
+        else:
+            # review_skip_rate / detector_noisy: advisory only.
+            ack_btn = QPushButton("知道了")
+            ack_btn.setCursor(Qt.PointingHandCursor)
+            ack_btn.setStyleSheet(_tk.btn_ghost())
+            ack_btn.clicked.connect(self._dismiss_suggestion)
+            btn_row.addWidget(ack_btn)
+
+        btn_row.addStretch()
+        v.addLayout(btn_row)
+        return card
+
+    def _suggest_disable(self, routine_id: str) -> None:
+        """Queue a routine.disable approval for a reflection-suggested
+        routine. Same path as the regular Disable button on the
+        routine card — keeps the audit trail + Phase I learning
+        signal consistent."""
+        from sentinel.growth import submit_action, PolicyDenied
+        try:
+            submit_action(
+                action_type="routine.disable",
+                title=f"反思建議停用 {routine_id}",
+                reason="由史萊姆每週反思建議停用",
+                payload={"id": routine_id, "reason": "reflection-suggested"},
+            )
+            QMessageBox.information(
+                self, "AI Slime",
+                "已建立停用提案,到「⏳ 待同意」分頁批准後生效。",
+            )
+            self.refresh()
+        except PolicyDenied as e:
+            QMessageBox.warning(
+                self, "AI Slime",
+                "; ".join(f.get("msg", "") for f in e.findings),
+            )
+        except Exception as e:
+            QMessageBox.warning(self, "AI Slime", f"提案失敗：{e}")
+
+    def _dismiss_suggestion(self) -> None:
+        """User dismissed an advisory suggestion ("先留著" / "知道了" /
+        "我自己看"). Currently just refreshes — full "remember I
+        dismissed this" tracking would need a separate dismissed-
+        suggestions log. For first cut, dismissal is implicit: the
+        next reflection pass (weekly) will re-evaluate from scratch,
+        and if the issue is gone the suggestion won't re-appear; if
+        still there, the user sees it again — fair behavior."""
+        # No-op refresh. Keeps the click feedback responsive.
+        pass
 
     # ── Action handlers ───────────────────────────────────────────
 
