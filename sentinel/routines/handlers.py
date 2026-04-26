@@ -262,13 +262,46 @@ def _exec_routine_create(payload: dict) -> dict:
 
 
 def _exec_routine_disable(payload: dict) -> dict:
+    """Disable + record a 'disabled_active' preference signal so the
+    detector learns this kind of routine annoyed the user enough to
+    pause. The signal is captured BEFORE the disable so we have the
+    routine's full state to summarize."""
     rid = payload["id"]
+    routine = _store.get_routine(rid)
+    if routine is not None:
+        try:
+            from sentinel.routines.preferences import (
+                record, _summary_from_routine, SIGNAL_DISABLED,
+            )
+            record(
+                signal=SIGNAL_DISABLED,
+                summary=_summary_from_routine(routine),
+                reason=str(payload.get("reason", "")),
+            )
+        except Exception as e:
+            log.warning(f"preference disable hook failed: {e}")
     ok = _store.disable_routine(rid)
     return {"ok": ok, "routine_id": rid}
 
 
 def _exec_routine_delete(payload: dict) -> dict:
+    """Delete + record a 'deleted_active' preference (strongest signal
+    — user disliked enough to remove permanently). Captured before
+    delete since the file is gone after."""
     rid = payload["id"]
+    routine = _store.get_routine(rid)
+    if routine is not None:
+        try:
+            from sentinel.routines.preferences import (
+                record, _summary_from_routine, SIGNAL_DELETED,
+            )
+            record(
+                signal=SIGNAL_DELETED,
+                summary=_summary_from_routine(routine),
+                reason=str(payload.get("reason", "")),
+            )
+        except Exception as e:
+            log.warning(f"preference delete hook failed: {e}")
     ok = _store.delete_routine(rid)
     return {"ok": ok, "routine_id": rid}
 

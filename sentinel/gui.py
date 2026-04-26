@@ -5798,6 +5798,7 @@ class MainWindow(QMainWindow):
                 from sentinel.routines.handlers import register_all as _register_routine_actions
                 from sentinel.routines import start_scheduler as _start_routine_scheduler
                 from sentinel.routines.reactive import register_reactive_triggers
+                from sentinel.routines.preferences import register_with_approval_queue as _register_pref_hook
                 _register_routine_actions()
                 _start_routine_scheduler()
                 # Phase G — subscribe reactive dispatcher to event
@@ -5805,6 +5806,9 @@ class MainWindow(QMainWindow):
                 # Idempotent so a future config-reload doesn't stack
                 # subscriptions.
                 register_reactive_triggers()
+                # Phase I — wire approval-queue rejection hook so the
+                # detector learns from what the user said no to.
+                _register_pref_hook()
             except Exception as _e:
                 log.warning(f"routine subsystem init failed: {_e}")
 

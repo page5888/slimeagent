@@ -68,6 +68,8 @@ DETECTOR_PROMPT_TEMPLATE = """\
 最近幾天的活動 + 聊天記憶：
 <<ACTIVITY_LOG>>
 
+<<NEGATIVE_SIGNALS>>
+
 任務：找出 0~3 個**真的重複出現**的工作流，並提案做成 routine。標準：
 
 1. 必須在不同天 / 不同時段重複出現至少 2~3 次（單次不算）
@@ -317,9 +319,19 @@ def propose_via_detector() -> list[str]:
 
     activity = _gather_activity_summary()
     action_list = _format_action_list_for_detector()
+    # Phase I: include the user's past rejections / disables so the
+    # detector LLM learns what NOT to propose. Empty string when no
+    # signals yet (first-run, before any rejection).
+    try:
+        from sentinel.routines.preferences import render_for_detector_prompt
+        negative_signals = render_for_detector_prompt()
+    except Exception as e:
+        log.warning(f"detector: couldn't load preferences: {e}")
+        negative_signals = ""
     prompt = (DETECTOR_PROMPT_TEMPLATE
               .replace("<<ACTION_LIST>>", action_list)
-              .replace("<<ACTIVITY_LOG>>", activity))
+              .replace("<<ACTIVITY_LOG>>", activity)
+              .replace("<<NEGATIVE_SIGNALS>>", negative_signals))
 
     log.info("running routine detector...")
     text = call_llm(
