@@ -3162,13 +3162,43 @@ class EvolutionTab(QWidget):
         """)
 
         # ── 頁籤 1: 形象 ──
+        # The avatar page has a lot vertically: slime + 4 labels +
+        # progress bar + evolve button + 6 share buttons. On narrow
+        # windows QVBoxLayout was compressing the slime below its
+        # rendering minimum so the labels below started overlapping
+        # the painted body. Fix: wrap in QScrollArea so excess
+        # content scrolls instead of squashing, and pin the slime
+        # to a fixed size so its paintEvent always has the room
+        # its math assumes.
         avatar_page = QWidget()
-        avatar_layout = QVBoxLayout(avatar_page)
+        avatar_outer = QVBoxLayout(avatar_page)
+        avatar_outer.setContentsMargins(0, 0, 0, 0)
+        avatar_outer.setSpacing(0)
+
+        avatar_scroll = QScrollArea()
+        avatar_scroll.setWidgetResizable(True)
+        avatar_scroll.setFrameShape(QFrame.NoFrame)
+        avatar_outer.addWidget(avatar_scroll)
+
+        avatar_inner = QWidget()
+        avatar_scroll.setWidget(avatar_inner)
+        avatar_layout = QVBoxLayout(avatar_inner)
 
         from sentinel.slime_avatar import SlimeWidget
+        # Center the slime in a horizontal row so a narrow window
+        # doesn't stretch the widget past the body+glow rendering
+        # bounds (which would expose blank canvas around it).
+        slime_row = QHBoxLayout()
+        slime_row.addStretch()
         self.slime_widget = SlimeWidget()
-        self.slime_widget.setMinimumHeight(260)
-        avatar_layout.addWidget(self.slime_widget)
+        # Fixed 280x280 — gives body+glow+particles full room without
+        # depending on the window's current dimensions. Same trick as
+        # the home avatar (PR #37) but a notch larger because this is
+        # the dedicated 進化 tab where the slime is the centerpiece.
+        self.slime_widget.setFixedSize(280, 280)
+        slime_row.addWidget(self.slime_widget)
+        slime_row.addStretch()
+        avatar_layout.addLayout(slime_row)
 
         # Sacred name (only shown after master names the slime at Named tier)
         self.name_label = QLabel()
@@ -6984,19 +7014,18 @@ class MainWindow(QMainWindow):
                     record_observation(evo, obs_count, sources=exp_sources)
 
                     # 裝備掉落：每 100 次觀察有機會
+                    # v0.7-alpha 期間：drops still happen and accumulate
+                    # in ~/.hermes/equipment.json so when 裝備 tab
+                    # un-freezes everything's there waiting. We just
+                    # don't notify — Telegram + status-bar alerts about
+                    # an inventory the user can't currently see is noise
+                    # that distracts from the daily reflection ritual.
                     obs_since_drop += obs_count
                     if obs_since_drop >= 100:
                         obs_since_drop = 0
                         # Reload from disk to pick up GUI-side equip/unequip changes
                         equip_state = load_equipment()
-                        drop = try_drop(equip_state, "observation_100")
-                        if drop:
-                            drop_msg = (f"🎁 *裝備掉落！*\n"
-                                        f"[{drop['rarity_zh']}] {drop['name']}\n"
-                                        f"部位：{drop['slot_zh']}\n"
-                                        f"{drop['desc']}")
-                            send_notification(drop_msg, category="equipment")
-                            self.bridge.status_update.emit(f"🎁 獲得裝備：{drop['name']}")
+                        try_drop(equip_state, "observation_100")
 
                     # ── 主動建議引擎 ──
                     if input_act:
@@ -7060,14 +7089,10 @@ class MainWindow(QMainWindow):
                             )
 
                             # 學習完成 → 嘗試裝備掉落
-                            # Reload from disk to pick up GUI-side equip/unequip changes
+                            # Silent during v0.7-alpha; see comment on
+                            # the observation_100 drop above.
                             equip_state = load_equipment()
-                            drop = try_drop(equip_state, "learning")
-                            if drop:
-                                drop_msg = (f"🎁 *學習獎勵！*\n"
-                                            f"[{drop['rarity_zh']}] {drop['name']}\n"
-                                            f"{drop['desc']}")
-                                send_notification(drop_msg, category="equipment")
+                            try_drop(equip_state, "learning")
 
                             # 自我進化檢查（每次學習後）
                             try:
