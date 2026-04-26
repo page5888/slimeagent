@@ -49,6 +49,8 @@ from sentinel.growth.approval import (
     reject,
     register_on_submit,
     unregister_on_submit,
+    register_on_reject,
+    unregister_on_reject,
     SKILL_GEN, SELF_MOD, ACTION,
 )
 from sentinel.growth.safety import (
@@ -63,6 +65,7 @@ __all__ = [
     "register_action_handler", "list_action_types",
     "list_pending", "approve", "reject",
     "register_on_submit", "unregister_on_submit",
+    "register_on_reject", "unregister_on_reject",
     "SKILL_GEN", "SELF_MOD", "ACTION",
     "scan_code", "SafetyReport",
 ]

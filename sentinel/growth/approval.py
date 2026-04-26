@@ -163,6 +163,31 @@ def unregister_on_submit(callback) -> None:
         _submit_callbacks.remove(callback)
 
 
+# Reject callbacks fire when the user (or any actor) rejects a
+# proposal. Phase I feeds these into the routine preferences log so
+# the detector learns what NOT to propose. Kept separate from submit
+# callbacks because the data + audience differ — submit callbacks are
+# UI notifications ("you have a new pending"); reject callbacks are
+# learning signals ("don't suggest this kind of thing again").
+
+_reject_callbacks: list = []
+
+
+def register_on_reject(callback) -> None:
+    """Register callback(PendingApproval, reason: str) -> None.
+
+    Same isolation rule as submit callbacks: exceptions are caught +
+    logged so one buggy listener can't disrupt the queue.
+    """
+    if callback not in _reject_callbacks:
+        _reject_callbacks.append(callback)
+
+
+def unregister_on_reject(callback) -> None:
+    if callback in _reject_callbacks:
+        _reject_callbacks.remove(callback)
+
+
 # ── Action handler registry ───────────────────────────────────────
 # Modules that want to offer user-approvable actions register their
 # executor + policy check here. Kept as a simple dict — if there's
@@ -540,6 +565,16 @@ def reject(approval_id: str, reason: str = "",
         "kind": pending.kind,
     })
     log.info("Rejected %s (%s)", approval_id, reason or "no reason given")
+
+    # Notify learners (Phase I — routine preferences memory). Each
+    # listener isolated: if one crashes others still run, and a crash
+    # never reverses the rejection itself.
+    for cb in list(_reject_callbacks):
+        try:
+            cb(pending, reason)
+        except Exception as e:
+            log.warning("approval reject callback %r raised: %s", cb, e)
+
     return True
 
 
