@@ -5954,17 +5954,43 @@ class RoutinesTab(QWidget):
         """Run a routine immediately, off the UI thread (steps may
         block — Win32 / subprocess / network).
 
-        UX-pass-1: result is shown in-place via QMessageBox at the
-        end (the user explicitly asked to fire, they want to know
-        what happened — a status-bar flash is too transient). Status
-        bar still gets a brief echo for context.
+        UX:
+          - immediate status-bar echo so user knows the click was
+            received (LLM judge can take 5-15 s; a totally silent
+            wait reads as "the button is broken")
+          - terminal popup with success / skipped / failed summary,
+            forced ApplicationModal + WindowStaysOnTopHint so it
+            actually surfaces — earlier the popup was getting hidden
+            behind the main window and the user couldn't tell
+            anything had happened
         """
         from sentinel.routines import get_routine, fire_routine
+
+        # ⚡ Immediate feedback — fires synchronously on the click
+        # thread so the user sees something the moment they click,
+        # before the LLM judge even starts.
+        try:
+            self.bridge.status_update.emit(f"⏳ 正在執行常規 {routine_id}…")
+        except Exception:
+            pass
 
         def _do():
             r = get_routine(routine_id)
             if r is None:
+                # Silent return was the bug — user clicks, nothing
+                # happens, no idea why. Now we always surface a popup.
+                def _missing():
+                    self.bridge.status_update.emit(
+                        f"✗ 找不到常規 {routine_id}"
+                    )
+                    self._show_fire_popup(
+                        f"✗ 找不到常規 {routine_id}\n\n"
+                        f"可能是剛被刪除，或是 ~/.hermes/routines/ "
+                        f"檔案被外部修改。重啟可能修復。"
+                    )
+                QTimer.singleShot(0, _missing)
                 return
+
             try:
                 result = fire_routine(r)
             except Exception as e:
@@ -6010,9 +6036,34 @@ class RoutinesTab(QWidget):
             def _ui():
                 self.refresh()
                 self.bridge.status_update.emit(status_text)
-                QMessageBox.information(self, "AI Slime", popup_text)
+                self._show_fire_popup(popup_text)
             QTimer.singleShot(0, _ui)
         threading.Thread(target=_do, daemon=True).start()
+
+    def _show_fire_popup(self, text: str) -> None:
+        """Show a popup that actually surfaces above the main window.
+
+        Plain QMessageBox.information sometimes appeared behind the
+        main window depending on focus / window flags / OS, which
+        looked exactly like "the button doesn't work". Force the popup
+        to the top + raise + activate the window so it can't be
+        hidden by accident.
+        """
+        from PySide6.QtCore import Qt as _Qt
+        from PySide6.QtWidgets import QMessageBox as _QMB
+        box = _QMB(self)
+        box.setIcon(_QMB.Information)
+        box.setWindowTitle("AI Slime")
+        box.setText(text)
+        box.setWindowFlag(_Qt.WindowStaysOnTopHint, True)
+        # Activate self first so the popup parent is reliably visible,
+        # then raise the popup. Belt-and-suspenders for a flaky issue.
+        try:
+            self.window().raise_()
+            self.window().activateWindow()
+        except Exception:
+            pass
+        box.exec()
 
     def _toggle_routine(self, routine_id: str, currently_enabled: bool) -> None:
         """Enable/disable goes through the approval queue — same path
