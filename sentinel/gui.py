@@ -6145,6 +6145,31 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(700, 600)
         self.setWindowIcon(create_icon())
 
+        # ── Register action handlers at app start, not just daemon start.
+        #
+        # Without this, the chat tab's inline approval cards (Phase D2)
+        # for routine.create / surface.* / etc. are visible but the
+        # 同意 button silently fails: approve() looks up a handler for
+        # the action_type, finds none registered (registration was
+        # gated on the daemon thread starting), and returns False —
+        # which the user just sees as "click does nothing".
+        #
+        # All registrations are idempotent (each register_action_handler
+        # overwrites prior), so the daemon's later registration calls
+        # are harmless duplicates. Wrapping in broad try/except so a
+        # platform-specific surface init failure on macOS / Linux
+        # doesn't keep the rest of the app from starting.
+        try:
+            from sentinel.surface.handlers import register_all as _r_surface
+            _r_surface()
+        except Exception as e:
+            log.warning(f"surface handler registration failed at startup: {e}")
+        try:
+            from sentinel.routines.handlers import register_all as _r_routine
+            _r_routine()
+        except Exception as e:
+            log.warning(f"routine handler registration failed at startup: {e}")
+
         # Load saved settings
         self._load_settings()
 
