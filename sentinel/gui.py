@@ -646,7 +646,10 @@ class ChatTab(QWidget):
         # registers — previous version went straight to the worker
         # thread, so if anything went wrong before _ui ran (or if
         # the click never actually reached the handler) the user
-        # had zero signal that anything happened.
+        # had zero signal that anything happened. The approve label
+        # surfaces the action_type so a stuck "執行中" tells the
+        # user *what* is stuck (e.g. vision.interpret_screen vs
+        # surface.draw — useful when filing a bug).
         def _on_deny_clicked(_checked, aid=p.id, db=deny_btn, ab=approve_btn):
             log.info("approval card deny clicked: %s", aid)
             db.setEnabled(False)
@@ -654,11 +657,14 @@ class ChatTab(QWidget):
             db.setText("拒絕中…")
             self._on_deny_click(aid)
 
-        def _on_approve_clicked(_checked, aid=p.id, db=deny_btn, ab=approve_btn):
-            log.info("approval card approve clicked: %s", aid)
+        def _on_approve_clicked(
+            _checked, aid=p.id, at=p.action_type,
+            db=deny_btn, ab=approve_btn,
+        ):
+            log.info("approval card approve clicked: %s (%s)", aid, at)
             db.setEnabled(False)
             ab.setEnabled(False)
-            ab.setText("執行中…")
+            ab.setText(f"執行中：{at}…")
             self._on_approve_click(aid)
 
         deny_btn.clicked.connect(_on_deny_clicked)
@@ -693,6 +699,15 @@ class ChatTab(QWidget):
                 action_type = pend.action_type
         except Exception:
             pass
+
+        # Watchdog: if the registered handler hangs (LLM call without
+        # timeout, blocking I/O, etc.), the worker never reaches its
+        # _update QTimer and the user is stuck staring at "執行中…"
+        # forever with no idea whether to wait or restart. After 30s
+        # we surface a popup so the user knows it's still running and
+        # can decide. We don't kill the worker — it may still complete
+        # and the result will land in chat normally.
+        completed = [False]
 
         def _do() -> None:
             captured: list[str] = []
@@ -735,6 +750,8 @@ class ChatTab(QWidget):
                 except Exception as e:
                     log.warning(f"audit tail read failed: {e}")
 
+            completed[0] = True
+
             def _update() -> None:
                 if ok:
                     self._append_system(
@@ -756,6 +773,25 @@ class ChatTab(QWidget):
                 self._refresh_approval_panel()
             QTimer.singleShot(0, _update)
 
+        def _watchdog() -> None:
+            if completed[0]:
+                return
+            log.warning(
+                "approve(%s) action_type=%s still running after 30s",
+                approval_id, action_type or "unknown",
+            )
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Warning)
+            box.setWindowTitle("執行較久")
+            box.setText(
+                f"「{action_type or '未知動作'}」執行超過 30 秒。\n\n"
+                "可能還在跑（等 LLM 回應、處理大檔等），也可能卡住了。"
+                "結果若完成會自動寫入 chat — 不用重複按。\n\n"
+                "若確認卡住，看 ~/.hermes/sentinel.log 或用 ⟳ 更新+重啟。"
+            )
+            box.exec()
+
+        QTimer.singleShot(30000, _watchdog)
         threading.Thread(target=_do, daemon=True).start()
 
     def _append_bot_note(self, text: str) -> None:
@@ -7228,8 +7264,18 @@ class MainWindow(QMainWindow):
             )
             return
 
-        # Step 4: bow out. Use QApplication.quit so onClose hooks run.
+        # Step 4: bow out — hard exit. QApplication.quit() alone only
+        # asks the event loop to stop; the system tray icon + overlay
+        # window keep C++ refs that block Python from actually dying,
+        # so the user reports "old window + slime didn't close".
+        # os._exit(0) bypasses atexit / QApplication teardown, which
+        # is what we want here — the replacement process is already
+        # running and any in-flight state should have been persisted
+        # by ongoing flushes (audit log, settings, etc.) long before
+        # the user pressed this button. Same approach as the older
+        # restart path at line ~4951.
         QApplication.quit()
+        os._exit(0)
 
     def _setup_tray(self):
         self.tray = QSystemTrayIcon(create_tray_icon(), self)
