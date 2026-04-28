@@ -4458,13 +4458,14 @@ class SettingsTab(QWidget):
         form.addWidget(llm_label)
 
         self.provider_rows = []
-        # v0.7-alpha lite: only surface Gemini + Ollama as configurable
-        # in the UI. The other 6 providers (claude, openai, openrouter,
+        # v0.7-alpha lite: only surface Gemini + OpenAI + Ollama as
+        # configurable in the UI. The other providers (claude, openrouter,
         # groq, deepseek, deepinfra) keep working in config.LLM_PROVIDERS
         # — saved settings + LLM call routing all still see them — they
-        # just don't get a row in the settings tab during dogfood, so
-        # the surface area is "set one of two keys, done".
-        _LITE_PROVIDERS = {"gemini", "ollama"}
+        # just don't get a row in the settings tab during dogfood.
+        # OpenAI is in the set because it's the image-gen fallback target
+        # when Gemini quota is exhausted (see expression/generator.py).
+        _LITE_PROVIDERS = {"gemini", "openai", "ollama"}
         for provider in config.LLM_PROVIDERS:
             pname = (provider.get("name") or "").lower()
             if pname not in _LITE_PROVIDERS:
