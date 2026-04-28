@@ -288,6 +288,18 @@ class ChatTab(QWidget):
         self.clear_btn.setStyleSheet(_tk.btn_ghost())
         input_layout.addWidget(self.clear_btn)
 
+        # 🎨 Album button — opens a grid view of every expression
+        # Slime has drawn so far. Same ghost-style as clear, sits
+        # next to it so the chat tab's secondary actions are
+        # visually grouped.
+        self.album_btn = QPushButton("🎨")
+        self.album_btn.setToolTip("史萊姆的相簿")
+        self.album_btn.setCursor(Qt.PointingHandCursor)
+        self.album_btn.setFixedWidth(36)
+        self.album_btn.clicked.connect(self._open_album)
+        self.album_btn.setStyleSheet(_tk.btn_ghost())
+        input_layout.addWidget(self.album_btn)
+
         layout.addLayout(input_layout)
 
         # Connect response signal
@@ -389,6 +401,52 @@ class ChatTab(QWidget):
         """
         self.chat_display.clear()
         self._append_system("(對話畫面已清空，記憶仍保留)")
+
+    # ── Slime's self-expression (drawn images) ───────────────────
+    # Designed as a CONTAINER concern — sentinel/expression/* is the
+    # OS / Qt-free core that decides what to draw and produces a file
+    # path. Here we just put that file into the QTextEdit as an HTML
+    # <img>. The slime's caption is rendered inside an amber-tinted
+    # bubble like a chat message, with the image right below it.
+
+    def append_expression(self, exp) -> None:
+        """Render an Expression (sentinel.expression.album.Expression)
+        as a chat message. Expects a saved file at exp.absolute_image_path.
+        """
+        from sentinel.ui import tokens as _tk
+        from sentinel.expression.album import ExpressionKind
+        kind_label = ExpressionKind.DISPLAY_ZH.get(exp.kind, "畫")
+        # Image path needs file:/// + forward slashes for Qt's HTML.
+        img_url = exp.absolute_image_path.as_uri()
+        # Width capped so a 1024x1024 generated image doesn't blow
+        # the chat layout — Qt's table-cell layout honors max-width
+        # via the width attribute.
+        caption_html = self._escape_html(exp.caption or "")
+        html = (
+            f'<table align="left" width="65%" cellpadding="10" '
+            f'cellspacing="0" style="margin:6px 0;">'
+            f'<tr><td style="background-color:rgba(240,198,116,0.12);'
+            f' border-left:3px solid {_tk.PALETTE["amber"]};">'
+            f'<b style="color:{_tk.PALETTE["amber"]};">史萊姆畫了「{kind_label}」</b>'
+            f'<br><br>'
+            f'<img src="{img_url}" width="320" style="border-radius:6px;">'
+            f'<br><br>'
+            f'<span style="color:{_tk.PALETTE["text"]};">{caption_html}</span>'
+            f'</td></tr></table>'
+            f'<br clear="all">'
+        )
+        self.chat_display.append(html)
+        self.chat_display.moveCursor(QTextCursor.End)
+
+    def _open_album(self) -> None:
+        """Open a modal album dialog showing every expression Slime
+        has produced so far. Read-only grid + reactions if user wants
+        to ❤ / 🤔 something."""
+        try:
+            dlg = AlbumDialog(self)
+            dlg.exec()
+        except Exception as e:
+            log.warning(f"album open failed: {e}")
 
     def send_message(self):
         text = self.input_field.text().strip()
@@ -670,6 +728,228 @@ class ChatTab(QWidget):
         # Refresh panel so translated button labels apply to any
         # currently-rendered cards.
         self._refresh_approval_panel()
+
+
+# ─── Album Dialog (Slime 的相簿) ────────────────────────────────────────
+#
+# Modal dialog that shows every expression Slime has drawn so far.
+# Sticking with "modal triggered from chat" (instead of a 6th tab)
+# because v0.7-alpha is committed to 5-tab lite mode — adding a tab
+# every time we add a feature defeats the purpose.
+
+class AlbumDialog(QDialog):
+    """Read-only grid of Slime's drawn expressions, newest first."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        from sentinel.ui import tokens as _tk
+        self.setWindowTitle("🎨 史萊姆的相簿")
+        self.resize(720, 600)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(
+            _tk.SPACE["lg"], _tk.SPACE["md"],
+            _tk.SPACE["lg"], _tk.SPACE["md"],
+        )
+
+        # Header — count + a button to ask Slime to draw on demand.
+        head = QHBoxLayout()
+        self.count_lbl = QLabel("")
+        self.count_lbl.setStyleSheet(
+            f"color: {_tk.PALETTE['amber']};"
+            f" font-size: {_tk.FONT_SIZE['title']}px;"
+            f" font-weight: 600;"
+        )
+        head.addWidget(self.count_lbl)
+        head.addStretch()
+        self.draw_btn = QPushButton("請史萊姆畫一張")
+        self.draw_btn.setCursor(Qt.PointingHandCursor)
+        self.draw_btn.setStyleSheet(_tk.btn_secondary())
+        self.draw_btn.clicked.connect(self._on_draw_request)
+        head.addWidget(self.draw_btn)
+        layout.addLayout(head)
+
+        # Scrollable body — vertical stack of expression cards.
+        # Could be a QGridLayout for 2-column tiling but vertical
+        # reads better when each image gets a caption underneath.
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.NoFrame)
+        self.body = QWidget()
+        self.body_layout = QVBoxLayout(self.body)
+        self.body_layout.setSpacing(_tk.SPACE["md"])
+        self.scroll.setWidget(self.body)
+        layout.addWidget(self.scroll, stretch=1)
+
+        # Footer — close button.
+        foot = QHBoxLayout()
+        foot.addStretch()
+        close_btn = QPushButton("關閉")
+        close_btn.setCursor(Qt.PointingHandCursor)
+        close_btn.setStyleSheet(_tk.btn_ghost())
+        close_btn.clicked.connect(self.accept)
+        foot.addWidget(close_btn)
+        layout.addLayout(foot)
+
+        self._refresh()
+
+    def _refresh(self) -> None:
+        """Re-render the album from disk. Cheap enough to call after
+        every state change (draw, react, delete) so we don't have to
+        track per-card state."""
+        from sentinel.expression.album import list_recent, ExpressionKind
+        from sentinel.ui import tokens as _tk
+
+        # Clear existing.
+        while self.body_layout.count() > 0:
+            item = self.body_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+
+        recent = list_recent(limit=50)
+        self.count_lbl.setText(
+            f"史萊姆畫過的 {len(recent)} 張" if recent else "還沒畫過任何一張"
+        )
+
+        if not recent:
+            empty = QLabel(
+                "點上面「請史萊姆畫一張」看看它會給你什麼。\n\n"
+                "或等到週日晚上，史萊姆會自己想畫的時候就畫了。"
+            )
+            empty.setStyleSheet(
+                f"color: {_tk.PALETTE['text_muted']};"
+                f" font-size: {_tk.FONT_SIZE['body']}px;"
+                f" padding: 40px;"
+            )
+            empty.setAlignment(Qt.AlignCenter)
+            self.body_layout.addWidget(empty)
+            self.body_layout.addStretch()
+            return
+
+        for exp in recent:
+            self.body_layout.addWidget(self._build_card(exp))
+        self.body_layout.addStretch()
+
+    def _build_card(self, exp) -> QWidget:
+        from sentinel.expression.album import ExpressionKind, Reaction
+        from sentinel.ui import tokens as _tk
+
+        frame = QFrame()
+        frame.setStyleSheet(
+            f"QFrame {{"
+            f" background-color: {_tk.PALETTE['bg_elev']};"
+            f" border: 1px solid {_tk.PALETTE['border_subtle']};"
+            f" border-left: 3px solid {_tk.PALETTE['amber']};"
+            f" border-radius: {_tk.RADIUS['card']}px;"
+            f" }}"
+        )
+        v = QVBoxLayout(frame)
+        v.setContentsMargins(
+            _tk.SPACE["lg"], _tk.SPACE["md"],
+            _tk.SPACE["lg"], _tk.SPACE["md"],
+        )
+
+        # Title row.
+        kind_label = ExpressionKind.DISPLAY_ZH.get(exp.kind, "畫")
+        from datetime import datetime
+        when = datetime.fromtimestamp(exp.generated_at).strftime("%Y-%m-%d %H:%M")
+        head = QLabel(
+            f"<b style='color:{_tk.PALETTE['amber']};'>{kind_label}</b>"
+            f"  <span style='color:{_tk.PALETTE['text_muted']};'>"
+            f"{when} · {exp.slime_form}</span>"
+        )
+        v.addWidget(head)
+
+        # Image — load via QPixmap so we can scale cleanly.
+        img_label = QLabel()
+        try:
+            from PySide6.QtGui import QPixmap
+            pix = QPixmap(str(exp.absolute_image_path))
+            if not pix.isNull():
+                pix = pix.scaledToWidth(
+                    400, Qt.SmoothTransformation,
+                )
+                img_label.setPixmap(pix)
+        except Exception as e:
+            img_label.setText(f"(圖片無法載入: {e})")
+        img_label.setAlignment(Qt.AlignCenter)
+        v.addWidget(img_label)
+
+        # Caption.
+        if exp.caption:
+            cap = QLabel(exp.caption)
+            cap.setWordWrap(True)
+            cap.setStyleSheet(
+                f"color: {_tk.PALETTE['text']};"
+                f" font-size: {_tk.FONT_SIZE['body']}px;"
+                f" padding-top: 8px;"
+            )
+            v.addWidget(cap)
+
+        # Reactions row.
+        rxn_row = QHBoxLayout()
+        rxn_row.addStretch()
+        for kind, emoji in (
+            (Reaction.LOVE, "❤"),
+            (Reaction.HMM, "🤔"),
+            (Reaction.SAVED, "💾"),
+        ):
+            count = sum(1 for r in exp.reactions if r.get("kind") == kind)
+            btn = QPushButton(f"{emoji} {count}" if count else emoji)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setStyleSheet(_tk.btn_ghost())
+            btn.clicked.connect(
+                lambda _checked, eid=exp.id, k=kind: self._on_reaction(eid, k)
+            )
+            rxn_row.addWidget(btn)
+        v.addLayout(rxn_row)
+
+        return frame
+
+    def _on_reaction(self, expression_id: str, kind: str) -> None:
+        from sentinel.expression.album import load_expression, save_expression
+        exp = load_expression(expression_id)
+        if exp is None:
+            return
+        try:
+            exp.add_reaction(kind)
+            save_expression(exp)
+        except Exception as e:
+            log.warning(f"reaction save failed: {e}")
+            return
+        self._refresh()
+
+    def _on_draw_request(self) -> None:
+        """User explicitly asked Slime to draw. Slime might draw, but
+        also might decline (the cooldown / quality gate could refuse).
+        Run off-thread so the LLM + image API call doesn't freeze
+        the dialog."""
+        self.draw_btn.setEnabled(False)
+        self.draw_btn.setText("史萊姆思考中…")
+
+        def _do():
+            try:
+                from sentinel.expression.generator import generate_expression
+                exp = generate_expression()  # Slime picks kind
+            except Exception as e:
+                log.warning(f"manual expression gen failed: {e}")
+                exp = None
+
+            def _ui():
+                self.draw_btn.setEnabled(True)
+                self.draw_btn.setText("請史萊姆畫一張")
+                if exp is None:
+                    QMessageBox.information(
+                        self, "AI Slime",
+                        "史萊姆說現在還想不到要畫什麼。\n"
+                        "可能 Gemini API key 沒設定，\n"
+                        "或是它今天比較想休息。",
+                    )
+                else:
+                    self._refresh()
+            QTimer.singleShot(0, _ui)
+        threading.Thread(target=_do, daemon=True).start()
 
 
 # ─── Home Tab (首頁) ─────────────────────────────────────────────────────
@@ -6220,6 +6500,34 @@ class MainWindow(QMainWindow):
             _r_routine()
         except Exception as e:
             log.warning(f"routine handler registration failed at startup: {e}")
+
+        # Slime self-expression auto-trigger.
+        # `maybe_generate_weekly` is idempotent within a 6-day window,
+        # so calling it on every startup is safe — the function itself
+        # decides whether enough time has passed. We schedule it 30 s
+        # after launch so initial UI paint isn't blocked by an LLM +
+        # image API roundtrip. If a new expression is generated, we
+        # surface it in chat (when chat tab finishes building).
+        def _maybe_kick_expression():
+            def _do():
+                try:
+                    from sentinel.expression.generator import maybe_generate_weekly
+                    exp = maybe_generate_weekly()
+                except Exception as e:
+                    log.warning(f"weekly expression gen failed: {e}")
+                    exp = None
+                if exp is None:
+                    return
+                # Marshal to GUI thread to append into chat tab.
+                def _show():
+                    try:
+                        if hasattr(self, "chat_tab") and self.chat_tab:
+                            self.chat_tab.append_expression(exp)
+                    except Exception as e:
+                        log.debug(f"chat append for expression failed: {e}")
+                QTimer.singleShot(0, _show)
+            threading.Thread(target=_do, daemon=True, name="slime-expression").start()
+        QTimer.singleShot(30_000, _maybe_kick_expression)
 
         # Load saved settings
         self._load_settings()
