@@ -239,15 +239,37 @@ class ChatTab(QWidget):
         # transcript and the input row. Only visible when there's at
         # least one pending ACTION-kind proposal, so for pure
         # conversation the chat tab looks identical to before D2.
-        # When the slime proposes an action, the card shows up right
-        # below the chat with [同意] / [拒絕] buttons — no tab switch
-        # required to act on what the slime just suggested.
+        #
+        # Wrapped in a QScrollArea with a max height because without
+        # it, 5+ pending cards (or a single tall chain.run card) push
+        # the approve/deny buttons off-screen — user reported being
+        # unable to click 同意 when several proposals stacked up.
+        # ~280px ≈ 3 standard cards visible; any more, scroll.
         self.approval_container = QWidget()
         self.approval_layout = QVBoxLayout(self.approval_container)
         self.approval_layout.setContentsMargins(0, 4, 0, 4)
-        self.approval_layout.setSpacing(6)
-        self.approval_container.setVisible(False)
-        layout.addWidget(self.approval_container)
+        self.approval_layout.setSpacing(8)
+
+        self.approval_scroll = QScrollArea()
+        self.approval_scroll.setWidget(self.approval_container)
+        self.approval_scroll.setWidgetResizable(True)
+        self.approval_scroll.setFrameShape(QFrame.NoFrame)
+        self.approval_scroll.setMaximumHeight(280)
+        self.approval_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.approval_scroll.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }"
+            f"QScrollBar:vertical {{"
+            f" background:transparent; width:8px; }}"
+            f"QScrollBar::handle:vertical {{"
+            f" background:{_tk.PALETTE['border']};"
+            f" border-radius:4px; min-height:20px; }}"
+            f"QScrollBar::handle:vertical:hover {{"
+            f" background:{_tk.PALETTE['text_muted']}; }}"
+            f"QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{"
+            f" height:0px; }}"
+        )
+        self.approval_scroll.setVisible(False)
+        layout.addWidget(self.approval_scroll)
 
         # Input area — pill-shaped field that matches the bubble
         # aesthetic of the messages above. Send button is the only
@@ -510,24 +532,21 @@ class ChatTab(QWidget):
             pending = [p for p in list_pending() if p.kind == ACTION]
         except Exception as e:
             log.warning(f"chat tab: couldn't list pending approvals: {e}")
-            self.approval_container.setVisible(False)
+            self.approval_scroll.setVisible(False)
             return
 
         if not pending:
-            self.approval_container.setVisible(False)
+            self.approval_scroll.setVisible(False)
             return
 
-        self.approval_container.setVisible(True)
-        for p in pending[:5]:   # cap to keep chat area readable
+        # No cap on count — the scroll area handles overflow. Previously
+        # we sliced pending[:5] and rendered a "+N more" hint, but that
+        # forced the user to switch tabs to act on the rest. With scroll
+        # the user can approve any of them inline.
+        self.approval_scroll.setVisible(True)
+        for p in pending:
             card = self._build_approval_card(p)
             self.approval_layout.addWidget(card)
-        if len(pending) > 5:
-            more = QLabel(
-                f"<span style='color:#888; font-size:10px;'>"
-                f"... 還有 {len(pending) - 5} 個提案（到「待同意」分頁看全部）</span>"
-            )
-            more.setAlignment(Qt.AlignCenter)
-            self.approval_layout.addWidget(more)
 
     def _build_approval_card(self, p) -> QWidget:
         """Compact approval card for an ACTION proposal.
@@ -543,23 +562,23 @@ class ChatTab(QWidget):
             "border-left: 3px solid #ffd166; }"
         )
         v = QVBoxLayout(card)
-        v.setContentsMargins(12, 6, 8, 8)
-        v.setSpacing(4)
+        v.setContentsMargins(14, 10, 10, 10)
+        v.setSpacing(8)
 
         # Title + action_type subtitle
         title_text = p.title or p.action_type
         title_lbl = QLabel(
             f"<b style='color:#e6e6e6;'>{title_text}</b>"
-            f"  <span style='color:#888; font-size:10px;'>"
+            f"  <span style='color:#888; font-size:11px;'>"
             f"{p.action_type}</span>"
         )
-        title_lbl.setStyleSheet("font-size: 12px;")
+        title_lbl.setStyleSheet("font-size: 14px;")
         title_lbl.setWordWrap(True)
         v.addWidget(title_lbl)
 
         if p.reason:
             reason_lbl = QLabel(p.reason)
-            reason_lbl.setStyleSheet("color:#aaa; font-size: 10px;")
+            reason_lbl.setStyleSheet("color:#aaa; font-size: 12px;")
             reason_lbl.setWordWrap(True)
             v.addWidget(reason_lbl)
 
@@ -576,7 +595,7 @@ class ChatTab(QWidget):
                     f"<span style='color:#e6e6e6;'>{title}</span> "
                     f"<span style='color:#666;'>· {at}</span>"
                 )
-                step_lbl.setStyleSheet("font-size: 10px;")
+                step_lbl.setStyleSheet("font-size: 12px;")
                 step_lbl.setWordWrap(True)
                 v.addWidget(step_lbl)
 
@@ -593,21 +612,21 @@ class ChatTab(QWidget):
             findings_lbl = QLabel(
                 f"<span style='color:{color};'>⚠ {msg}</span>"
             )
-            findings_lbl.setStyleSheet("font-size: 10px;")
+            findings_lbl.setStyleSheet("font-size: 12px;")
             findings_lbl.setWordWrap(True)
             v.addWidget(findings_lbl)
 
         # Action row
         btn_row = QHBoxLayout()
-        btn_row.setSpacing(6)
+        btn_row.setSpacing(8)
         btn_row.addStretch()
 
         deny_btn = QPushButton(t("chat_approval_deny"))
         deny_btn.setCursor(Qt.PointingHandCursor)
         deny_btn.setStyleSheet(
             "QPushButton { background:transparent; color:#888;"
-            " padding:3px 12px; border:1px solid #444; border-radius:10px;"
-            " font-size:10px; }"
+            " padding:6px 16px; border:1px solid #444; border-radius:12px;"
+            " font-size:12px; }"
             "QPushButton:hover { color:#cc6b63; border-color:#cc6b63; }"
         )
         deny_btn.clicked.connect(
@@ -619,8 +638,8 @@ class ChatTab(QWidget):
         approve_btn.setCursor(Qt.PointingHandCursor)
         approve_btn.setStyleSheet(
             "QPushButton { background:#ffd166; color:#1a1a1a; font-weight:600;"
-            " padding:3px 14px; border:none; border-radius:10px;"
-            " font-size:10px; }"
+            " padding:6px 18px; border:none; border-radius:12px;"
+            " font-size:12px; }"
             "QPushButton:hover { background:#ffdc88; }"
         )
         approve_btn.clicked.connect(
@@ -887,8 +906,9 @@ class AlbumDialog(QDialog):
             )
             v.addWidget(cap)
 
-        # Reactions row. Avatar pick button on the left (this is the
-        # primary "make this drawing mine" action), reactions on the right.
+        # Reactions + actions row. Avatar pick + Threads share on the
+        # left (primary "do something with this drawing" actions),
+        # reactions on the right.
         rxn_row = QHBoxLayout()
 
         avatar_btn = QPushButton("設成桌面浮窗")
@@ -901,6 +921,14 @@ class AlbumDialog(QDialog):
             lambda _checked, e=exp: self._on_set_as_avatar(e)
         )
         rxn_row.addWidget(avatar_btn)
+
+        share_btn = QPushButton("分享到 Threads")
+        share_btn.setCursor(Qt.PointingHandCursor)
+        share_btn.setStyleSheet(_tk.btn_ghost())
+        share_btn.clicked.connect(
+            lambda _checked, e=exp: self._on_share_threads(e)
+        )
+        rxn_row.addWidget(share_btn)
 
         rxn_row.addStretch()
         for kind, emoji in (
@@ -997,32 +1025,118 @@ class AlbumDialog(QDialog):
 
         threading.Thread(target=_do, daemon=True).start()
 
+    def _on_share_threads(self, exp) -> None:
+        """Copy image to clipboard, open Threads compose page with caption.
+
+        Threads has no public API for posting from a third-party desktop
+        app without going through Meta app review. The next-best UX:
+        put the image one Ctrl+V away and pre-fill the caption — same
+        pattern Steam / OBS / most desktop apps use for social sharing.
+        """
+        import webbrowser
+        from urllib.parse import quote
+        from PySide6.QtGui import QPixmap
+        from PySide6.QtWidgets import QApplication
+
+        img_ok = False
+        try:
+            pix = QPixmap(str(exp.absolute_image_path))
+            if not pix.isNull():
+                QApplication.clipboard().setPixmap(pix)
+                img_ok = True
+            else:
+                log.warning(f"share: pixmap null for {exp.absolute_image_path}")
+        except Exception as e:
+            log.warning(f"share: clipboard copy failed: {e}")
+
+        caption = (exp.caption or "").strip()
+        url = f"https://www.threads.net/intent/post?text={quote(caption)}"
+        try:
+            webbrowser.open(url)
+        except Exception as e:
+            log.warning(f"share: webbrowser.open failed: {e}")
+            QMessageBox.warning(
+                self, "分享到 Threads",
+                f"無法開啟瀏覽器：{e}\n"
+                f"請手動到 https://www.threads.net 發文，\n"
+                f"圖片在：{exp.absolute_image_path}",
+            )
+            return
+
+        if img_ok:
+            QMessageBox.information(
+                self, "分享到 Threads",
+                "圖片已複製到剪貼簿，Threads 撰寫頁已開啟。\n\n"
+                "在貼文框按 Ctrl+V 貼上圖片，再發布即可。",
+            )
+        else:
+            QMessageBox.warning(
+                self, "分享到 Threads",
+                "圖片複製到剪貼簿失敗，但 Threads 撰寫頁已開啟。\n\n"
+                f"請手動附加：\n{exp.absolute_image_path}",
+            )
+
     def _on_draw_request(self) -> None:
         """User explicitly asked Slime to draw. Slime might draw, but
         also might decline (the cooldown / quality gate could refuse).
         Run off-thread so the LLM + image API call doesn't freeze
-        the dialog."""
+        the dialog.
+
+        On failure we surface the actual reason inline — the generator
+        emits warnings like "no Gemini API key configured" / "key
+        quota exhausted" / "all N key attempts exhausted", and the
+        user shouldn't have to crack open ~/.hermes/sentinel.log to
+        find them. We attach a temporary in-memory log handler scoped
+        to the expression-gen loggers, then show the captured lines
+        in the popup if no image came back.
+        """
         self.draw_btn.setEnabled(False)
         self.draw_btn.setText("史萊姆思考中…")
 
         def _do():
+            captured: list[str] = []
+
+            class _Capture(logging.Handler):
+                def emit(self, record):
+                    if record.levelno >= logging.INFO:
+                        captured.append(
+                            f"[{record.levelname}] {record.getMessage()}"
+                        )
+
+            handler = _Capture()
+            handler.setLevel(logging.INFO)
+            targets = [
+                logging.getLogger("sentinel.expression.generator"),
+                logging.getLogger("sentinel.expression.prompts"),
+            ]
+            for t_log in targets:
+                t_log.addHandler(handler)
+
             try:
                 from sentinel.expression.generator import generate_expression
-                exp = generate_expression()  # Slime picks kind
+                exp = generate_expression()
             except Exception as e:
                 log.warning(f"manual expression gen failed: {e}")
+                captured.append(f"[EXCEPTION] {e}")
                 exp = None
+            finally:
+                for t_log in targets:
+                    t_log.removeHandler(handler)
 
             def _ui():
                 self.draw_btn.setEnabled(True)
                 self.draw_btn.setText("請史萊姆畫一張")
                 if exp is None:
-                    QMessageBox.information(
-                        self, "AI Slime",
-                        "史萊姆說現在還想不到要畫什麼。\n"
-                        "可能 Gemini API key 沒設定，\n"
-                        "或是它今天比較想休息。",
-                    )
+                    # Show last ~12 captured lines so the popup stays
+                    # readable but the dominant failure mode (3 models
+                    # × N keys × 2 providers worst-case) still fits.
+                    detail = "\n".join(captured[-12:]) or "（沒有記錄到具體原因）"
+                    box = QMessageBox(self)
+                    box.setIcon(QMessageBox.Information)
+                    box.setWindowTitle("AI Slime — 沒畫成")
+                    box.setText("史萊姆這次沒畫成。原因如下：")
+                    box.setDetailedText(detail)
+                    box.exec()
                 else:
                     self._refresh()
             QTimer.singleShot(0, _ui)
