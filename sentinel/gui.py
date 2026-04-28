@@ -790,6 +790,12 @@ class ChatTab(QWidget):
                 "若確認卡住，看 ~/.hermes/sentinel.log 或用 ⟳ 更新+重啟。"
             )
             box.exec()
+            # Re-render cards so the user can retry or reject if the
+            # original worker is genuinely hung. The hung thread keeps
+            # running in the background; if it ever completes, the
+            # archive step is atomic so a second approve attempt won't
+            # corrupt state.
+            self._refresh_approval_panel()
 
         QTimer.singleShot(30000, _watchdog)
         threading.Thread(target=_do, daemon=True).start()
