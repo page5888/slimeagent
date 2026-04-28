@@ -4,16 +4,20 @@ A semi-transparent, draggable slime that floats on the desktop.
 Shows the current evolution form, reacts to notifications,
 and can be double-clicked to open the main window.
 """
+import logging
 import math
 import time
 from PySide6.QtWidgets import QWidget, QApplication, QMenu
 from PySide6.QtGui import (
     QPainter, QColor, QRadialGradient, QPen, QBrush, QFont, QCursor,
-    QAction,
+    QAction, QPixmap, QTransform,
 )
 from PySide6.QtCore import Qt, QPoint, QRect, QTimer, Signal, QPropertyAnimation, QEasingCurve
 
 from sentinel.slime_avatar import TIER_COLORS, TRAIT_ACCESSORIES
+from sentinel import avatar as _avatar
+
+log = logging.getLogger("sentinel.overlay")
 
 
 class SlimeOverlay(QWidget):
@@ -56,6 +60,14 @@ class SlimeOverlay(QWidget):
         self._bubble_timer.setSingleShot(True)
         self._bubble_timer.timeout.connect(self._clear_bubble)
 
+        # Self-portrait avatar override (None = procedural slime). When
+        # the user picks a portrait from the album, we load the cutout
+        # PNG here and the paintEvent takes a different branch — same
+        # breath/bounce math, applied to the pixmap instead of drawing
+        # the procedural body.
+        self._avatar_pixmap: QPixmap | None = None
+        self._reload_avatar_override()
+
         # Drag support
         self._drag_pos = None
 
@@ -74,6 +86,29 @@ class SlimeOverlay(QWidget):
         self._title = title
         self._traits = traits[:3]
         self._load_equipped_visuals()
+        self.update()
+
+    def _reload_avatar_override(self):
+        """Read the persisted avatar override path and load it as a
+        QPixmap, or clear it if absent."""
+        path = _avatar.get_avatar_override()
+        if path is None:
+            self._avatar_pixmap = None
+            return
+        pix = QPixmap(str(path))
+        self._avatar_pixmap = pix if not pix.isNull() else None
+        if self._avatar_pixmap is None:
+            log.warning(f"overlay: avatar override path {path} loaded as null pixmap")
+
+    def set_avatar(self, path: str | None):
+        """Public API: switch to / clear the self-portrait avatar at
+        runtime. Called from the album dialog after the user picks a
+        new portrait."""
+        if path:
+            pix = QPixmap(str(path))
+            self._avatar_pixmap = pix if not pix.isNull() else None
+        else:
+            self._avatar_pixmap = None
         self.update()
 
     def _load_equipped_visuals(self):
@@ -145,6 +180,7 @@ class SlimeOverlay(QWidget):
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
+        p.setRenderHint(QPainter.SmoothPixmapTransform)
 
         w = self.width()
         h = self.height()
@@ -154,6 +190,17 @@ class SlimeOverlay(QWidget):
         # Overall opacity
         opacity = 0.95 if self._hover else self._opacity
         p.setOpacity(opacity)
+
+        # Self-portrait avatar mode — when the user picked a portrait
+        # from the album, we skip the procedural body / equipment /
+        # antennae and draw the cutout pixmap with the same breath +
+        # bounce math that drives the procedural slime, so it still
+        # feels alive (single static image, V-tuber-style idle anim).
+        if self._avatar_pixmap is not None:
+            self._paint_avatar(p, w, h, cx, cy)
+            self._paint_bubble(p, w, cx)
+            p.end()
+            return
 
         colors = TIER_COLORS.get(self._form, TIER_COLORS["Slime"])
         tier_index = list(TIER_COLORS.keys()).index(self._form) if self._form in TIER_COLORS else 0
@@ -324,45 +371,93 @@ class SlimeOverlay(QWidget):
             p.drawText(QRect(ax - 7, ay - 7, 14, 14), Qt.AlignCenter, acc["symbol"])
 
         # ── Notification bubble ──
-        if self._bubble_text:
-            p.setOpacity(0.92)
-            bubble_font = QFont("Microsoft JhengHei", 9)
-            p.setFont(bubble_font)
-            fm = p.fontMetrics()
-            text_w = fm.horizontalAdvance(self._bubble_text) + 16
-            text_h = fm.height() + 10
-            bx = cx - text_w // 2
-            by = 2
-
-            # Clamp to not go off-screen left
-            if bx < 2:
-                bx = 2
-            if bx + text_w > w - 2:
-                text_w = w - 4
-                bx = 2
-
-            # Bubble background
-            p.setBrush(QBrush(QColor(20, 25, 40, 220)))
-            p.setPen(QPen(QColor(0, 220, 255, 150), 1))
-            p.drawRoundedRect(QRect(bx, by, text_w, text_h), 8, 8)
-
-            # Bubble text
-            p.setPen(QPen(QColor(230, 235, 245)))
-            p.drawText(QRect(bx + 8, by, text_w - 16, text_h), Qt.AlignCenter, self._bubble_text)
-
-            # Small triangle pointing down
-            p.setBrush(QBrush(QColor(20, 25, 40, 220)))
-            p.setPen(QPen(QColor(0, 220, 255, 150), 1))
-            tri_cx = cx
-            tri_y = by + text_h
-            from PySide6.QtGui import QPolygon
-            p.drawPolygon(QPolygon([
-                QPoint(tri_cx - 5, tri_y),
-                QPoint(tri_cx + 5, tri_y),
-                QPoint(tri_cx, tri_y + 6),
-            ]))
+        self._paint_bubble(p, w, cx)
 
         p.end()
+
+    def _paint_bubble(self, p: QPainter, w: int, cx: int):
+        """Draw the notification bubble at the top of the widget.
+        Shared between the procedural and self-portrait paint paths
+        so the bubble works regardless of which body is rendered."""
+        if not self._bubble_text:
+            return
+        p.setOpacity(0.92)
+        bubble_font = QFont("Microsoft JhengHei", 9)
+        p.setFont(bubble_font)
+        fm = p.fontMetrics()
+        text_w = fm.horizontalAdvance(self._bubble_text) + 16
+        text_h = fm.height() + 10
+        bx = cx - text_w // 2
+        by = 2
+
+        if bx < 2:
+            bx = 2
+        if bx + text_w > w - 2:
+            text_w = w - 4
+            bx = 2
+
+        p.setBrush(QBrush(QColor(20, 25, 40, 220)))
+        p.setPen(QPen(QColor(0, 220, 255, 150), 1))
+        p.drawRoundedRect(QRect(bx, by, text_w, text_h), 8, 8)
+
+        p.setPen(QPen(QColor(230, 235, 245)))
+        p.drawText(QRect(bx + 8, by, text_w - 16, text_h), Qt.AlignCenter, self._bubble_text)
+
+        p.setBrush(QBrush(QColor(20, 25, 40, 220)))
+        p.setPen(QPen(QColor(0, 220, 255, 150), 1))
+        tri_cx = cx
+        tri_y = by + text_h
+        from PySide6.QtGui import QPolygon
+        p.drawPolygon(QPolygon([
+            QPoint(tri_cx - 5, tri_y),
+            QPoint(tri_cx + 5, tri_y),
+            QPoint(tri_cx, tri_y + 6),
+        ]))
+
+    def _paint_avatar(self, p: QPainter, w: int, h: int, cx: int, cy: int):
+        """Draw the user-picked self-portrait with idle breath + bounce
+        animation. Single static image but the subtle Y-bob, X/Y squish,
+        and slight sway make it feel alive (same trick V-tuber PNGs use).
+        """
+        breath = math.sin(self._anim_phase) * 0.04
+        bounce = math.sin(self._anim_phase * 2) * 2.0
+        sway = math.sin(self._anim_phase * 0.7) * 1.2  # degrees
+
+        pix = self._avatar_pixmap
+        # Fit the pixmap to widget size with a little headroom for bounce.
+        target = int(min(w, h) * 0.86)
+        scaled = pix.scaled(
+            target, target,
+            Qt.KeepAspectRatio,
+            Qt.SmoothTransformation,
+        )
+
+        # Soft shadow at the feet — anchors the pixmap to the world so
+        # it doesn't read as floating clipart.
+        p.setBrush(QBrush(QColor(0, 0, 0, 35)))
+        p.setPen(Qt.NoPen)
+        shadow_y = int(cy + scaled.height() * 0.45 + bounce * 0.5)
+        p.drawEllipse(
+            QPoint(cx, shadow_y),
+            int(scaled.width() * 0.32),
+            5,
+        )
+
+        # Per-frame transform: breath = subtle non-uniform scale
+        # (X and Y move opposite directions so it looks like inhaling),
+        # sway = small rotation, bounce = vertical offset.
+        p.save()
+        p.translate(cx, int(cy + bounce))
+        p.rotate(sway)
+        sx = 1.0 + breath
+        sy = 1.0 - breath
+        p.scale(sx, sy)
+        p.drawPixmap(
+            -scaled.width() // 2,
+            -scaled.height() // 2,
+            scaled,
+        )
+        p.restore()
 
     # ── Interaction ──
 
