@@ -676,19 +676,30 @@ class ChatTab(QWidget):
             pass
 
         def _do() -> None:
+            captured: list[str] = []
+
+            class _Capture(logging.Handler):
+                def emit(self, record):
+                    if record.levelno >= logging.INFO:
+                        captured.append(
+                            f"[{record.levelname}] {record.getMessage()}"
+                        )
+
+            handler = _Capture()
+            handler.setLevel(logging.INFO)
+            ap_log = logging.getLogger("sentinel.growth.approval")
+            ap_log.addHandler(handler)
+
             from sentinel.growth import approve
             from sentinel.growth.approval import audit_tail
+            ok = False
             try:
-                ok = approve(approval_id, approver="user_chat")
+                ok = bool(approve(approval_id, approver="user_chat"))
             except Exception as e:
                 log.warning(f"approve({approval_id}) raised: {e}")
-                ok = False
-
-            # Generic result line — always shown.
-            msg = (
-                t("chat_approval_ok").format(id=approval_id)
-                if ok else t("chat_approval_failed").format(id=approval_id)
-            )
+                captured.append(f"[EXCEPTION] {e}")
+            finally:
+                ap_log.removeHandler(handler)
 
             # Rich-result follow-up: fetch the matching "action_result"
             # audit entry and format its meaningful fields. Kept to a
@@ -706,9 +717,23 @@ class ChatTab(QWidget):
                     log.warning(f"audit tail read failed: {e}")
 
             def _update() -> None:
-                self._append_system(msg)
-                for line in extra_lines:
-                    self._append_bot_note(line)
+                if ok:
+                    self._append_system(
+                        t("chat_approval_ok").format(id=approval_id)
+                    )
+                    for line in extra_lines:
+                        self._append_bot_note(line)
+                else:
+                    detail = "\n".join(captured[-8:]) or "（沒有記錄到具體原因）"
+                    box = QMessageBox(self)
+                    box.setIcon(QMessageBox.Warning)
+                    box.setWindowTitle("同意失敗")
+                    box.setText(
+                        f"無法同意 {approval_id} — 卡片可能會繼續顯示。\n"
+                        "原因如下："
+                    )
+                    box.setDetailedText(detail)
+                    box.exec()
                 self._refresh_approval_panel()
             QTimer.singleShot(0, _update)
 
@@ -725,19 +750,55 @@ class ChatTab(QWidget):
         self.chat_display.moveCursor(QTextCursor.End)
 
     def _on_deny_click(self, approval_id: str) -> None:
+        """Reject the proposal. Capture log lines from the approval
+        module during the call so if reject returns False (e.g. file
+        lock on Windows, missing pending file) the user sees the real
+        reason instead of just the card refusing to disappear.
+        """
         def _do() -> None:
-            from sentinel.growth import reject
+            captured: list[str] = []
+
+            class _Capture(logging.Handler):
+                def emit(self, record):
+                    if record.levelno >= logging.INFO:
+                        captured.append(
+                            f"[{record.levelname}] {record.getMessage()}"
+                        )
+
+            handler = _Capture()
+            handler.setLevel(logging.INFO)
+            ap_log = logging.getLogger("sentinel.growth.approval")
+            ap_log.addHandler(handler)
+
+            ok = False
             try:
-                reject(approval_id, reason="denied in chat tab",
-                       approver="user_chat")
+                from sentinel.growth import reject
+                ok = bool(reject(approval_id, reason="denied in chat tab",
+                                 approver="user_chat"))
             except Exception as e:
                 log.warning(f"reject({approval_id}) raised: {e}")
-            QTimer.singleShot(
-                0, lambda: self._append_system(
-                    t("chat_approval_denied").format(id=approval_id)
-                ),
-            )
-            QTimer.singleShot(0, self._refresh_approval_panel)
+                captured.append(f"[EXCEPTION] {e}")
+            finally:
+                ap_log.removeHandler(handler)
+
+            def _ui() -> None:
+                if ok:
+                    self._append_system(
+                        t("chat_approval_denied").format(id=approval_id)
+                    )
+                else:
+                    detail = "\n".join(captured[-8:]) or "（沒有記錄到具體原因）"
+                    box = QMessageBox(self)
+                    box.setIcon(QMessageBox.Warning)
+                    box.setWindowTitle("拒絕失敗")
+                    box.setText(
+                        f"無法拒絕 {approval_id} — 卡片可能會繼續顯示。\n"
+                        "原因如下："
+                    )
+                    box.setDetailedText(detail)
+                    box.exec()
+                self._refresh_approval_panel()
+            QTimer.singleShot(0, _ui)
 
         threading.Thread(target=_do, daemon=True).start()
 
@@ -6743,6 +6804,24 @@ class MainWindow(QMainWindow):
         header_layout.addWidget(self.title_label)
         header_layout.addStretch()
 
+        # Update + restart button — pulls latest main and re-launches.
+        # Without this, every "I shipped a fix" round-trip was: user
+        # alt-tabs, finds the cmd window, closes it, double-clicks
+        # start.bat. With this, one click in-app does the whole thing
+        # so they don't have to leave the app to take updates.
+        self.update_btn = QPushButton("⟳ 更新+重啟")
+        self.update_btn.setToolTip(
+            "拉最新版本 + 重啟 app。\n"
+            "等同於：關掉現在這個 → 跑 git pull → 重新啟動。"
+        )
+        self.update_btn.setStyleSheet(
+            "QPushButton { background-color: #2a2a4a; color: #aaa;"
+            " font-size: 11px; padding: 4px 10px; }"
+            "QPushButton:hover { color: #00dcff; }"
+        )
+        self.update_btn.clicked.connect(self._on_update_and_restart)
+        header_layout.addWidget(self.update_btn)
+
         # Language toggle in header
         self.lang_btn = QPushButton("EN" if get_language() == "zh" else "中")
         self.lang_btn.setFixedWidth(40)
@@ -6981,6 +7060,96 @@ class MainWindow(QMainWindow):
         set_language(new_lang)
         self.lang_btn.setText("EN" if new_lang == "zh" else "中")
         self._retranslate_all()
+
+    def _on_update_and_restart(self):
+        """Pull latest main and re-launch the app in a fresh process.
+
+        Why this exists: every shipped fix used to require the user to
+        manually close the app + double-click start.bat. One in-app
+        button = one click. The new process is spawned in a detached
+        session so it survives this process exiting; we then quit
+        cleanly so the user sees a brief blink instead of two windows.
+
+        If git pull fails (no network / dirty tree / no remote),
+        we still restart — sometimes the user just wants a clean
+        restart without an update. Errors surface in a popup so the
+        user knows what happened.
+        """
+        import subprocess
+        import sys
+        import os
+        from pathlib import Path
+
+        repo_root = Path(__file__).resolve().parent.parent
+        update_summary: list[str] = []
+
+        # Step 1: try to pull latest. Fast-forward only — never rewrite
+        # a dirty working tree from this button.
+        try:
+            fetch = subprocess.run(
+                ["git", "fetch", "--quiet", "origin", "main"],
+                cwd=repo_root, timeout=20,
+                capture_output=True, text=True,
+            )
+            if fetch.returncode != 0:
+                update_summary.append(
+                    f"git fetch 失敗：{fetch.stderr.strip() or '(no stderr)'}"
+                )
+            else:
+                merge = subprocess.run(
+                    ["git", "merge", "--ff-only", "origin/main"],
+                    cwd=repo_root, timeout=20,
+                    capture_output=True, text=True,
+                )
+                if merge.returncode != 0:
+                    update_summary.append(
+                        "git merge --ff-only 失敗（可能本地有未 commit 的改動）"
+                    )
+                else:
+                    out = merge.stdout.strip() or "已是最新"
+                    update_summary.append(f"git: {out.splitlines()[0]}")
+        except subprocess.TimeoutExpired:
+            update_summary.append("git 操作逾時（網路太慢？）")
+        except Exception as e:
+            update_summary.append(f"git 失敗：{e}")
+
+        # Step 2: confirm with user before nuking the current process.
+        # If they hit Cancel they keep what they have without losing
+        # whatever in-progress task this window had.
+        msg = "準備重啟。\n\n" + "\n".join(update_summary)
+        reply = QMessageBox.question(
+            self, "更新 + 重啟", msg + "\n\n要繼續嗎？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        # Step 3: spawn a new instance, detached so it survives our exit.
+        # On Windows we use CREATE_NEW_PROCESS_GROUP + DETACHED_PROCESS;
+        # on POSIX, start_new_session=True does the equivalent.
+        try:
+            kwargs: dict = {"cwd": str(repo_root), "close_fds": True}
+            if os.name == "nt":
+                DETACHED_PROCESS = 0x00000008
+                CREATE_NEW_PROCESS_GROUP = 0x00000200
+                kwargs["creationflags"] = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+            else:
+                kwargs["start_new_session"] = True
+            subprocess.Popen(
+                [sys.executable, "-m", "sentinel"],
+                **kwargs,
+            )
+        except Exception as e:
+            QMessageBox.critical(
+                self, "重啟失敗",
+                f"無法啟動新的 app instance：{e}\n"
+                "請手動雙擊 start.bat。",
+            )
+            return
+
+        # Step 4: bow out. Use QApplication.quit so onClose hooks run.
+        QApplication.quit()
 
     def _setup_tray(self):
         self.tray = QSystemTrayIcon(create_tray_icon(), self)
