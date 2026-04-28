@@ -2,6 +2,7 @@
 import os
 import sys
 import logging
+import traceback
 
 logging.basicConfig(
     level=logging.INFO,
@@ -10,6 +11,21 @@ logging.basicConfig(
 )
 
 print("[AI Slime] Starting...", flush=True)
+
+
+def _print_fatal_and_pause(stage: str, exc: BaseException) -> None:
+    """If anything raises during early startup before run_gui's own
+    try/except can show a popup, print to stdout and pause so the user
+    actually sees what blew up — not just '=== Program exited with
+    error ===' followed by a closing console.
+    """
+    print(f"[AI Slime] FATAL during {stage}: {type(exc).__name__}: {exc}",
+          flush=True)
+    traceback.print_exc()
+    try:
+        input("Press Enter to exit...")
+    except EOFError:
+        pass
 
 
 def _kill_zombie_sentinels() -> None:
@@ -73,20 +89,37 @@ def _kill_zombie_sentinels() -> None:
         time.sleep(0.5)
 
 
-_kill_zombie_sentinels()
+# Zombie kill is opt-in via env var while we figure out why some
+# Windows setups exit silently right after `p.kill()` — possibly a
+# job-object association we don't understand yet. Without the env var
+# we just skip and let start.bat's powershell kill handle stale
+# instances (which has been working fine).
+if os.environ.get("SLIME_KILL_ZOMBIES") == "1":
+    try:
+        _kill_zombie_sentinels()
+    except BaseException as e:
+        _print_fatal_and_pause("zombie scan", e)
+        sys.exit(1)
+else:
+    print("[AI Slime] zombie scan: skipped (opt-in via SLIME_KILL_ZOMBIES=1)",
+          flush=True)
 
+
+print("[AI Slime] After zombie phase, sys.argv:", sys.argv, flush=True)
 
 if "--no-gui" in sys.argv:
-    from sentinel.daemon import main
-    main()
+    try:
+        from sentinel.daemon import main
+        main()
+    except BaseException as e:
+        _print_fatal_and_pause("daemon main", e)
+        sys.exit(1)
 else:
     print("[AI Slime] Importing GUI...", flush=True)
     try:
         from sentinel.gui import run_gui
         print("[AI Slime] GUI imported, launching...", flush=True)
         run_gui()
-    except Exception as e:
-        print(f"[AI Slime] FATAL ERROR: {e}", flush=True)
-        import traceback
-        traceback.print_exc()
-        input("Press Enter to exit...")
+    except BaseException as e:
+        _print_fatal_and_pause("gui", e)
+        sys.exit(1)
