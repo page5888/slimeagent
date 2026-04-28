@@ -23,22 +23,13 @@ import shutil
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
 from PIL import Image
 
 log = logging.getLogger("sentinel.avatar")
 
 AVATAR_DIR = Path.home() / ".hermes" / "avatar"
 SETTINGS_FILE = Path.home() / ".hermes" / "sentinel_settings.json"
-
-
-def _avg_color(img: Image.Image, box: tuple[int, int, int, int]) -> tuple[int, int, int]:
-    region = img.crop(box).convert("RGB")
-    pixels = list(region.getdata())
-    n = len(pixels)
-    r = sum(p[0] for p in pixels) // n
-    g = sum(p[1] for p in pixels) // n
-    b = sum(p[2] for p in pixels) // n
-    return (r, g, b)
 
 
 def remove_background_color_key(
@@ -48,13 +39,22 @@ def remove_background_color_key(
     sample_size: int = 12,
     inner: float = 28.0,
     outer: float = 60.0,
+    max_dimension: int = 512,
 ) -> bool:
     """Color-key bg removal. Returns True on success.
 
     inner / outer are RGB-distance thresholds. Pixels within `inner` of
     the estimated background are fully transparent; pixels beyond `outer`
     are fully opaque; in between we ramp linearly so edges feel soft
-    instead of stenciled.
+    instead of stenciled. The whole pass is vectorised in numpy so
+    even a 2K-square image takes <1s — pure-Python pixel loops were
+    taking 30+ seconds on real LLM-generated portraits.
+
+    `max_dimension` downscales the source before processing. The overlay
+    only ever displays this image at ~120px, so doing the per-pixel
+    distance calc at the source resolution is wasted work; capping at
+    512 keeps the cutout sharp enough at any reasonable overlay size
+    while making the bg removal effectively instant.
     """
     try:
         img = Image.open(src).convert("RGBA")
@@ -62,37 +62,43 @@ def remove_background_color_key(
         log.warning(f"avatar: open failed for {src}: {e}")
         return False
 
-    w, h = img.size
-    s = max(4, min(sample_size, w // 4, h // 4))
-    corners = [
-        _avg_color(img, (0, 0, s, s)),
-        _avg_color(img, (w - s, 0, w, s)),
-        _avg_color(img, (0, h - s, s, h)),
-        _avg_color(img, (w - s, h - s, w, h)),
-    ]
-    bg_r = sum(c[0] for c in corners) // 4
-    bg_g = sum(c[1] for c in corners) // 4
-    bg_b = sum(c[2] for c in corners) // 4
-    log.info(f"avatar: bg color estimate rgb({bg_r},{bg_g},{bg_b}) from {src.name}")
+    # Downscale large images. The overlay renders at ~120×120 and even
+    # at 4× DPI we don't need the source 1024+ resolution.
+    if max(img.size) > max_dimension:
+        ratio = max_dimension / max(img.size)
+        new_size = (int(img.size[0] * ratio), int(img.size[1] * ratio))
+        img = img.resize(new_size, Image.LANCZOS)
+        log.info(f"avatar: downscaled to {new_size} for bg removal")
 
-    # Walk pixels once, replace alpha by distance ramp.
-    px = img.load()
+    arr = np.array(img, dtype=np.int16)  # int16 for safe subtract
+    h, w = arr.shape[:2]
+
+    # Sample the four corners; clamp the box if the image is small.
+    s = max(4, min(sample_size, w // 4, h // 4))
+    corner_boxes = [
+        arr[0:s, 0:s, :3],
+        arr[0:s, w - s:w, :3],
+        arr[h - s:h, 0:s, :3],
+        arr[h - s:h, w - s:w, :3],
+    ]
+    bg = np.mean(np.concatenate([c.reshape(-1, 3) for c in corner_boxes]), axis=0)
+    log.info(f"avatar: bg color estimate rgb({bg[0]:.0f},{bg[1]:.0f},{bg[2]:.0f}) from {src.name}")
+
+    # Vectorised distance + alpha ramp.
+    rgb = arr[..., :3].astype(np.float32)
+    diff = rgb - bg
+    dist = np.sqrt(np.sum(diff * diff, axis=-1))
+
     span = max(1.0, outer - inner)
-    for y in range(h):
-        for x in range(w):
-            r, g, b, a = px[x, y]
-            d = ((r - bg_r) ** 2 + (g - bg_g) ** 2 + (b - bg_b) ** 2) ** 0.5
-            if d <= inner:
-                px[x, y] = (r, g, b, 0)
-            elif d >= outer:
-                px[x, y] = (r, g, b, a)
-            else:
-                ramp = (d - inner) / span
-                px[x, y] = (r, g, b, int(a * ramp))
+    ramp = np.clip((dist - inner) / span, 0.0, 1.0)
+    new_alpha = (arr[..., 3].astype(np.float32) * ramp).astype(np.uint8)
+
+    out = arr.astype(np.uint8)
+    out[..., 3] = new_alpha
 
     try:
         dst.parent.mkdir(parents=True, exist_ok=True)
-        img.save(dst, "PNG")
+        Image.fromarray(out, mode="RGBA").save(dst, "PNG")
     except Exception as e:
         log.warning(f"avatar: save failed for {dst}: {e}")
         return False
