@@ -628,11 +628,8 @@ class ChatTab(QWidget):
             " padding:6px 16px; border:1px solid #444; border-radius:12px;"
             " font-size:12px; }"
             "QPushButton:hover { color:#cc6b63; border-color:#cc6b63; }"
+            "QPushButton:disabled { color:#555; border-color:#333; }"
         )
-        deny_btn.clicked.connect(
-            lambda _checked, aid=p.id: self._on_deny_click(aid)
-        )
-        btn_row.addWidget(deny_btn)
 
         approve_btn = QPushButton(t("chat_approval_approve"))
         approve_btn.setCursor(Qt.PointingHandCursor)
@@ -641,10 +638,32 @@ class ChatTab(QWidget):
             " padding:6px 18px; border:none; border-radius:12px;"
             " font-size:12px; }"
             "QPushButton:hover { background:#ffdc88; }"
+            "QPushButton:disabled { background:#665a3a; color:#999; }"
         )
-        approve_btn.clicked.connect(
-            lambda _checked, aid=p.id: self._on_approve_click(aid)
-        )
+
+        # Connect with the immediate-feedback wrappers below so the
+        # user sees the button visually flip the moment the click
+        # registers — previous version went straight to the worker
+        # thread, so if anything went wrong before _ui ran (or if
+        # the click never actually reached the handler) the user
+        # had zero signal that anything happened.
+        def _on_deny_clicked(_checked, aid=p.id, db=deny_btn, ab=approve_btn):
+            log.info("approval card deny clicked: %s", aid)
+            db.setEnabled(False)
+            ab.setEnabled(False)
+            db.setText("拒絕中…")
+            self._on_deny_click(aid)
+
+        def _on_approve_clicked(_checked, aid=p.id, db=deny_btn, ab=approve_btn):
+            log.info("approval card approve clicked: %s", aid)
+            db.setEnabled(False)
+            ab.setEnabled(False)
+            ab.setText("執行中…")
+            self._on_approve_click(aid)
+
+        deny_btn.clicked.connect(_on_deny_clicked)
+        btn_row.addWidget(deny_btn)
+        approve_btn.clicked.connect(_on_approve_clicked)
         btn_row.addWidget(approve_btn)
 
         v.addLayout(btn_row)
