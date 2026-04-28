@@ -906,9 +906,21 @@ class AlbumDialog(QDialog):
             )
             v.addWidget(cap)
 
-        # Reactions + share row. Share goes left (primary action when
-        # user wants to show off the drawing), reactions stay right.
+        # Reactions + actions row. Avatar pick + Threads share on the
+        # left (primary "do something with this drawing" actions),
+        # reactions on the right.
         rxn_row = QHBoxLayout()
+
+        avatar_btn = QPushButton("設成桌面浮窗")
+        avatar_btn.setCursor(Qt.PointingHandCursor)
+        avatar_btn.setStyleSheet(_tk.btn_ghost())
+        avatar_btn.setToolTip(
+            "把這張畫去背後當成桌面小浮窗。\n背景單純的圖效果最好。"
+        )
+        avatar_btn.clicked.connect(
+            lambda _checked, e=exp: self._on_set_as_avatar(e)
+        )
+        rxn_row.addWidget(avatar_btn)
 
         share_btn = QPushButton("分享到 Threads")
         share_btn.setCursor(Qt.PointingHandCursor)
@@ -948,6 +960,70 @@ class AlbumDialog(QDialog):
             log.warning(f"reaction save failed: {e}")
             return
         self._refresh()
+
+    def _on_set_as_avatar(self, exp) -> None:
+        """Cut out the background of this expression and use it as the
+        desktop overlay's avatar. Runs the bg removal off-thread because
+        the per-pixel pass on a 512×512 image takes ~1s and we don't
+        want the dialog to freeze.
+        """
+        src = exp.absolute_image_path
+        if not src.exists():
+            QMessageBox.warning(
+                self, "設成桌面浮窗",
+                f"找不到原圖：{src}",
+            )
+            return
+
+        # Find the live overlay so we can refresh it without restart.
+        # Walk up from this dialog's parent (ChatTab) to its top-level
+        # window, which is the MainWindow that owns self.overlay.
+        overlay = None
+        try:
+            parent = self.parent()
+            top = parent.window() if parent is not None else None
+            overlay = getattr(top, "overlay", None)
+        except Exception as e:
+            log.warning(f"avatar: couldn't find live overlay: {e}")
+
+        # Disable button-ish UX hint by showing a brief modal feedback.
+        # The bg-removal pass is sync-light enough to run inline, but
+        # putting it on a thread keeps the dialog responsive on slower
+        # machines.
+        progress = QMessageBox(self)
+        progress.setIcon(QMessageBox.Information)
+        progress.setWindowTitle("設成桌面浮窗")
+        progress.setText("正在去背…")
+        progress.setStandardButtons(QMessageBox.NoButton)
+        progress.show()
+        QApplication.processEvents()
+
+        def _do() -> None:
+            from sentinel import avatar as _avatar
+            cutout = _avatar.make_avatar_from_expression(exp.id, src)
+
+            def _ui() -> None:
+                progress.close()
+                if cutout is None:
+                    QMessageBox.warning(
+                        self, "設成桌面浮窗",
+                        "去背失敗了。可以再試一次或挑另一張。",
+                    )
+                    return
+                _avatar.set_avatar_override(cutout)
+                if overlay is not None:
+                    try:
+                        overlay.set_avatar(str(cutout))
+                    except Exception as e:
+                        log.warning(f"avatar: overlay live-reload failed: {e}")
+                QMessageBox.information(
+                    self, "設成桌面浮窗",
+                    "已設成桌面浮窗 ✨\n"
+                    "如果背景複雜導致邊緣怪怪的，挑另一張背景比較單純的會更好。",
+                )
+            QTimer.singleShot(0, _ui)
+
+        threading.Thread(target=_do, daemon=True).start()
 
     def _on_share_threads(self, exp) -> None:
         """Copy image to clipboard, open Threads compose page with caption.
