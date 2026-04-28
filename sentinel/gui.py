@@ -887,8 +887,18 @@ class AlbumDialog(QDialog):
             )
             v.addWidget(cap)
 
-        # Reactions row.
+        # Reactions + share row. Share goes left (primary action when
+        # user wants to show off the drawing), reactions stay right.
         rxn_row = QHBoxLayout()
+
+        share_btn = QPushButton("分享到 Threads")
+        share_btn.setCursor(Qt.PointingHandCursor)
+        share_btn.setStyleSheet(_tk.btn_ghost())
+        share_btn.clicked.connect(
+            lambda _checked, e=exp: self._on_share_threads(e)
+        )
+        rxn_row.addWidget(share_btn)
+
         rxn_row.addStretch()
         for kind, emoji in (
             (Reaction.LOVE, "❤"),
@@ -920,32 +930,118 @@ class AlbumDialog(QDialog):
             return
         self._refresh()
 
+    def _on_share_threads(self, exp) -> None:
+        """Copy image to clipboard, open Threads compose page with caption.
+
+        Threads has no public API for posting from a third-party desktop
+        app without going through Meta app review. The next-best UX:
+        put the image one Ctrl+V away and pre-fill the caption — same
+        pattern Steam / OBS / most desktop apps use for social sharing.
+        """
+        import webbrowser
+        from urllib.parse import quote
+        from PySide6.QtGui import QPixmap
+        from PySide6.QtWidgets import QApplication
+
+        img_ok = False
+        try:
+            pix = QPixmap(str(exp.absolute_image_path))
+            if not pix.isNull():
+                QApplication.clipboard().setPixmap(pix)
+                img_ok = True
+            else:
+                log.warning(f"share: pixmap null for {exp.absolute_image_path}")
+        except Exception as e:
+            log.warning(f"share: clipboard copy failed: {e}")
+
+        caption = (exp.caption or "").strip()
+        url = f"https://www.threads.net/intent/post?text={quote(caption)}"
+        try:
+            webbrowser.open(url)
+        except Exception as e:
+            log.warning(f"share: webbrowser.open failed: {e}")
+            QMessageBox.warning(
+                self, "分享到 Threads",
+                f"無法開啟瀏覽器：{e}\n"
+                f"請手動到 https://www.threads.net 發文，\n"
+                f"圖片在：{exp.absolute_image_path}",
+            )
+            return
+
+        if img_ok:
+            QMessageBox.information(
+                self, "分享到 Threads",
+                "圖片已複製到剪貼簿，Threads 撰寫頁已開啟。\n\n"
+                "在貼文框按 Ctrl+V 貼上圖片，再發布即可。",
+            )
+        else:
+            QMessageBox.warning(
+                self, "分享到 Threads",
+                "圖片複製到剪貼簿失敗，但 Threads 撰寫頁已開啟。\n\n"
+                f"請手動附加：\n{exp.absolute_image_path}",
+            )
+
     def _on_draw_request(self) -> None:
         """User explicitly asked Slime to draw. Slime might draw, but
         also might decline (the cooldown / quality gate could refuse).
         Run off-thread so the LLM + image API call doesn't freeze
-        the dialog."""
+        the dialog.
+
+        On failure we surface the actual reason inline — the generator
+        emits warnings like "no Gemini API key configured" / "key
+        quota exhausted" / "all N key attempts exhausted", and the
+        user shouldn't have to crack open ~/.hermes/sentinel.log to
+        find them. We attach a temporary in-memory log handler scoped
+        to the expression-gen loggers, then show the captured lines
+        in the popup if no image came back.
+        """
         self.draw_btn.setEnabled(False)
         self.draw_btn.setText("史萊姆思考中…")
 
         def _do():
+            captured: list[str] = []
+
+            class _Capture(logging.Handler):
+                def emit(self, record):
+                    if record.levelno >= logging.INFO:
+                        captured.append(
+                            f"[{record.levelname}] {record.getMessage()}"
+                        )
+
+            handler = _Capture()
+            handler.setLevel(logging.INFO)
+            targets = [
+                logging.getLogger("sentinel.expression.generator"),
+                logging.getLogger("sentinel.expression.prompts"),
+            ]
+            for t_log in targets:
+                t_log.addHandler(handler)
+
             try:
                 from sentinel.expression.generator import generate_expression
-                exp = generate_expression()  # Slime picks kind
+                exp = generate_expression()
             except Exception as e:
                 log.warning(f"manual expression gen failed: {e}")
+                captured.append(f"[EXCEPTION] {e}")
                 exp = None
+            finally:
+                for t_log in targets:
+                    t_log.removeHandler(handler)
 
             def _ui():
                 self.draw_btn.setEnabled(True)
                 self.draw_btn.setText("請史萊姆畫一張")
                 if exp is None:
-                    QMessageBox.information(
-                        self, "AI Slime",
-                        "史萊姆說現在還想不到要畫什麼。\n"
-                        "可能 Gemini API key 沒設定，\n"
-                        "或是它今天比較想休息。",
-                    )
+                    # Show last ~12 captured lines so the popup stays
+                    # readable but the dominant failure mode (3 models
+                    # × N keys × 2 providers worst-case) still fits.
+                    detail = "\n".join(captured[-12:]) or "（沒有記錄到具體原因）"
+                    box = QMessageBox(self)
+                    box.setIcon(QMessageBox.Information)
+                    box.setWindowTitle("AI Slime — 沒畫成")
+                    box.setText("史萊姆這次沒畫成。原因如下：")
+                    box.setDetailedText(detail)
+                    box.exec()
                 else:
                     self._refresh()
             QTimer.singleShot(0, _ui)
