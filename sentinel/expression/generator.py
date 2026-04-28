@@ -46,14 +46,20 @@ log = logging.getLogger("sentinel.expression.generator")
 
 
 def _generate_image_gemini(prompt_text: str, image_path: Path) -> tuple[bool, str]:
-    """Call Gemini Imagen API. Returns (success, model_name).
+    """Call Gemini image generation API. Returns (success, model_name).
 
-    We use the new `google.genai` SDK first (Imagen 3), fall back to
-    the older `google.generativeai` SDK if needed. Some accounts only
-    have one or the other depending on when they enrolled.
+    Strategy ordering picks the cheapest free-tier eligible model
+    first so a typical user with no billing gets results. We probed
+    the API live (2026-04-28) — `imagen-3.0-generate-002` returns
+    404, `imagen-4.0-*` requires paid plan. The free-tier path is
+    the gemini-flash-image family via generateContent with IMAGE in
+    response_modalities.
+
+    Failure modes surfaced explicitly via log.warning so the operator
+    can see *why* it didn't draw (rate limit / no key / SDK missing)
+    instead of just "all strategies failed".
     """
-    # Try to read API key from sentinel config the same way the rest
-    # of the project does.
+    # Read Gemini key from saved provider config.
     try:
         from sentinel import config
         api_key = None
@@ -62,52 +68,107 @@ def _generate_image_gemini(prompt_text: str, image_path: Path) -> tuple[bool, st
                 api_key = p["api_key"]
                 break
         if not api_key:
-            log.info("no Gemini API key configured — image generation disabled")
+            log.warning("expression: no Gemini API key configured")
             return False, ""
     except Exception as e:
-        log.warning("could not read Gemini key: %s", e)
+        log.warning("expression: could not read Gemini key: %s", e)
         return False, ""
 
-    # Strategy 1: new google.genai SDK (Imagen 3)
+    # Models to try in priority order. First success wins.
+    # gemini-2.5-flash-image is the most stable free-tier option.
+    # gemini-3.1-flash-image-preview is newer but preview-tier.
+    # imagen-4.0-fast-generate-001 is paid (~$0.02/image) — last resort.
+    candidates = [
+        ("gemini-2.5-flash-image",          "generate_content"),
+        ("gemini-3.1-flash-image-preview",  "generate_content"),
+        ("imagen-4.0-fast-generate-001",    "generate_images"),  # paid
+    ]
+
     try:
-        from google import genai as _genai_new
-        client = _genai_new.Client(api_key=api_key)
-        result = client.models.generate_images(
-            model="imagen-3.0-generate-002",
-            prompt=prompt_text,
-            config={"number_of_images": 1, "aspect_ratio": "1:1"},
+        from google import genai as _genai
+        from google.genai import types as _types
+    except ImportError:
+        log.warning(
+            "expression: `google.genai` not installed — "
+            "run `pip install google-genai` in venv"
         )
-        if result.generated_images:
-            img = result.generated_images[0]
-            # Different SDK versions expose the bytes differently.
-            blob = (
-                getattr(img, "image", None)
-                or getattr(img, "image_bytes", None)
-            )
-            if blob and hasattr(blob, "image_bytes"):
-                blob = blob.image_bytes
-            if isinstance(blob, bytes):
-                image_path.write_bytes(blob)
-                return True, "imagen-3.0-generate-002"
-    except Exception as e:
-        log.debug("new genai SDK image gen failed: %s", e)
+        return False, ""
 
-    # Strategy 2: older google.generativeai SDK
-    try:
-        import google.generativeai as _genai_old
-        _genai_old.configure(api_key=api_key)
-        model = _genai_old.GenerativeModel("imagen-3.0-generate-002")
-        response = model.generate_content(prompt_text)
-        # The older SDK's image API surfaces vary by version; we
-        # attempt the most common path. If this fails the caller will
-        # see "no image" and fall through gracefully.
-        if hasattr(response, "image") and response.image:
-            image_path.write_bytes(response.image)
-            return True, "imagen-3.0-generate-002 (legacy SDK)"
-    except Exception as e:
-        log.debug("legacy genai SDK image gen failed: %s", e)
+    client = _genai.Client(api_key=api_key)
 
-    log.warning("all image-gen strategies failed for prompt %r", prompt_text[:50])
+    for model_name, method in candidates:
+        try:
+            if method == "generate_content":
+                # Gemini-flash-image: text-conditioned image gen via
+                # generate_content with IMAGE in response_modalities.
+                result = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt_text,
+                    config=_types.GenerateContentConfig(
+                        response_modalities=["IMAGE", "TEXT"],
+                    ),
+                )
+                # Walk candidates → parts; the image bytes live under
+                # parts[i].inline_data.data with mime_type='image/png'.
+                for cand in (result.candidates or []):
+                    for part in (cand.content.parts or []):
+                        inline = getattr(part, "inline_data", None)
+                        if inline and getattr(inline, "data", None):
+                            image_path.write_bytes(inline.data)
+                            log.info("expression: image saved via %s", model_name)
+                            return True, model_name
+
+            elif method == "generate_images":
+                # Imagen path (paid). Different return shape: result
+                # has .generated_images with .image.image_bytes.
+                result = client.models.generate_images(
+                    model=model_name,
+                    prompt=prompt_text,
+                    config={"number_of_images": 1, "aspect_ratio": "1:1"},
+                )
+                if result.generated_images:
+                    img_obj = result.generated_images[0]
+                    inner = getattr(img_obj, "image", None)
+                    blob = getattr(inner, "image_bytes", None) if inner else None
+                    if isinstance(blob, bytes):
+                        image_path.write_bytes(blob)
+                        log.info("expression: image saved via %s", model_name)
+                        return True, model_name
+
+        except Exception as e:
+            # Surface the reason. 429 = rate limit, 400 = paid plan
+            # required, 404 = model retired. Log as warning so the
+            # operator sees it; we still try the next candidate.
+            err_str = str(e)
+            short = err_str[:240]
+            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                log.warning(
+                    "expression: %s — daily/per-minute quota exhausted. "
+                    "Free tier resets at 00:00 PT. Detail: %s",
+                    model_name, short,
+                )
+            elif "INVALID_ARGUMENT" in err_str and "paid" in err_str.lower():
+                log.warning(
+                    "expression: %s requires paid plan — skipping. Detail: %s",
+                    model_name, short,
+                )
+            elif "NOT_FOUND" in err_str or "404" in err_str:
+                log.warning(
+                    "expression: %s not available on this API version. "
+                    "Detail: %s",
+                    model_name, short,
+                )
+            else:
+                log.warning(
+                    "expression: %s call failed: %s",
+                    model_name, short,
+                )
+            continue
+
+    log.warning(
+        "expression: all candidates exhausted — no image produced. "
+        "If you saw 429s above, try again tomorrow (daily quota)."
+    )
     return False, ""
 
 
