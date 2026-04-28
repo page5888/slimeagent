@@ -40,15 +40,22 @@ def remove_background_color_key(
     inner: float = 28.0,
     outer: float = 60.0,
     max_dimension: int = 512,
-) -> bool:
-    """Color-key bg removal. Returns True on success.
+) -> dict:
+    """Color-key bg removal.
+
+    Returns a dict {ok, transparent_ratio, bg_rgb}. `ok` is True if the
+    file was written; `transparent_ratio` is the fraction of pixels
+    that ended up fully (or near-fully) transparent — the caller uses
+    this to detect the "ran without raising but did nothing useful"
+    case (e.g. subject touches all four corners → bg estimate samples
+    the subject → ramp leaves nearly everything opaque). Old API used
+    to return just bool, which hid this failure mode.
 
     inner / outer are RGB-distance thresholds. Pixels within `inner` of
     the estimated background are fully transparent; pixels beyond `outer`
     are fully opaque; in between we ramp linearly so edges feel soft
     instead of stenciled. The whole pass is vectorised in numpy so
-    even a 2K-square image takes <1s — pure-Python pixel loops were
-    taking 30+ seconds on real LLM-generated portraits.
+    even a 2K-square image takes <1s.
 
     `max_dimension` downscales the source before processing. The overlay
     only ever displays this image at ~120px, so doing the per-pixel
@@ -56,24 +63,22 @@ def remove_background_color_key(
     512 keeps the cutout sharp enough at any reasonable overlay size
     while making the bg removal effectively instant.
     """
+    info: dict = {"ok": False, "transparent_ratio": 0.0, "bg_rgb": None}
     try:
         img = Image.open(src).convert("RGBA")
     except Exception as e:
         log.warning(f"avatar: open failed for {src}: {e}")
-        return False
+        return info
 
-    # Downscale large images. The overlay renders at ~120×120 and even
-    # at 4× DPI we don't need the source 1024+ resolution.
     if max(img.size) > max_dimension:
         ratio = max_dimension / max(img.size)
         new_size = (int(img.size[0] * ratio), int(img.size[1] * ratio))
         img = img.resize(new_size, Image.LANCZOS)
         log.info(f"avatar: downscaled to {new_size} for bg removal")
 
-    arr = np.array(img, dtype=np.int16)  # int16 for safe subtract
+    arr = np.array(img, dtype=np.int16)
     h, w = arr.shape[:2]
 
-    # Sample the four corners; clamp the box if the image is small.
     s = max(4, min(sample_size, w // 4, h // 4))
     corner_boxes = [
         arr[0:s, 0:s, :3],
@@ -82,9 +87,12 @@ def remove_background_color_key(
         arr[h - s:h, w - s:w, :3],
     ]
     bg = np.mean(np.concatenate([c.reshape(-1, 3) for c in corner_boxes]), axis=0)
-    log.info(f"avatar: bg color estimate rgb({bg[0]:.0f},{bg[1]:.0f},{bg[2]:.0f}) from {src.name}")
+    info["bg_rgb"] = (int(bg[0]), int(bg[1]), int(bg[2]))
+    log.info(
+        f"avatar: bg color estimate rgb({bg[0]:.0f},{bg[1]:.0f},{bg[2]:.0f}) "
+        f"from {src.name}"
+    )
 
-    # Vectorised distance + alpha ramp.
     rgb = arr[..., :3].astype(np.float32)
     diff = rgb - bg
     dist = np.sqrt(np.sum(diff * diff, axis=-1))
@@ -96,35 +104,58 @@ def remove_background_color_key(
     out = arr.astype(np.uint8)
     out[..., 3] = new_alpha
 
+    transparent_ratio = float(np.mean(new_alpha < 32))
+    info["transparent_ratio"] = transparent_ratio
+    log.info(f"avatar: transparent_ratio={transparent_ratio:.3f}")
+
     try:
         dst.parent.mkdir(parents=True, exist_ok=True)
         Image.fromarray(out, mode="RGBA").save(dst, "PNG")
     except Exception as e:
         log.warning(f"avatar: save failed for {dst}: {e}")
-        return False
+        return info
     log.info(f"avatar: cutout saved to {dst}")
-    return True
+    info["ok"] = True
+    return info
 
 
-def make_avatar_from_expression(expression_id: str, source_image: Path) -> Optional[Path]:
+def make_avatar_from_expression(
+    expression_id: str, source_image: Path,
+) -> tuple[Optional[Path], dict]:
     """Run bg removal on `source_image` and write the cutout under
-    AVATAR_DIR keyed by expression_id. Returns the cutout path on
-    success, None on failure.
+    AVATAR_DIR keyed by expression_id.
+
+    Returns (path, info). `path` is the cutout on success, None on hard
+    failure. `info` carries diagnostic fields so the GUI layer can tell
+    the user *why* the result might look wrong (`bg_removed` flag and
+    `transparent_ratio`) — previous bool API hid the case where bg
+    removal "succeeded" but produced an essentially unchanged image.
+
+    Heuristic: if <5% of pixels became transparent, we treat bg removal
+    as ineffective. Cutout is still written so the user has something,
+    but `bg_removed` is False so the GUI can warn instead of celebrate.
     """
     AVATAR_DIR.mkdir(parents=True, exist_ok=True)
     dst = AVATAR_DIR / f"{expression_id}.png"
-    if remove_background_color_key(source_image, dst):
-        return dst
-    # Fallback: copy original (no transparency) so the user at least
-    # gets the image as their avatar even if bg removal fails — better
-    # than silent no-op.
+    info = remove_background_color_key(source_image, dst)
+
+    if info.get("ok"):
+        info["bg_removed"] = info["transparent_ratio"] >= 0.05
+        return dst, info
+
+    # Hard failure (open/save raised). Fall back to copying the raw
+    # source so the user at least gets the image as their avatar.
     try:
         shutil.copyfile(source_image, dst)
         log.info(f"avatar: bg removal failed, copied raw {source_image} → {dst}")
-        return dst
+        info["ok"] = True
+        info["bg_removed"] = False
+        info["fallback_copied_raw"] = True
+        return dst, info
     except Exception as e:
         log.warning(f"avatar: fallback copy failed: {e}")
-        return None
+        info["fallback_error"] = str(e)
+        return None, info
 
 
 def set_avatar_override(path: Optional[Path]) -> None:
