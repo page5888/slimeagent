@@ -1024,10 +1024,26 @@ class AlbumDialog(QDialog):
 
     def _on_set_as_avatar(self, exp) -> None:
         """Cut out the background of this expression and use it as the
-        desktop overlay's avatar. Runs the bg removal off-thread because
-        the per-pixel pass on a 512×512 image takes ~1s and we don't
-        want the dialog to freeze.
+        desktop overlay's avatar.
+
+        Why this is structured the way it is: previous version used a
+        QMessageBox with NoButton as a "spinner". When the worker thread
+        raised (numpy missing, PIL open failure, disk perms…) the dialog
+        had no way to close — app appeared frozen on "正在去背…". Now:
+
+          1. QProgressDialog gives the user a Cancel button so they can
+             always escape, even if the worker dies.
+          2. Worker is wrapped in try/except + a log capture handler
+             scoped to sentinel.avatar, so any failure (import / bg
+             removal / save) is surfaced via setDetailedText instead of
+             vanishing into the daemon thread.
+          3. avatar.make_avatar_from_expression now returns a tuple
+             (path, info) so we can detect the "ran without raising
+             but bg removal didn't actually do anything" case and warn
+             the user instead of silently celebrating.
         """
+        from PySide6.QtWidgets import QProgressDialog
+
         src = exp.absolute_image_path
         if not src.exists():
             QMessageBox.warning(
@@ -1037,8 +1053,6 @@ class AlbumDialog(QDialog):
             return
 
         # Find the live overlay so we can refresh it without restart.
-        # Walk up from this dialog's parent (ChatTab) to its top-level
-        # window, which is the MainWindow that owns self.overlay.
         overlay = None
         try:
             parent = self.parent()
@@ -1047,41 +1061,88 @@ class AlbumDialog(QDialog):
         except Exception as e:
             log.warning(f"avatar: couldn't find live overlay: {e}")
 
-        # Disable button-ish UX hint by showing a brief modal feedback.
-        # The bg-removal pass is sync-light enough to run inline, but
-        # putting it on a thread keeps the dialog responsive on slower
-        # machines.
-        progress = QMessageBox(self)
-        progress.setIcon(QMessageBox.Information)
+        progress = QProgressDialog("正在去背…", "取消", 0, 0, self)
         progress.setWindowTitle("設成桌面浮窗")
-        progress.setText("正在去背…")
-        progress.setStandardButtons(QMessageBox.NoButton)
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setAutoClose(False)
+        progress.setAutoReset(False)
         progress.show()
-        QApplication.processEvents()
 
         def _do() -> None:
-            from sentinel import avatar as _avatar
-            cutout = _avatar.make_avatar_from_expression(exp.id, src)
+            captured: list[str] = []
+
+            class _Capture(logging.Handler):
+                def emit(self, record):
+                    if record.levelno >= logging.INFO:
+                        captured.append(
+                            f"[{record.levelname}] {record.getMessage()}"
+                        )
+
+            handler = _Capture()
+            handler.setLevel(logging.INFO)
+            ap_log = logging.getLogger("sentinel.avatar")
+            ap_log.addHandler(handler)
+
+            cutout = None
+            info: dict = {}
+            error: Exception | None = None
+            try:
+                from sentinel import avatar as _avatar
+                cutout, info = _avatar.make_avatar_from_expression(exp.id, src)
+            except Exception as e:
+                log.warning(f"avatar: worker raised: {e}", exc_info=True)
+                error = e
+                captured.append(f"[EXCEPTION] {type(e).__name__}: {e}")
+            finally:
+                ap_log.removeHandler(handler)
 
             def _ui() -> None:
                 progress.close()
-                if cutout is None:
-                    QMessageBox.warning(
-                        self, "設成桌面浮窗",
-                        "去背失敗了。可以再試一次或挑另一張。",
+                detail = "\n".join(captured[-12:]) or "（沒有記錄到具體原因）"
+
+                if error is not None or cutout is None:
+                    box = QMessageBox(self)
+                    box.setIcon(QMessageBox.Warning)
+                    box.setWindowTitle("設成桌面浮窗")
+                    box.setText(
+                        "去背失敗了。可以再試一次或挑另一張背景單純的圖。"
                     )
+                    box.setDetailedText(detail)
+                    box.exec()
                     return
+
+                from sentinel import avatar as _avatar
                 _avatar.set_avatar_override(cutout)
                 if overlay is not None:
                     try:
                         overlay.set_avatar(str(cutout))
                     except Exception as e:
                         log.warning(f"avatar: overlay live-reload failed: {e}")
-                QMessageBox.information(
-                    self, "設成桌面浮窗",
-                    "已設成桌面浮窗 ✨\n"
-                    "如果背景複雜導致邊緣怪怪的，挑另一張背景比較單純的會更好。",
-                )
+
+                # If bg removal ran but barely changed anything, warn
+                # the user explicitly instead of celebrating — they'd
+                # otherwise see "已設成 ✨" and wonder why the overlay
+                # has the original square background.
+                ratio = info.get("transparent_ratio", 0.0)
+                if info.get("bg_removed") is False:
+                    box = QMessageBox(self)
+                    box.setIcon(QMessageBox.Warning)
+                    box.setWindowTitle("設成桌面浮窗")
+                    box.setText(
+                        "已設成 — 但這張背景太複雜，去背幾乎沒效果。\n"
+                        f"（只有 {ratio*100:.1f}% 的像素被判為背景）\n\n"
+                        "建議挑一張背景比較單純的（純色 / 簡單漸層）。"
+                    )
+                    box.setDetailedText(detail)
+                    box.exec()
+                else:
+                    QMessageBox.information(
+                        self, "設成桌面浮窗",
+                        f"已設成桌面浮窗 ✨\n"
+                        f"（去背了 {ratio*100:.0f}% 的像素）",
+                    )
+
             QTimer.singleShot(0, _ui)
 
         threading.Thread(target=_do, daemon=True).start()
