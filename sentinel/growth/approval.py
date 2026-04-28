@@ -430,11 +430,18 @@ def get_pending(approval_id: str) -> Optional[PendingApproval]:
 def _archive_approved(approval_id: str) -> None:
     """Move pending/<id>.json to approved/<id>.json. Logs on failure
     but never raises — archive issues shouldn't overshadow the actual
-    approval outcome."""
+    approval outcome.
+
+    Uses os.replace (atomic + overwrites if dst already exists) instead
+    of Path.rename; the latter fails on Windows when dst exists, which
+    can leave the file in PENDING_DIR after a successful action — the
+    card then refuses to disappear from the chat panel.
+    """
     src = PENDING_DIR / f"{approval_id}.json"
     dst = APPROVED_DIR / f"{approval_id}.json"
     try:
-        src.rename(dst)
+        import os
+        os.replace(src, dst)
     except OSError as e:
         log.warning("approve(%s): archive failed: %s", approval_id, e)
 
@@ -542,7 +549,12 @@ def reject(approval_id: str, reason: str = "",
 
     src = PENDING_DIR / f"{approval_id}.json"
     dst = REJECTED_DIR / f"{approval_id}.json"
-    # Annotate the archived file with rejection reason
+    # Annotate in place, then atomically move pending → rejected.
+    # The previous "write to dst, unlink src" path could leave a copy
+    # in pending if unlink failed under a transient Windows file-lock
+    # (indexing service / antivirus), making it look like reject did
+    # nothing — the card stayed because list_pending still saw the
+    # file. os.replace is atomic on both Windows and POSIX.
     try:
         data = json.loads(src.read_text(encoding="utf-8"))
         data["_rejection"] = {
@@ -550,11 +562,12 @@ def reject(approval_id: str, reason: str = "",
             "at": time.time(),
             "by": approver,
         }
-        dst.write_text(
+        src.write_text(
             json.dumps(data, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-        src.unlink()
+        import os
+        os.replace(src, dst)
     except OSError as e:
         log.error("reject(%s): archive failed: %s", approval_id, e)
         return False
