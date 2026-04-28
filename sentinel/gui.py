@@ -507,8 +507,13 @@ class ChatTab(QWidget):
         mutation happens where Qt expects it. Payload (the approval
         object) is ignored here — we always refresh from the full
         pending list so we don't have to track card state per-id.
+
+        The 3-arg form (context=self) is mandatory: callers can be on
+        non-Qt threads (LLM proposers, scheduler), where the 2-arg form
+        registers the timer on a thread without an event loop and the
+        callback silently never fires.
         """
-        QTimer.singleShot(0, self._refresh_approval_panel)
+        QTimer.singleShot(0, self, self._refresh_approval_panel)
 
     def _refresh_approval_panel(self) -> None:
         """Re-render the inline approval cards from the current pending
@@ -771,7 +776,11 @@ class ChatTab(QWidget):
                     box.setDetailedText(detail)
                     box.exec()
                 self._refresh_approval_panel()
-            QTimer.singleShot(0, _update)
+            # 3-arg form: dispatch _update onto self's (GUI) thread.
+            # 2-arg form runs in caller's thread — here a worker thread
+            # with no event loop, so _update would never fire and the
+            # approve button would stay stuck on "執行中".
+            QTimer.singleShot(0, self, _update)
 
         def _watchdog() -> None:
             if completed[0]:
@@ -859,7 +868,7 @@ class ChatTab(QWidget):
                     box.setDetailedText(detail)
                     box.exec()
                 self._refresh_approval_panel()
-            QTimer.singleShot(0, _ui)
+            QTimer.singleShot(0, self, _ui)
 
         threading.Thread(target=_do, daemon=True).start()
 
@@ -1204,7 +1213,12 @@ class AlbumDialog(QDialog):
                         f"（去背了 {ratio*100:.0f}% 的像素）",
                     )
 
-            QTimer.singleShot(0, _ui)
+            # 3-arg form: dispatch onto self's (GUI) thread. Without
+            # the context arg the timer registers on this worker
+            # thread (no event loop), so _ui never runs — the
+            # 「正在去背…」progress dialog stays open and no
+            # success/failure popup ever appears.
+            QTimer.singleShot(0, self, _ui)
 
         threading.Thread(target=_do, daemon=True).start()
 
@@ -1322,7 +1336,7 @@ class AlbumDialog(QDialog):
                     box.exec()
                 else:
                     self._refresh()
-            QTimer.singleShot(0, _ui)
+            QTimer.singleShot(0, self, _ui)
         threading.Thread(target=_do, daemon=True).start()
 
 
@@ -6644,7 +6658,7 @@ class RoutinesTab(QWidget):
                         f"可能是剛被刪除，或是 ~/.hermes/routines/ "
                         f"檔案被外部修改。重啟可能修復。"
                     )
-                QTimer.singleShot(0, _missing)
+                QTimer.singleShot(0, self, _missing)
                 return
 
             try:
@@ -6693,7 +6707,7 @@ class RoutinesTab(QWidget):
                 self.refresh()
                 self.bridge.status_update.emit(status_text)
                 self._show_fire_popup(popup_text)
-            QTimer.singleShot(0, _ui)
+            QTimer.singleShot(0, self, _ui)
         threading.Thread(target=_do, daemon=True).start()
 
     def _show_fire_popup(self, text: str) -> None:
@@ -6833,7 +6847,7 @@ class RoutinesTab(QWidget):
                         self, "AI Slime", msg,
                     )
                 self.refresh()
-            QTimer.singleShot(0, _ui)
+            QTimer.singleShot(0, self, _ui)
         threading.Thread(target=_do, daemon=True).start()
 
     def retranslate(self):
@@ -6901,7 +6915,7 @@ class MainWindow(QMainWindow):
                             self.chat_tab.append_expression(exp)
                     except Exception as e:
                         log.debug(f"chat append for expression failed: {e}")
-                QTimer.singleShot(0, _show)
+                QTimer.singleShot(0, self, _show)
             threading.Thread(target=_do, daemon=True, name="slime-expression").start()
         QTimer.singleShot(30_000, _maybe_kick_expression)
 
@@ -7483,13 +7497,17 @@ class MainWindow(QMainWindow):
         background/daemon thread) and best-effort fires a Telegram
         notification. Notifier itself has cooldown + credential fallback.
         """
-        QTimer.singleShot(0, self.approval_tab.refresh)
-        QTimer.singleShot(0, self._refresh_approval_tab_label)
+        # 3-arg form (context=self) is mandatory: caller may be a
+        # background thread (LLM proposer, scheduler) where the timer
+        # otherwise registers on a thread with no event loop and the
+        # callback never fires.
+        QTimer.singleShot(0, self, self.approval_tab.refresh)
+        QTimer.singleShot(0, self, self._refresh_approval_tab_label)
         # Avatar reacts so the user sees something happen even if
         # they're not on the 待同意 tab. The signal is intentionally
         # quiet — a 💡 floating above the slime, not a popup.
         try:
-            QTimer.singleShot(0, lambda: self.home_tab.slime_widget.react("idea"))
+            QTimer.singleShot(0, self, lambda: self.home_tab.slime_widget.react("idea"))
         except Exception:
             pass
         try:
