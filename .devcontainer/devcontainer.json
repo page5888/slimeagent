@@ -1,0 +1,63 @@
+// Slime Codespaces config — cloud dev env so we don't need local
+// Windows for the code-editing path. UI smoke testing still has to
+// happen on Peter's local Windows (Qt has no Linux GUI in headless
+// codespace), but everything else (writing modules, running tests,
+// committing PRs, talking to LLM APIs) works in here.
+//
+// First-time boot: ~2 minutes (image pull + post-create script).
+// Subsequent boots: ~10 seconds (everything cached).
+{
+    "name": "AI Slime Agent",
+
+    // Python 3.12 official devcontainer base — comes with git, gh,
+    // pip, and the standard build chain pre-installed. Bookworm
+    // (Debian 12) so we have modern apt packages.
+    "image": "mcr.microsoft.com/devcontainers/python:3.12-bookworm",
+
+    // Add Node so we can install Claude Code globally (`npm i -g
+    // @anthropic-ai/claude-code`). Could also use the dedicated
+    // anthropic devcontainer feature once that exists.
+    "features": {
+        "ghcr.io/devcontainers/features/node:1": {
+            "version": "lts"
+        },
+        "ghcr.io/devcontainers/features/github-cli:1": {}
+    },
+
+    // Run setup once per container build — installs Python deps and
+    // Claude Code so the next time you open a terminal everything
+    // is ready. See post-create.sh for what runs.
+    "postCreateCommand": "bash .devcontainer/post-create.sh",
+
+    // VS Code editor goodies. Same extensions Peter would want
+    // locally, baked in so a fresh Codespace already has them.
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "ms-python.python",
+                "ms-python.vscode-pylance",
+                "github.copilot",
+                "anthropic.claude-code",
+                "tamasfe.even-better-toml",
+                "redhat.vscode-yaml"
+            ],
+            "settings": {
+                "python.defaultInterpreterPath": "/usr/local/bin/python",
+                "[python]": {
+                    "editor.formatOnSave": false,
+                    "editor.tabSize": 4
+                },
+                "files.eol": "\n",
+                "files.insertFinalNewline": true,
+                "files.trimTrailingWhitespace": true
+            }
+        }
+    },
+
+    // We don't forward any ports because there's no web server in
+    // this project. If we add one later (e.g. for the relay during
+    // local testing), drop it here as `"forwardPorts": [8000]`.
+
+    // Run as non-root for safer apt operations.
+    "remoteUser": "vscode"
+}
