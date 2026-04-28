@@ -239,15 +239,37 @@ class ChatTab(QWidget):
         # transcript and the input row. Only visible when there's at
         # least one pending ACTION-kind proposal, so for pure
         # conversation the chat tab looks identical to before D2.
-        # When the slime proposes an action, the card shows up right
-        # below the chat with [同意] / [拒絕] buttons — no tab switch
-        # required to act on what the slime just suggested.
+        #
+        # Wrapped in a QScrollArea with a max height because without
+        # it, 5+ pending cards (or a single tall chain.run card) push
+        # the approve/deny buttons off-screen — user reported being
+        # unable to click 同意 when several proposals stacked up.
+        # ~280px ≈ 3 standard cards visible; any more, scroll.
         self.approval_container = QWidget()
         self.approval_layout = QVBoxLayout(self.approval_container)
         self.approval_layout.setContentsMargins(0, 4, 0, 4)
-        self.approval_layout.setSpacing(6)
-        self.approval_container.setVisible(False)
-        layout.addWidget(self.approval_container)
+        self.approval_layout.setSpacing(8)
+
+        self.approval_scroll = QScrollArea()
+        self.approval_scroll.setWidget(self.approval_container)
+        self.approval_scroll.setWidgetResizable(True)
+        self.approval_scroll.setFrameShape(QFrame.NoFrame)
+        self.approval_scroll.setMaximumHeight(280)
+        self.approval_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.approval_scroll.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }"
+            f"QScrollBar:vertical {{"
+            f" background:transparent; width:8px; }}"
+            f"QScrollBar::handle:vertical {{"
+            f" background:{_tk.PALETTE['border']};"
+            f" border-radius:4px; min-height:20px; }}"
+            f"QScrollBar::handle:vertical:hover {{"
+            f" background:{_tk.PALETTE['text_muted']}; }}"
+            f"QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{"
+            f" height:0px; }}"
+        )
+        self.approval_scroll.setVisible(False)
+        layout.addWidget(self.approval_scroll)
 
         # Input area — pill-shaped field that matches the bubble
         # aesthetic of the messages above. Send button is the only
@@ -510,24 +532,21 @@ class ChatTab(QWidget):
             pending = [p for p in list_pending() if p.kind == ACTION]
         except Exception as e:
             log.warning(f"chat tab: couldn't list pending approvals: {e}")
-            self.approval_container.setVisible(False)
+            self.approval_scroll.setVisible(False)
             return
 
         if not pending:
-            self.approval_container.setVisible(False)
+            self.approval_scroll.setVisible(False)
             return
 
-        self.approval_container.setVisible(True)
-        for p in pending[:5]:   # cap to keep chat area readable
+        # No cap on count — the scroll area handles overflow. Previously
+        # we sliced pending[:5] and rendered a "+N more" hint, but that
+        # forced the user to switch tabs to act on the rest. With scroll
+        # the user can approve any of them inline.
+        self.approval_scroll.setVisible(True)
+        for p in pending:
             card = self._build_approval_card(p)
             self.approval_layout.addWidget(card)
-        if len(pending) > 5:
-            more = QLabel(
-                f"<span style='color:#888; font-size:10px;'>"
-                f"... 還有 {len(pending) - 5} 個提案（到「待同意」分頁看全部）</span>"
-            )
-            more.setAlignment(Qt.AlignCenter)
-            self.approval_layout.addWidget(more)
 
     def _build_approval_card(self, p) -> QWidget:
         """Compact approval card for an ACTION proposal.
@@ -543,23 +562,23 @@ class ChatTab(QWidget):
             "border-left: 3px solid #ffd166; }"
         )
         v = QVBoxLayout(card)
-        v.setContentsMargins(12, 6, 8, 8)
-        v.setSpacing(4)
+        v.setContentsMargins(14, 10, 10, 10)
+        v.setSpacing(8)
 
         # Title + action_type subtitle
         title_text = p.title or p.action_type
         title_lbl = QLabel(
             f"<b style='color:#e6e6e6;'>{title_text}</b>"
-            f"  <span style='color:#888; font-size:10px;'>"
+            f"  <span style='color:#888; font-size:11px;'>"
             f"{p.action_type}</span>"
         )
-        title_lbl.setStyleSheet("font-size: 12px;")
+        title_lbl.setStyleSheet("font-size: 14px;")
         title_lbl.setWordWrap(True)
         v.addWidget(title_lbl)
 
         if p.reason:
             reason_lbl = QLabel(p.reason)
-            reason_lbl.setStyleSheet("color:#aaa; font-size: 10px;")
+            reason_lbl.setStyleSheet("color:#aaa; font-size: 12px;")
             reason_lbl.setWordWrap(True)
             v.addWidget(reason_lbl)
 
@@ -576,7 +595,7 @@ class ChatTab(QWidget):
                     f"<span style='color:#e6e6e6;'>{title}</span> "
                     f"<span style='color:#666;'>· {at}</span>"
                 )
-                step_lbl.setStyleSheet("font-size: 10px;")
+                step_lbl.setStyleSheet("font-size: 12px;")
                 step_lbl.setWordWrap(True)
                 v.addWidget(step_lbl)
 
@@ -593,21 +612,21 @@ class ChatTab(QWidget):
             findings_lbl = QLabel(
                 f"<span style='color:{color};'>⚠ {msg}</span>"
             )
-            findings_lbl.setStyleSheet("font-size: 10px;")
+            findings_lbl.setStyleSheet("font-size: 12px;")
             findings_lbl.setWordWrap(True)
             v.addWidget(findings_lbl)
 
         # Action row
         btn_row = QHBoxLayout()
-        btn_row.setSpacing(6)
+        btn_row.setSpacing(8)
         btn_row.addStretch()
 
         deny_btn = QPushButton(t("chat_approval_deny"))
         deny_btn.setCursor(Qt.PointingHandCursor)
         deny_btn.setStyleSheet(
             "QPushButton { background:transparent; color:#888;"
-            " padding:3px 12px; border:1px solid #444; border-radius:10px;"
-            " font-size:10px; }"
+            " padding:6px 16px; border:1px solid #444; border-radius:12px;"
+            " font-size:12px; }"
             "QPushButton:hover { color:#cc6b63; border-color:#cc6b63; }"
         )
         deny_btn.clicked.connect(
@@ -619,8 +638,8 @@ class ChatTab(QWidget):
         approve_btn.setCursor(Qt.PointingHandCursor)
         approve_btn.setStyleSheet(
             "QPushButton { background:#ffd166; color:#1a1a1a; font-weight:600;"
-            " padding:3px 14px; border:none; border-radius:10px;"
-            " font-size:10px; }"
+            " padding:6px 18px; border:none; border-radius:12px;"
+            " font-size:12px; }"
             "QPushButton:hover { background:#ffdc88; }"
         )
         approve_btn.clicked.connect(
