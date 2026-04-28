@@ -4222,7 +4222,8 @@ class ProviderRow(QGroupBox):
         layout.addRow("狀態", self.enabled_combo)
 
         self.apikey_input, apikey_container = _make_password_field(
-            provider.get("api_key", ""), placeholder="sk-... / AIza...",
+            provider.get("api_key", ""),
+            placeholder="sk-... / AIza...（圖片生成可多 key 逗號分隔）",
         )
         layout.addRow("金鑰", apikey_container)
 
