@@ -3,21 +3,31 @@
 Pipeline per expression:
   1. Pick kind (random weighted, or caller-specified)
   2. Slime writes its own prompt + caption (via prompts.py)
-  3. Image API call (Gemini Imagen primary, fallback can be added)
+  3. Image API call with multi-key + multi-provider fallback
   4. Persist binary + metadata
   5. Return Expression object for the container layer to render
 
+Image fallback ladder:
+  For each enabled, image-capable provider in LLM_PROVIDERS order,
+  for each API key on that provider (comma/newline-separated in the
+  `api_key` field), try the provider's image backend. A 429 / quota
+  error on a key skips to the next key; an empty provider skips to
+  the next provider. First success wins.
+
+  Image-capable providers in v0.7-alpha:
+    - Gemini (type=gemini): gemini-2.5-flash-image cascade
+    - OpenAI (type=openai_compat with api.openai.com base_url): DALL-E 3
+
+  Other openai_compat providers (OpenRouter, Groq, DeepSeek) are
+  text-only and skipped silently. If you want OpenRouter image gen,
+  add it explicitly with a different type.
+
 Cost model (for v0.7-alpha dogfood — single user, no monetization):
-  - one image per call to Gemini Imagen ~ free tier eligible
+  - Gemini free tier covers gemini-2.5-flash-image (the primary path)
+  - OpenAI fallback is paid — only triggered when every Gemini key
+    is exhausted, so cost stays bounded
   - max one auto-generation per week (Sunday evening trigger)
   - manual "請畫一張" allowed but cooldown-gated to prevent spam
-
-API choice:
-  Gemini Imagen 3 via google.genai (newer SDK) or google.generativeai
-  (older SDK). We probe both at import time and use whichever is
-  installed. If neither: graceful degrade — return None so the caller
-  can show a "still drawing in your head" placeholder rather than
-  crashing.
 
 No Qt imports. No GUI imports.
 """
@@ -25,6 +35,7 @@ from __future__ import annotations
 
 import logging
 import random
+import re
 import time
 from datetime import date, timedelta
 from pathlib import Path
@@ -45,45 +56,43 @@ log = logging.getLogger("sentinel.expression.generator")
 # ── API integration ────────────────────────────────────────────────
 
 
-def _generate_image_gemini(prompt_text: str, image_path: Path) -> tuple[bool, str]:
-    """Call Gemini image generation API. Returns (success, model_name).
+def _iter_api_keys(provider: dict) -> list[str]:
+    """Extract one or more keys from a provider's `api_key` field.
 
-    Strategy ordering picks the cheapest free-tier eligible model
-    first so a typical user with no billing gets results. We probed
-    the API live (2026-04-28) — `imagen-3.0-generate-002` returns
-    404, `imagen-4.0-*` requires paid plan. The free-tier path is
-    the gemini-flash-image family via generateContent with IMAGE in
-    response_modalities.
-
-    Failure modes surfaced explicitly via log.warning so the operator
-    can see *why* it didn't draw (rate limit / no key / SDK missing)
-    instead of just "all strategies failed".
+    Accepts either a list (already split) or a comma/newline-separated
+    string — the latter lets users paste several keys into the existing
+    single-line GUI field without schema changes. Empty entries dropped.
     """
-    # Read Gemini key from saved provider config.
-    try:
-        from sentinel import config
-        api_key = None
-        for p in config.LLM_PROVIDERS:
-            if (p.get("name") or "").lower() == "gemini" and p.get("api_key"):
-                api_key = p["api_key"]
-                break
-        if not api_key:
-            log.warning("expression: no Gemini API key configured")
-            return False, ""
-    except Exception as e:
-        log.warning("expression: could not read Gemini key: %s", e)
-        return False, ""
+    raw = provider.get("api_key")
+    if isinstance(raw, list):
+        return [k.strip() for k in raw if isinstance(k, str) and k.strip()]
+    if isinstance(raw, str):
+        parts = re.split(r"[,\n]", raw)
+        return [p.strip() for p in parts if p.strip()]
+    return []
 
-    # Models to try in priority order. First success wins.
-    # gemini-2.5-flash-image is the most stable free-tier option.
-    # gemini-3.1-flash-image-preview is newer but preview-tier.
-    # imagen-4.0-fast-generate-001 is paid (~$0.02/image) — last resort.
-    candidates = [
-        ("gemini-2.5-flash-image",          "generate_content"),
-        ("gemini-3.1-flash-image-preview",  "generate_content"),
-        ("imagen-4.0-fast-generate-001",    "generate_images"),  # paid
-    ]
 
+def _is_quota_error(err_str: str) -> bool:
+    """A key-level quota / rate signal — means we should stop trying
+    *this* key (further models or retries on the same key won't help)
+    and move on to the next key or provider."""
+    s = err_str.lower()
+    return any(tok in s for tok in (
+        "429", "resource_exhausted", "quota", "rate_limit",
+        "rate limit", "too many requests", "insufficient_quota",
+    ))
+
+
+def _call_gemini_image(api_key: str, prompt_text: str, image_path: Path
+                       ) -> tuple[bool, str]:
+    """Single-key Gemini image attempt. Returns (success, model_name).
+
+    Cascades through image-capable Gemini models: gemini-2.5-flash-image
+    (free-tier sweet spot), then preview, then paid imagen-4.0. On a
+    quota error (429 / RESOURCE_EXHAUSTED) we bail early — quotas are
+    per-key, so further models on the same key would only burn more
+    failed requests.
+    """
     try:
         from google import genai as _genai
         from google.genai import types as _types
@@ -94,13 +103,17 @@ def _generate_image_gemini(prompt_text: str, image_path: Path) -> tuple[bool, st
         )
         return False, ""
 
+    candidates = [
+        ("gemini-2.5-flash-image",          "generate_content"),
+        ("gemini-3.1-flash-image-preview",  "generate_content"),
+        ("imagen-4.0-fast-generate-001",    "generate_images"),  # paid
+    ]
+
     client = _genai.Client(api_key=api_key)
 
     for model_name, method in candidates:
         try:
             if method == "generate_content":
-                # Gemini-flash-image: text-conditioned image gen via
-                # generate_content with IMAGE in response_modalities.
                 result = client.models.generate_content(
                     model=model_name,
                     contents=prompt_text,
@@ -108,8 +121,6 @@ def _generate_image_gemini(prompt_text: str, image_path: Path) -> tuple[bool, st
                         response_modalities=["IMAGE", "TEXT"],
                     ),
                 )
-                # Walk candidates → parts; the image bytes live under
-                # parts[i].inline_data.data with mime_type='image/png'.
                 for cand in (result.candidates or []):
                     for part in (cand.content.parts or []):
                         inline = getattr(part, "inline_data", None)
@@ -119,8 +130,6 @@ def _generate_image_gemini(prompt_text: str, image_path: Path) -> tuple[bool, st
                             return True, model_name
 
             elif method == "generate_images":
-                # Imagen path (paid). Different return shape: result
-                # has .generated_images with .image.image_bytes.
                 result = client.models.generate_images(
                     model=model_name,
                     prompt=prompt_text,
@@ -136,17 +145,15 @@ def _generate_image_gemini(prompt_text: str, image_path: Path) -> tuple[bool, st
                         return True, model_name
 
         except Exception as e:
-            # Surface the reason. 429 = rate limit, 400 = paid plan
-            # required, 404 = model retired. Log as warning so the
-            # operator sees it; we still try the next candidate.
             err_str = str(e)
             short = err_str[:240]
-            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+            if _is_quota_error(err_str):
                 log.warning(
-                    "expression: %s — daily/per-minute quota exhausted. "
-                    "Free tier resets at 00:00 PT. Detail: %s",
-                    model_name, short,
+                    "expression: %s — key quota exhausted, trying next key. "
+                    "Detail: %s", model_name, short,
                 )
+                # Same key won't recover for subsequent models — bail.
+                return False, ""
             elif "INVALID_ARGUMENT" in err_str and "paid" in err_str.lower():
                 log.warning(
                     "expression: %s requires paid plan — skipping. Detail: %s",
@@ -155,20 +162,160 @@ def _generate_image_gemini(prompt_text: str, image_path: Path) -> tuple[bool, st
             elif "NOT_FOUND" in err_str or "404" in err_str:
                 log.warning(
                     "expression: %s not available on this API version. "
-                    "Detail: %s",
-                    model_name, short,
+                    "Detail: %s", model_name, short,
                 )
             else:
                 log.warning(
-                    "expression: %s call failed: %s",
-                    model_name, short,
+                    "expression: %s call failed: %s", model_name, short,
                 )
             continue
 
-    log.warning(
-        "expression: all candidates exhausted — no image produced. "
-        "If you saw 429s above, try again tomorrow (daily quota)."
-    )
+    return False, ""
+
+
+def _call_openai_image(api_key: str, base_url: str, prompt_text: str,
+                       image_path: Path) -> tuple[bool, str]:
+    """Single-key OpenAI image attempt. Returns (success, model_name).
+
+    Cascades through OpenAI image models: gpt-image-2 (newest, may
+    not exist yet on every account) → gpt-image-1 (April 2025) →
+    dall-e-3 (fallback). 404s on the newer names just fall through
+    to the next, so ordering by recency is safe.
+
+    Param differences: gpt-image-* always returns b64_json and rejects
+    the `response_format` parameter; dall-e-3 returns URLs by default
+    so we explicitly ask for b64_json. Same .data[0].b64_json read on
+    both paths.
+
+    Quota error short-circuits the cascade — billing limits are at
+    the key level, not per-model.
+    """
+    try:
+        from openai import OpenAI
+    except ImportError:
+        log.warning(
+            "expression: `openai` package not installed — "
+            "OpenAI fallback unavailable"
+        )
+        return False, ""
+
+    import base64
+
+    candidates = [
+        ("gpt-image-2", False),
+        ("gpt-image-1", False),
+        ("dall-e-3",    True),
+    ]
+
+    client = OpenAI(api_key=api_key, base_url=base_url or None)
+
+    for model_name, use_response_format in candidates:
+        try:
+            kwargs = {
+                "model": model_name,
+                "prompt": prompt_text,
+                "n": 1,
+                "size": "1024x1024",
+            }
+            if use_response_format:
+                kwargs["response_format"] = "b64_json"
+            result = client.images.generate(**kwargs)
+            if result.data and result.data[0].b64_json:
+                image_path.write_bytes(base64.b64decode(result.data[0].b64_json))
+                log.info("expression: image saved via %s", model_name)
+                return True, model_name
+            log.warning("expression: %s returned no image data", model_name)
+        except Exception as e:
+            err_str = str(e)
+            short = err_str[:240]
+            if _is_quota_error(err_str):
+                log.warning(
+                    "expression: %s — key quota/billing exhausted, "
+                    "trying next key. Detail: %s", model_name, short,
+                )
+                return False, ""
+            if "model" in err_str.lower() and (
+                "not found" in err_str.lower()
+                or "does not exist" in err_str.lower()
+                or "404" in err_str
+            ):
+                log.info(
+                    "expression: %s unavailable on this account, "
+                    "cascading. Detail: %s", model_name, short,
+                )
+            else:
+                log.warning(
+                    "expression: %s call failed: %s", model_name, short,
+                )
+            continue
+
+    return False, ""
+
+
+def _provider_image_backend(provider: dict):
+    """Return a callable(api_key) → (ok, model) for the provider's
+    image API, or None if the provider isn't image-capable."""
+    ptype = (provider.get("type") or "").lower()
+    if ptype == "gemini":
+        return lambda key, prompt, path: _call_gemini_image(key, prompt, path)
+    if ptype == "openai_compat":
+        # Only the real OpenAI endpoint is known to host DALL-E. Other
+        # OpenAI-compatible endpoints (OpenRouter, Groq, DeepSeek) are
+        # text-only — skip silently rather than 404 noisily.
+        base_url = provider.get("base_url") or ""
+        if "api.openai.com" in base_url:
+            return lambda key, prompt, path: _call_openai_image(
+                key, base_url, prompt, path,
+            )
+    return None
+
+
+def _generate_image(prompt_text: str, image_path: Path) -> tuple[bool, str]:
+    """Multi-key, multi-provider fallback. Returns (success, model_name).
+
+    Walks LLM_PROVIDERS in configured order. For each enabled,
+    image-capable provider, tries every API key (comma-separated in
+    the `api_key` field) until one produces an image. On a quota
+    error the next key is tried; if all keys fail, control falls
+    through to the next provider.
+    """
+    try:
+        from sentinel import config
+    except Exception as e:
+        log.warning("expression: could not load config: %s", e)
+        return False, ""
+
+    attempted = 0
+    for provider in config.LLM_PROVIDERS:
+        if not provider.get("enabled"):
+            continue
+        backend = _provider_image_backend(provider)
+        if backend is None:
+            continue
+        keys = _iter_api_keys(provider)
+        if not keys:
+            continue
+
+        name = provider.get("name") or "?"
+        for idx, key in enumerate(keys, start=1):
+            attempted += 1
+            log.info(
+                "expression: trying %s key %d/%d", name, idx, len(keys),
+            )
+            ok, model = backend(key, prompt_text, image_path)
+            if ok:
+                return True, model
+
+    if attempted == 0:
+        log.warning(
+            "expression: no image-capable provider configured "
+            "(need Gemini or OpenAI with an api_key)"
+        )
+    else:
+        log.warning(
+            "expression: all %d key attempts exhausted — no image produced",
+            attempted,
+        )
     return False, ""
 
 
@@ -235,7 +382,7 @@ def generate_expression(kind: Optional[str] = None) -> Optional[Expression]:
     image_path = EXPRESSIONS_DIR / f"{eid}.png"
 
     # Step 3: actual image generation.
-    ok, model = _generate_image_gemini(visual_prompt, image_path)
+    ok, model = _generate_image(visual_prompt, image_path)
     if not ok:
         # Don't save metadata if no image — we don't want orphan
         # JSON files representing failed attempts.
