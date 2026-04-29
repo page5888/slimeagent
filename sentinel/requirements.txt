@@ -15,6 +15,12 @@ watchdog>=3.0
 pynput>=1.7
 Pillow>=10.0
 
+# AES-GCM for portable export (sentinel/portable.py — manifesto
+# 第三守則 implementation). Stdlib has scrypt but not AES, so this
+# is the smallest well-vetted dep that keeps the .slime format
+# implementable in any other language too.
+cryptography>=41
+
 # ── Telegram notifications ─────────────────────────────────────────
 python-telegram-bot>=21.0
 
