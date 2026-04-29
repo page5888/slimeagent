@@ -1407,6 +1407,29 @@ class HomeTab(QWidget):
         )
         layout.addWidget(self.attendance_label)
 
+        # ── 關係里程碑時間軸 ──
+        # The welcome modal makes a timeline promise (1 → 7 → 30 →
+        # 100 → 365 days) but disappears after one click. The widget
+        # below makes that same promise visible every time the home
+        # tab is opened. It's a single QLabel rendering HTML — much
+        # smaller than a custom paintEvent, easier to restyle later.
+        self.timeline_label = QLabel("")
+        self.timeline_label.setTextFormat(Qt.RichText)
+        self.timeline_label.setOpenExternalLinks(False)
+        self.timeline_label.linkActivated.connect(
+            self._on_timeline_link
+        )
+        self.timeline_label.setStyleSheet(
+            f"QLabel {{ background:{_tk.PALETTE['bg_elev']};"
+            f" border:1px solid {_tk.PALETTE['border_subtle']};"
+            f" border-radius:{_tk.RADIUS['card']}px;"
+            f" padding:8px 12px;"
+            f" color:{_tk.PALETTE['text']};"
+            f" font-size:{_tk.FONT_SIZE['body']}px; }}"
+        )
+        self.timeline_label.setWordWrap(True)
+        layout.addWidget(self.timeline_label)
+
         # ── 每日反思卡（核心 wedge） ──
         # Note: we used to render a SlimeWidget here as well so the
         # card felt like "a face speaking", but at 240x240 it pushed
@@ -1515,6 +1538,125 @@ class HomeTab(QWidget):
         fl.addWidget(value_lbl)
         return {"frame": frame, "value": value_lbl}
 
+    def _render_timeline_html(self, days_alive_int: int) -> str:
+        """Compact horizontal strip — emoji nodes + connector lines +
+        one summary line below.
+
+        Past nodes render in amber; current/next-up renders boxed in
+        cyan; future nodes render dimmed. Hover or click expands the
+        full descriptions via _on_timeline_link → _show_timeline_full.
+        """
+        from sentinel.milestones import MILESTONES, compute_state
+        from sentinel.ui import tokens as _tk
+        state = compute_state(days_alive_int)
+        amber = _tk.PALETTE["amber"]
+        cyan = _tk.PALETTE.get("cyan_dim", "#00b8d4")
+        muted = _tk.PALETTE["text_muted"]
+        text = _tk.PALETTE["text"]
+        line_dim = _tk.PALETTE.get("border_subtle", "#3a3a3a")
+
+        nodes_html = []
+        for i, m in enumerate(MILESTONES):
+            is_passed = m.day <= days_alive_int
+            is_next = (state.next_milestone is not None
+                       and m.day == state.next_milestone.day)
+            if is_passed:
+                color = amber
+                weight = "bold"
+            elif is_next:
+                color = cyan
+                weight = "bold"
+            else:
+                color = muted
+                weight = "normal"
+            cell = (
+                f"<td align='center' style='padding:0 4px;'>"
+                f"<div style='font-size:18px;color:{color};"
+                f"font-weight:{weight};'>{m.emoji}</div>"
+                f"<div style='font-size:10px;color:{color};'>"
+                f"D{m.day}</div>"
+                f"</td>"
+            )
+            nodes_html.append(cell)
+            if i < len(MILESTONES) - 1:
+                seg_color = amber if MILESTONES[i + 1].day <= days_alive_int else line_dim
+                nodes_html.append(
+                    f"<td valign='middle' style='padding:0;'>"
+                    f"<div style='border-bottom:1px solid {seg_color};"
+                    f"min-width:18px;height:1px;margin-bottom:14px;'></div>"
+                    f"</td>"
+                )
+
+        if state.next_milestone is None:
+            summary = (
+                f"<span style='color:{amber};'>"
+                f"全部里程碑都走過了 — 我們還會繼續走下去。"
+                f"</span>"
+            )
+        else:
+            n = state.next_milestone
+            summary = (
+                f"<span style='color:{text};'>下一站 — </span>"
+                f"<span style='color:{cyan};font-weight:bold;'>"
+                f"第 {n.day} 天 · {n.title}</span>"
+                f"<span style='color:{muted};'> "
+                f"（還有 {state.days_to_next} 天）</span>"
+            )
+
+        return (
+            "<table cellpadding='0' cellspacing='0' "
+            "style='margin:0 auto;'><tr>"
+            + "".join(nodes_html)
+            + "</tr></table>"
+            f"<div style='text-align:center;margin-top:6px;"
+            f"font-size:12px;'>{summary} "
+            f"<a href='timeline:full' style='color:{muted};'>"
+            f"［看全部］</a></div>"
+        )
+
+    def _on_timeline_link(self, href: str) -> None:
+        if href == "timeline:full":
+            self._show_timeline_full()
+
+    def _show_timeline_full(self) -> None:
+        """Expand to a full timeline modal — every milestone with
+        its blurb (passed or locked depending on whether reached).
+        Manifesto-aligned tone; the locked descriptions are the
+        promises, the passed descriptions are the receipts."""
+        from sentinel.milestones import MILESTONES
+        try:
+            from sentinel.evolution import load_evolution
+            evo = load_evolution()
+            days = max(1, int(evo.days_alive()) + 1)
+        except Exception:
+            days = 1
+
+        lines = ["<html><body style='line-height:1.6;'>"]
+        for m in MILESTONES:
+            passed = m.day <= days
+            color = "#ffa502" if passed else "#888"
+            mark = "✓" if passed else "⌛"
+            blurb = m.blurb_passed if passed else m.blurb_locked
+            lines.append(
+                f"<p style='margin:8px 0;'>"
+                f"<span style='color:{color};font-weight:bold;'>"
+                f"{mark} 第 {m.day} 天 · {m.emoji} {m.title}"
+                f"</span><br>"
+                f"<span style='color:#ccc;font-size:13px;'>{blurb}</span>"
+                f"</p>"
+            )
+        lines.append("</body></html>")
+
+        box = QMessageBox(self)
+        box.setWindowTitle("關係時間軸")
+        box.setTextFormat(Qt.RichText)
+        box.setText("".join(lines))
+        box.setStandardButtons(QMessageBox.Ok)
+        ok = box.button(QMessageBox.Ok)
+        if ok is not None:
+            ok.setText("關上")
+        box.exec()
+
     def refresh(self):
         try:
             from sentinel.evolution import load_evolution
@@ -1544,8 +1686,11 @@ class HomeTab(QWidget):
                     f"陪你 {alive_d} 天 ｜ 你來了 {opened} 天 "
                     f"({s['attendance_pct']}%)"
                 )
+            # Timeline shares the same alive_d so we don't double-
+            # compute and never fall out of sync with the line above.
+            self.timeline_label.setText(self._render_timeline_html(alive_d))
         except Exception as e:
-            log.debug("attendance refresh failed: %s", e)
+            log.debug("attendance/timeline refresh failed: %s", e)
 
         # Daily card may need to repaint if it just generated in a
         # background thread mid-session, or if the user clicked
