@@ -41,17 +41,46 @@ def is_welcome_shown() -> bool:
 
 def mark_welcome_shown() -> None:
     """Persist that the welcome modal has been shown. Idempotent."""
+    _merge_state({"welcome_shown": True, "welcome_shown_at": time.time()})
+
+
+def _load_state() -> dict:
+    """Read the onboarding state file. Empty dict if missing/corrupt."""
+    if not STATE_FILE.exists():
+        return {}
+    try:
+        return json.loads(STATE_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _merge_state(updates: dict) -> None:
+    """Read-modify-write the state file with the given updates.
+
+    Used by the welcome and year-recap one-shot trackers so they
+    don't trample each other (e.g. marking welcome as shown shouldn't
+    clear a prior year_recap_shown flag).
+    """
     try:
         STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        cur = _load_state()
+        cur.update(updates)
         STATE_FILE.write_text(
-            json.dumps(
-                {"welcome_shown": True, "welcome_shown_at": time.time()},
-                ensure_ascii=False, indent=2,
-            ),
+            json.dumps(cur, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
     except OSError as e:
         log.warning(f"could not persist onboarding state: {e}")
+
+
+def is_year_recap_shown() -> bool:
+    """True if the D365 一週年回顧 modal has already been shown."""
+    return bool(_load_state().get("year_recap_shown", False))
+
+
+def mark_year_recap_shown() -> None:
+    """Persist that the D365 recap has been shown. Idempotent."""
+    _merge_state({"year_recap_shown": True, "year_recap_shown_at": time.time()})
 
 
 # ─── Welcome ritual copy ─────────────────────────────────────────

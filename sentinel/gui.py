@@ -1797,6 +1797,46 @@ class HomeTab(QWidget):
             ok.setText("關上")
         box.exec()
 
+    def _show_year_recap(self) -> None:
+        """One-shot D365 一週年回顧 modal.
+
+        Re-checks the gate inside the deferred handler — between
+        refresh() arming this and the QTimer firing, the user
+        could have navigated away or another path could have shown
+        it. mark_year_recap_shown() goes BEFORE exec() so a crash
+        during render doesn't loop the modal on every refresh.
+        """
+        try:
+            from sentinel.year_recap import (
+                should_show_year_recap, build_year_recap_html,
+            )
+            from sentinel.onboarding import mark_year_recap_shown
+            from sentinel.evolution import load_evolution
+        except Exception as e:
+            log.debug("year recap modal imports failed: %s", e)
+            return
+
+        try:
+            evo = load_evolution()
+            alive_d = max(1, int(evo.days_alive()) + 1)
+        except Exception:
+            return
+        if not should_show_year_recap(alive_d):
+            return
+
+        body_html = build_year_recap_html()
+        mark_year_recap_shown()  # mark first so a render crash doesn't loop
+
+        box = QMessageBox(self)
+        box.setWindowTitle("一週年")
+        box.setTextFormat(Qt.RichText)
+        box.setText(body_html)
+        box.setStandardButtons(QMessageBox.Ok)
+        ok = box.button(QMessageBox.Ok)
+        if ok is not None:
+            ok.setText("謝謝")
+        box.exec()
+
     @staticmethod
     def _moments_in_window(
         birth_time: float, prev_day: int, this_day: int,
@@ -1910,6 +1950,20 @@ class HomeTab(QWidget):
             )
         except Exception as e:
             log.debug("day-30 naming arm failed: %s", e)
+
+        # ── Day-365 一週年回顧 (PR #75) ──
+        # Mirrors the D30 pattern: gate on day count, fire once via
+        # QTimer-deferred dialog, persist via onboarding state file.
+        # This is the kept-promise of the welcome modal's 365-day
+        # line — render it as a letter, not a stats screen. Failure
+        # is silent; missing the recap is regrettable but not worth
+        # crashing the home tab.
+        try:
+            from sentinel.year_recap import should_show_year_recap
+            if should_show_year_recap(alive_d):
+                QTimer.singleShot(0, self, self._show_year_recap)
+        except Exception as e:
+            log.debug("year recap check failed: %s", e)
 
         # Daily card may need to repaint if it just generated in a
         # background thread mid-session, or if the user clicked
