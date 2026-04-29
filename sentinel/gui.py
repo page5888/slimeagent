@@ -6249,6 +6249,7 @@ class RoutinesTab(QWidget):
     def refresh(self):
         """Re-render the summary + card list from disk state."""
         from sentinel.routines import list_routines, reflect
+        from sentinel.ui import tokens as _tk
 
         # Clear cards
         while self.list_layout.count() > 1:
