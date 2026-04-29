@@ -1355,6 +1355,65 @@ class AlbumDialog(QDialog):
         threading.Thread(target=_do, daemon=True).start()
 
 
+# ─── Naming ceremony prompt (shared between HomeTab + EvolutionTab) ───
+#
+# The same naming flow can be triggered by two paths now:
+#   - EvolutionTab: when XP-based tier advances to "Named Slime"
+#   - HomeTab: when timeline D30 promise is reached (PR #71)
+# Both consume the same naming_pending flag from EvolutionState, so
+# whichever path arms it first wins. The intro copy differs because
+# the framing differs: tier advance is "you just evolved", D30 is
+# "I made a promise 30 days ago and now it's time".
+
+def _prompt_for_name(parent, intro_key: str = "naming_intro") -> None:
+    """Drive the naming dialog if the pending flag is set.
+
+    intro_key: which i18n string introduces the ceremony — defaults
+    to the original tier-advance copy. HomeTab passes
+    "naming_intro_day30" for the time-based path.
+
+    No-op if naming_pending is False or already named. Idempotent —
+    safe to call from any refresh.
+    """
+    try:
+        from sentinel import identity
+    except ImportError:
+        return
+    if not identity.consume_naming_prompt():
+        return
+
+    intro = t(intro_key)
+    prompt = t("naming_prompt")
+    name, ok = QInputDialog.getText(parent, t("naming_title"),
+                                     f"{intro}\n\n{prompt}")
+    name = (name or "").strip()
+    if not ok or not name:
+        # The skip-confirm warns the user this is one-shot. If they
+        # confirm skip, slime_name stays empty forever (manifesto:
+        # the slime respects refusal — no second-naming-Tuesday).
+        confirm = QMessageBox.question(
+            parent, t("naming_title"),
+            t("naming_skip_confirm"),
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if confirm == QMessageBox.Yes:
+            return
+        name, ok = QInputDialog.getText(parent, t("naming_title"), prompt)
+        name = (name or "").strip()
+        if not ok or not name:
+            return
+
+    if len(name) > 24:
+        QMessageBox.warning(parent, t("naming_title"), t("naming_too_long"))
+        return
+
+    if identity.set_slime_name(name):
+        QMessageBox.information(
+            parent, t("naming_title"),
+            t("naming_success").format(name=name),
+        )
+
+
 # ─── Home Tab (首頁) ─────────────────────────────────────────────────────
 
 class HomeTab(QWidget):
@@ -1691,6 +1750,24 @@ class HomeTab(QWidget):
             self.timeline_label.setText(self._render_timeline_html(alive_d))
         except Exception as e:
             log.debug("attendance/timeline refresh failed: %s", e)
+
+        # ── Day-30 命名儀式 (PR #71) ──
+        # Timeline (PR #70) made a public promise at D30: "夠了 30
+        # 天，會有命名儀式". Arm the prompt here so the promise is
+        # kept regardless of XP-grind speed. _prompt_for_name is a
+        # no-op if there's nothing pending, so this is safe to call
+        # every refresh. Delayed via QTimer so the modal fires
+        # *after* this refresh paints — otherwise the dialog drops
+        # on top of a half-rendered tab.
+        try:
+            from sentinel.identity import maybe_arm_day30_naming
+            maybe_arm_day30_naming()
+            QTimer.singleShot(
+                0, self,
+                lambda: _prompt_for_name(self, "naming_intro_day30"),
+            )
+        except Exception as e:
+            log.debug("day-30 naming arm failed: %s", e)
 
         # Daily card may need to repaint if it just generated in a
         # background thread mid-session, or if the user clicked
@@ -4484,46 +4561,13 @@ class EvolutionTab(QWidget):
         self.refresh()
 
     def _maybe_prompt_for_name(self):
-        """If the slime just became Named Slime without a name, ceremony time."""
-        try:
-            from sentinel import identity
-        except ImportError:
-            return
-        if not identity.consume_naming_prompt():
-            return
+        """If the slime just became Named Slime without a name, ceremony time.
 
-        # Loop until we get a valid name or user explicitly cancels twice.
-        # Naming is a one-shot ceremony; if they truly skip, the flag stays
-        # cleared but slime_name is empty — they can never name it again.
-        # We warn them on skip.
-        intro = t("naming_intro")
-        prompt = t("naming_prompt")
-        name, ok = QInputDialog.getText(self, t("naming_title"),
-                                         f"{intro}\n\n{prompt}")
-        name = (name or "").strip()
-        if not ok or not name:
-            confirm = QMessageBox.question(
-                self, t("naming_title"),
-                t("naming_skip_confirm"),
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
-            )
-            if confirm == QMessageBox.Yes:
-                return  # They chose to skip permanently
-            # Retry once
-            name, ok = QInputDialog.getText(self, t("naming_title"), prompt)
-            name = (name or "").strip()
-            if not ok or not name:
-                return
-
-        if len(name) > 24:
-            QMessageBox.warning(self, t("naming_title"), t("naming_too_long"))
-            return
-
-        if identity.set_slime_name(name):
-            QMessageBox.information(
-                self, t("naming_title"),
-                t("naming_success").format(name=name),
-            )
+        Delegates to module-level _prompt_for_name with the original
+        tier-advance intro copy. The same helper is used by HomeTab
+        with a different intro_key for the D30 path.
+        """
+        _prompt_for_name(self, "naming_intro")
 
     def _share_slime(self):
         """Generate a share card with the slime avatar and stats."""

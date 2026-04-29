@@ -85,6 +85,42 @@ def consume_naming_prompt() -> bool:
     return True
 
 
+# Day-based naming threshold. The home-tab timeline (PR #70) makes a
+# public promise at D30: "夠了 30 天，會有命名儀式". The tier-based
+# trigger (Named Slime form at 500 XP) was the original gate, but it
+# floats with grind speed — a slow user could see the promise and
+# never reach it. Arming naming on D30+ keeps the promise honest.
+DAY30_NAMING_THRESHOLD = 30
+
+
+def maybe_arm_day30_naming() -> bool:
+    """If the master has been alive ≥ 30 days, is unnamed, and we
+    haven't already armed the prompt, set naming_pending=True.
+
+    Returns True iff naming_pending transitioned False → True on this
+    call (so a caller can decide to fire the prompt immediately rather
+    than wait for the next refresh).
+
+    Idempotent: subsequent calls with naming_pending already True or
+    slime_name already set return False without touching state.
+    """
+    from sentinel.evolution import load_evolution, save_evolution
+
+    state = load_evolution()
+    if state.slime_name or state.naming_pending:
+        return False
+    # days_alive() returns a float; +1 keeps the convention used by
+    # the home-tab attendance line and timeline (D1 = day of birth).
+    days_alive_int = int(state.days_alive()) + 1
+    if days_alive_int < DAY30_NAMING_THRESHOLD:
+        return False
+
+    state.naming_pending = True
+    save_evolution(state)
+    log.info("day-30 naming armed (days_alive_int=%d)", days_alive_int)
+    return True
+
+
 def set_slime_name(name: str) -> bool:
     """Commit the master-given name. Idempotent: once set, cannot change.
 
