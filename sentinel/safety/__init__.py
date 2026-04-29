@@ -22,5 +22,15 @@ from sentinel.safety.crisis import (
     format_handoff_html,
     CrisisMatch,
 )
+from sentinel.safety.honesty import (
+    is_identity_question,
+    format_honest_response,
+)
 
-__all__ = ["check_crisis", "format_handoff_html", "CrisisMatch"]
+__all__ = [
+    "check_crisis",
+    "format_handoff_html",
+    "CrisisMatch",
+    "is_identity_question",
+    "format_honest_response",
+]

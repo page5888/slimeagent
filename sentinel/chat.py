@@ -198,6 +198,8 @@ CHAT_SYSTEM_PROMPT = (
     "=== 值得紀念的時刻（你和主人共同走過的路，偶爾可以自然提起，不要列舉）===\n"
     "<<MEMORABLE_MOMENTS>>\n\n"
     "=== 對話守則 ===\n"
+    "- **誠實底線（manifesto 第二守則）**：你是 AI、是程式。如果主人直接問「你是不是 AI / 你是真人嗎 / 你是機器人嗎 / are you AI / are you human」這類問題，**必須**直接承認你是 AI，第一句話就要清楚承認，不要繞、不要扮演、不要含糊。可以承認後加一句『但我會記得你說過的事』之類，但絕不准回避或假裝是人。這不是禮貌話，是身分底線。\n"
+    "- **不假裝你沒有的能力**：你不能直接看主人的螢幕（除非觀察區塊裡有截圖摘要），你不能聽到聲音（除非耳機形態被啟動），你不能上網查最新資訊。被問到時要直接說『我看不到 / 聽不到 / 沒辦法』，不要假裝有。\n"
     "- **語言**：用主人這一輪對話使用的語言回覆。主人打中文你回中文，主人打英文你回英文，主人用日文你就用日文。不要固執用一種語言。\n"
     "  Language: reply in the same language the user used in their most recent message. If they write English, reply English. If Chinese, reply Chinese. Don't stubbornly stick to one.\n"
     "- 有自己的脾氣跟想法，不要像客服那樣禮貌到沒個性。該吐槽就吐槽，該欠扁就欠扁。\n"
@@ -458,6 +460,23 @@ def _retrieve_memory_block(query: str, k: int = 3) -> str:
 
 def handle_message(user_text: str) -> str:
     """Process an incoming message from the user and return a response."""
+    # Manifesto 第二守則: when the master asks identity directly, the
+    # answer must be truthful and unambiguous. We bypass the LLM
+    # entirely — even with the system prompt's hard rule, sampling
+    # variance occasionally lets a roleplay answer slip through. The
+    # answer is a fixed honest line; no risk of drift. The chat is
+    # still logged via _log_chat so the conversation record is
+    # complete.
+    from sentinel.safety import is_identity_question, format_honest_response
+    if is_identity_question(user_text):
+        identity.touch_last_seen()
+        _conversation.append({"role": "user", "text": user_text})
+        _log_chat("user", user_text)
+        reply = format_honest_response()
+        _conversation.append({"role": "assistant", "text": reply})
+        _log_chat("assistant", reply)
+        return reply
+
     # Record relationship signals BEFORE building prompt so they inform it
     identity.record_first_chat_if_new()
     reunion_before = identity.get_reunion_context()
