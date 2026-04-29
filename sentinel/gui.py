@@ -4936,84 +4936,139 @@ class SettingsTab(QWidget):
                 return
 
     def _check_update(self):
-        """Git pull from origin main and prompt restart if updated."""
+        """Git pull from origin main and prompt restart if updated.
+
+        Run on a worker thread: previous version did 30+10+60+30s of
+        synchronous subprocess.run on the GUI thread, freezing the
+        whole window for up to ~2 minutes on slow networks. Now we
+        marshal results back via QTimer.singleShot(0, self, _ui).
+
+        Restart path is also hardened: subprocess.Popen failures used
+        to fall through to os._exit(0) unconditionally, so a Popen
+        error left the user with no app at all. We now wrap Popen
+        with detached-process flags (matching the other restart path
+        at ~line 7276) and only exit when the new instance actually
+        spawned.
+        """
         import subprocess
         self.update_btn.setEnabled(False)
         self.update_btn.setText("更新中...")
 
+        repo_root = str(Path(__file__).parent.parent)
+
+        def _do() -> None:
+            outcome: dict = {}
+            try:
+                subprocess.run(
+                    ["git", "fetch", "origin", "main"],
+                    capture_output=True, text=True, timeout=30,
+                    cwd=repo_root,
+                )
+                count = subprocess.run(
+                    ["git", "rev-list", "--count", "HEAD..origin/main"],
+                    capture_output=True, text=True, timeout=10,
+                    cwd=repo_root,
+                )
+                behind = int((count.stdout or "0").strip() or "0")
+
+                if behind == 0:
+                    outcome = {"kind": "up_to_date"}
+                else:
+                    reset = subprocess.run(
+                        ["git", "reset", "--hard", "origin/main"],
+                        capture_output=True, text=True, timeout=30,
+                        cwd=repo_root,
+                    )
+                    if reset.returncode != 0:
+                        outcome = {
+                            "kind": "git_failed",
+                            "stage": "reset",
+                            "stderr": (reset.stderr or "")[:500],
+                        }
+                    else:
+                        outcome = {"kind": "updated", "behind": behind}
+            except subprocess.TimeoutExpired as e:
+                outcome = {"kind": "git_failed", "stage": "timeout",
+                           "stderr": f"逾時：{e}"}
+            except Exception as e:
+                outcome = {"kind": "git_failed", "stage": "exception",
+                           "stderr": str(e)}
+
+            def _ui() -> None:
+                kind = outcome.get("kind", "")
+                if kind == "up_to_date":
+                    QMessageBox.information(self, "檢查更新", "已經是最新版本！")
+                elif kind == "git_failed":
+                    QMessageBox.warning(
+                        self, "更新失敗",
+                        f"git {outcome.get('stage', '?')} 失敗：\n"
+                        f"{outcome.get('stderr', '')}",
+                    )
+                elif kind == "updated":
+                    behind = outcome.get("behind", 0)
+                    reply = QMessageBox.question(
+                        self, "更新完成",
+                        f"已拉取 {behind} 筆新提交。\n"
+                        f"需要重新啟動才能生效。\n\n現在重啟嗎？",
+                        QMessageBox.Yes | QMessageBox.No,
+                    )
+                    if reply == QMessageBox.Yes:
+                        if self._spawn_restart_and_exit():
+                            return  # process is exiting
+                        # Popen failed — fall through to re-enable
+                        # the button so the user can try again or
+                        # restart manually.
+                    else:
+                        self.update_btn.setText("✅ 已更新（需重啟）")
+                        return  # leave button disabled until restart
+
+                self.update_btn.setText("🔄 檢查更新")
+                self.update_btn.setEnabled(True)
+
+            QTimer.singleShot(0, self, _ui)
+
+        threading.Thread(target=_do, daemon=True).start()
+
+    def _spawn_restart_and_exit(self) -> bool:
+        """Spawn a detached new sentinel process and hard-exit.
+
+        Returns False if Popen failed (caller should re-enable UI and
+        let the user try manually); does not return on success because
+        os._exit(0) is called.
+
+        Detached flags mirror the other restart path (~line 7276):
+        without them the new instance is a child of the dying one,
+        which on Windows can leave it inheriting a broken stdio
+        handle from the dying parent.
+        """
+        import os
+        import subprocess
+        import sys
+        repo_root = str(Path(__file__).parent.parent)
         try:
-            # Fetch + check if there are new commits
-            result = subprocess.run(
-                ["git", "fetch", "origin", "main"],
-                capture_output=True, text=True, timeout=30,
-                cwd=str(Path(__file__).parent.parent),
-            )
-
-            # Check how many commits behind
-            result = subprocess.run(
-                ["git", "rev-list", "--count", "HEAD..origin/main"],
-                capture_output=True, text=True, timeout=10,
-                cwd=str(Path(__file__).parent.parent),
-            )
-            behind = int(result.stdout.strip() or "0")
-
-            if behind == 0:
-                QMessageBox.information(self, "檢查更新", "已經是最新版本！")
-                self.update_btn.setText("🔄 檢查更新")
-                self.update_btn.setEnabled(True)
-                return
-
-            # Pull: fetch then hard-reset to avoid divergent-branch errors
-            result = subprocess.run(
-                ["git", "fetch", "origin", "main"],
-                capture_output=True, text=True, timeout=60,
-                cwd=str(Path(__file__).parent.parent),
-            )
-            if result.returncode != 0:
-                QMessageBox.warning(
-                    self, "更新失敗",
-                    f"git fetch 失敗：\n{result.stderr[:500]}",
+            kwargs: dict = {"cwd": repo_root, "close_fds": True}
+            if os.name == "nt":
+                DETACHED_PROCESS = 0x00000008
+                CREATE_NEW_PROCESS_GROUP = 0x00000200
+                kwargs["creationflags"] = (
+                    DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
                 )
-                self.update_btn.setText("🔄 檢查更新")
-                self.update_btn.setEnabled(True)
-                return
-
-            result = subprocess.run(
-                ["git", "reset", "--hard", "origin/main"],
-                capture_output=True, text=True, timeout=30,
-                cwd=str(Path(__file__).parent.parent),
-            )
-            if result.returncode != 0:
-                QMessageBox.warning(
-                    self, "更新失敗",
-                    f"git reset 失敗：\n{result.stderr[:500]}",
-                )
-                self.update_btn.setText("🔄 檢查更新")
-                self.update_btn.setEnabled(True)
-                return
-
-            reply = QMessageBox.question(
-                self, "更新完成",
-                f"已拉取 {behind} 筆新提交。\n需要重新啟動才能生效。\n\n現在重啟嗎？",
-                QMessageBox.Yes | QMessageBox.No,
-            )
-            if reply == QMessageBox.Yes:
-                # Restart: launch a new process then exit
-                import sys
-                subprocess.Popen(
-                    [sys.executable, "-m", "sentinel"],
-                    cwd=str(Path(__file__).parent.parent),
-                )
-                QApplication.quit()
-                import os
-                os._exit(0)
             else:
-                self.update_btn.setText("✅ 已更新（需重啟）")
-
+                kwargs["start_new_session"] = True
+            subprocess.Popen(
+                [sys.executable, "-m", "sentinel"],
+                **kwargs,
+            )
         except Exception as e:
-            QMessageBox.warning(self, "更新失敗", f"錯誤：{e}")
-            self.update_btn.setText("🔄 檢查更新")
-            self.update_btn.setEnabled(True)
+            QMessageBox.critical(
+                self, "重啟失敗",
+                f"無法啟動新的 app instance：{e}\n"
+                "請手動雙擊 start.bat。",
+            )
+            return False
+
+        QApplication.quit()
+        os._exit(0)
 
     def _refresh_ollama_status(self):
         """偵測 Ollama 連線狀態（同步，簡單直接）。"""
