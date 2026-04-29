@@ -107,6 +107,16 @@ else:
 
 print("[AI Slime] After zombie phase, sys.argv:", sys.argv, flush=True)
 
+
+# Retention probe (manifesto v0.7-alpha exit criterion). One line per
+# session start, date-only — no other content. Wrapped in broad
+# try so a write failure can never block boot. See sentinel/usage.py.
+try:
+    from sentinel.usage import mark_session_start
+    mark_session_start()
+except Exception as e:
+    print(f"[AI Slime] usage probe skipped: {e}", flush=True)
+
 if "--no-gui" in sys.argv:
     try:
         from sentinel.daemon import main
