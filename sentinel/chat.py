@@ -16,8 +16,58 @@ from sentinel.config import TELEGRAM_CHAT_ID
 from sentinel.learner import load_memory, save_memory, format_speech_style_for_prompt
 from sentinel.system_monitor import take_snapshot
 from sentinel import identity
+from sentinel.evolution import AFFINITY_LABELS
 
 log = logging.getLogger("sentinel.chat")
+
+# D7 routine reference — once the slime has been alive long enough,
+# its top observed affinity scores get surfaced into the prompt so it
+# can naturally say "最近你都...". Below D7 nothing is emitted; the
+# slime stays silent on routines because it hasn't earned the right
+# to claim it knows them yet.
+ROUTINE_REFERENCE_DAY_THRESHOLD = 7
+ROUTINE_REFERENCE_MIN_AFFINITY = 0.20  # below this it's noise, not a routine
+ROUTINE_REFERENCE_TOP_K = 2            # surface at most 2 routines
+
+
+def _build_routine_block(evo) -> str:
+    """Build the D7 routine-reference prompt block.
+
+    Returns "" before D7 OR when no affinity score clears the noise
+    floor. Otherwise returns a block that gives the LLM (a) the top
+    observed routines as Chinese labels with scores, and (b) explicit
+    phrasing guidance: surface naturally, don't list, don't report.
+
+    The promise (能力 tab D7 row) is "開始說「最近你都...」", so the
+    instruction to the LLM uses that exact phrasing as a seed.
+    """
+    try:
+        days_alive_int = max(1, int(evo.days_alive()) + 1)
+    except Exception:
+        return ""
+    if days_alive_int < ROUTINE_REFERENCE_DAY_THRESHOLD:
+        return ""
+
+    scores = getattr(evo, "affinity_scores", None) or {}
+    ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
+    top = [(k, v) for k, v in ranked if v >= ROUTINE_REFERENCE_MIN_AFFINITY]
+    top = top[:ROUTINE_REFERENCE_TOP_K]
+    if not top:
+        return ""
+
+    lines = []
+    for key, score in top:
+        label = AFFINITY_LABELS.get(key, key)
+        lines.append(f"- {label}（觀察強度 {score:.0%}）")
+    routines_text = "\n".join(lines)
+
+    return (
+        "=== 你陪了主人滿 7 天，可以開始說「最近你都...」===\n"
+        f"目前你看到主人最常做的事：\n{routines_text}\n"
+        "在對話自然的時候，可以用「最近你都在 X」、「我看你這幾天 X」這樣的"
+        "口氣帶出來，把你看到的節奏說回去給他聽。**不要列舉、不要像觀察報告**，"
+        "只在話題對得上的時候自然提一下。如果這一輪沒有合適的時機，就不用硬塞。\n\n"
+    )
 
 # Conversation history (in-memory, per session)
 _conversation: list[dict] = []
@@ -188,6 +238,7 @@ CHAT_SYSTEM_PROMPT = (
     "=== 你現在的情緒 ===\n"
     "<<EMOTION>>\n\n"
     "<<REUNION_BLOCK>>"
+    "<<ROUTINE_BLOCK>>"
     "=== 你的特質調性（根據對主人的觀察，你的語氣被這些特質染色）===\n"
     "<<TRAIT_OVERLAYS>>\n\n"
     "<<EQUIPMENT_VOICE>>"
@@ -279,6 +330,12 @@ def _build_system_prompt() -> str:
     else:
         reunion_block = ""
 
+    # Routine reference (D7 promise): once we've been alive >= 7 days
+    # AND there's a meaningful affinity signal, surface the master's
+    # observed routines so the slime can naturally say "最近你都...".
+    # Manifesto §原則 6 — earned by time, not by grind.
+    routine_block = _build_routine_block(evo)
+
     # Memorable moments (D): weighted pick, always include naming if exists
     moments_text = identity.format_moments_for_prompt(
         identity.pick_moments_for_prompt(k=3)
@@ -320,6 +377,8 @@ def _build_system_prompt() -> str:
         "<<EMOTION>>", emotion_text
     ).replace(
         "<<REUNION_BLOCK>>", reunion_block
+    ).replace(
+        "<<ROUTINE_BLOCK>>", routine_block
     ).replace(
         "<<TRAIT_OVERLAYS>>", trait_overlays_text
     ).replace(
