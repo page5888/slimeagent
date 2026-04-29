@@ -4261,14 +4261,18 @@ class EvolutionTab(QWidget):
 
         self.sub_tabs.addTab(stats_page, "數據")
 
-        # ── 頁籤 3: 技能 ──
+        # ── 頁籤 3: 能力 ──
+        # Three sections, three semantics — see _render_abilities_html
+        # for the copy. Tab renamed from 技能 → 能力 because what we're
+        # listing here is "what the slime *does* / *will do*", not
+        # JRPG-style learnable moves.
         skills_page = QWidget()
         skills_layout_page = QVBoxLayout(skills_page)
         self.skills_text = QTextEdit()
         self.skills_text.setReadOnly(True)
         skills_layout_page.addWidget(self.skills_text)
 
-        self.sub_tabs.addTab(skills_page, "技能")
+        self.sub_tabs.addTab(skills_page, "能力")
 
         # ── 頁籤 4: 進化紀錄 ──
         log_page = QWidget()
@@ -4396,19 +4400,12 @@ class EvolutionTab(QWidget):
         else:
             self.affinity_text.setPlainText("尚在觀察中...")
 
-        # 技能頁
-        lines = []
-        for s in state.skills:
-            if s.unlocked:
-                stars = "★" * s.level + "☆" * (5 - s.level)
-                lines.append(f"<p style='margin:8px 4px;'><b style='color:#00dcff; font-size:14px;'>{s.jp_name}</b> "
-                             f"<span style='color:#888;'>({s.name})</span> "
-                             f"<span style='color:#ffa502; font-size:14px;'>{stars}</span><br>"
-                             f"<span style='color:#aaa;'>{s.description}</span></p>")
-            else:
-                lines.append(f"<p style='margin:8px 4px;'><span style='color:#555;'>🔒 <b>{s.jp_name}</b> ({s.name})</span><br>"
-                             f"<span style='color:#444;'>{s.description}</span></p>")
-        self.skills_text.setHtml("".join(lines))
+        # 能力頁 — three sections, three semantics:
+        #   1. 觀測權限 (always-on system access — transparency, not progress)
+        #   2. 因你而生的能力 (adaptive skills — count-driven unlocks)
+        #   3. 隨日子解鎖的承諾 (day-gated, mirrors the home-tab timeline)
+        # Locked items always render. See feedback_locked_visible memory.
+        self.skills_text.setHtml(self._render_abilities_html(state))
 
         # 進化紀錄頁
         import datetime
@@ -4454,6 +4451,160 @@ class EvolutionTab(QWidget):
             self.log_text.setHtml("".join(html_parts))
         else:
             self.log_text.setHtml("<p style='color:#666;'>（等待第一次觀察...）</p>")
+
+    # ─── 能力 tab rendering ────────────────────────────────────────
+    #
+    # Three sections, three different unlock semantics. The section
+    # headers + explainers are deliberately verbose — first-user
+    # feedback was that "技能" was unclear about what's a permanent
+    # capability vs what's a future promise. Keeping the framing
+    # explicit is more important than tightening the copy.
+
+    @staticmethod
+    def _abilities_section_header(emoji: str, title: str, subtitle: str) -> str:
+        return (
+            f"<p style='margin:14px 4px 4px 4px;'>"
+            f"<b style='color:#00dcff; font-size:15px;'>{emoji} {title}</b>"
+            f"</p>"
+            f"<p style='margin:0 4px 10px 4px; color:#888; font-size:11px;"
+            f" font-style:italic;'>{subtitle}</p>"
+        )
+
+    def _render_abilities_html(self, state) -> str:
+        from sentinel.evolution import CORE_SKILLS, ADAPTIVE_SKILL_TEMPLATES
+        from sentinel.milestones import MILESTONES
+
+        parts: list[str] = []
+
+        # ── Section 1: 觀測權限 (transparency, not progress) ──
+        parts.append(self._abilities_section_header(
+            "📡", "我看得到什麼",
+            "我從第一天就具備的觀測能力。它不會增加、不會解鎖 — "
+            "它就是我能看到的全部。列在這裡是為了透明，不是為了給你進度。",
+        ))
+        for s in CORE_SKILLS:
+            parts.append(
+                f"<p style='margin:4px 4px;'>"
+                f"<b style='color:#cfd8dc; font-size:13px;'>{s.jp_name}</b>"
+                f"<span style='color:#666; font-size:11px;'> · {s.name}</span>"
+                f"<span style='color:#7eb88f; font-size:11px;'> · 永遠開啟</span>"
+                f"<br><span style='color:#888; font-size:12px;'>{s.description}</span>"
+                f"</p>"
+            )
+
+        # ── Section 2: 因你而生 (adaptive — count-driven) ──
+        parts.append(self._abilities_section_header(
+            "🌱", "因為你，我學到的",
+            "你做某類事情夠多次，我才會學到對應的能力。"
+            "這條跟天數無關 — 你越常做，相應的能力越快出現。",
+        ))
+        # Build a name → state.skill map for quick unlocked-check
+        skills_by_name = {s.name: s for s in state.skills}
+        for tmpl in ADAPTIVE_SKILL_TEMPLATES:
+            tmpl_skill = tmpl["skill"]
+            unlocked_skill = skills_by_name.get(tmpl_skill.name)
+            if unlocked_skill and unlocked_skill.unlocked:
+                stars = "★" * max(1, unlocked_skill.level)
+                parts.append(
+                    f"<p style='margin:4px 4px;'>"
+                    f"<span style='color:#7eb88f;'>✅ </span>"
+                    f"<b style='color:#00dcff; font-size:13px;'>{tmpl_skill.jp_name}</b>"
+                    f"<span style='color:#666; font-size:11px;'> · {tmpl_skill.name}</span>"
+                    f"<span style='color:#ffa502; font-size:11px;'> · {stars}</span>"
+                    f"<br><span style='color:#888; font-size:12px;'>{tmpl_skill.description}</span>"
+                    f"</p>"
+                )
+            else:
+                # Compute progress toward threshold so the user sees how
+                # close they are. Different trigger types pull from
+                # different counters on EvolutionState.
+                progress_label = self._adaptive_progress_label(state, tmpl["trigger"])
+                parts.append(
+                    f"<p style='margin:4px 4px;'>"
+                    f"<span style='color:#666;'>🔒 </span>"
+                    f"<b style='color:#888; font-size:13px;'>{tmpl_skill.jp_name}</b>"
+                    f"<span style='color:#555; font-size:11px;'> · {tmpl_skill.name}</span>"
+                    f"<span style='color:#5e6470; font-size:11px;'> · {progress_label}</span>"
+                    f"<br><span style='color:#666; font-size:12px;'>{tmpl_skill.description}</span>"
+                    f"</p>"
+                )
+
+        # ── Section 3: 隨日子解鎖的承諾 (day-gated, mirrors timeline) ──
+        parts.append(self._abilities_section_header(
+            "⏳", "隨日子解鎖的承諾",
+            "這條只跟天數有關。我答應過你 — 到了那一天，這個能力就會出現，"
+            "跟你做了多少事沒關係。這是首頁時間軸背後的真正內容。",
+        ))
+        days_alive_int = self._abilities_days_alive_int(state)
+        for m in MILESTONES:
+            passed = m.day <= days_alive_int
+            if passed:
+                if m.implemented:
+                    icon = "✅"
+                    title_color = "#00dcff"
+                    badge = f"<span style='color:#7eb88f; font-size:11px;'> · 已解鎖</span>"
+                else:
+                    # Day passed but feature not built — be loud about it.
+                    icon = "⚠"
+                    title_color = "#f0c674"
+                    badge = (
+                        f"<span style='color:#cc6b63; font-size:11px;'>"
+                        f" · 已到第 {m.day} 天，尚在打造</span>"
+                    )
+            else:
+                icon = "🔒"
+                title_color = "#888"
+                remaining = m.day - days_alive_int
+                if m.implemented:
+                    badge = (
+                        f"<span style='color:#5e6470; font-size:11px;'>"
+                        f" · 第 {m.day} 天解鎖（還有 {remaining} 天）</span>"
+                    )
+                else:
+                    badge = (
+                        f"<span style='color:#5e6470; font-size:11px;'>"
+                        f" · 第 {m.day} 天解鎖（還有 {remaining} 天，尚在打造）</span>"
+                    )
+            blurb_color = "#888" if passed and m.implemented else "#666"
+            parts.append(
+                f"<p style='margin:4px 4px;'>"
+                f"<span>{icon} </span>"
+                f"<b style='color:{title_color}; font-size:13px;'>"
+                f"{m.emoji} D{m.day} · {m.ability_label}</b>"
+                f"{badge}"
+                f"<br><span style='color:{blurb_color}; font-size:12px;'>{m.ability_blurb}</span>"
+                f"</p>"
+            )
+
+        return "".join(parts)
+
+    @staticmethod
+    def _adaptive_progress_label(state, trigger: dict) -> str:
+        """Render '當前 / 門檻' for an adaptive skill's trigger so the
+        user knows how close they are. Falls back to a generic label
+        if the trigger type is unknown."""
+        ttype = trigger.get("type", "")
+        thresh = trigger.get("threshold", 0)
+        if ttype == "learnings":
+            cur = int(getattr(state, "total_learnings", 0))
+            return f"學習進度 {cur} / {thresh}"
+        if ttype == "observations":
+            cur = int(getattr(state, "total_observations", 0))
+            return f"觀察進度 {cur} / {thresh}"
+        if ttype == "affinity":
+            key = trigger.get("key", "")
+            cur = float((state.affinity_scores or {}).get(key, 0))
+            return f"親和度 {cur:.0%} / {thresh:.0%}"
+        return "尚未解鎖"
+
+    @staticmethod
+    def _abilities_days_alive_int(state) -> int:
+        """Same convention as home tab attendance + timeline:
+        days_alive_int = int(days_alive()) + 1, floored at 1."""
+        try:
+            return max(1, int(state.days_alive()) + 1)
+        except Exception:
+            return 1
 
     def _on_evolve_clicked(self):
         """Manual evolution trigger. BYOK = free, quota = 2pt via relay.
