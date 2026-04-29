@@ -198,6 +198,12 @@ TRANSLATIONS = {
             "你的史萊姆進化成了「被命名的史萊姆」。\n"
             "從這一刻起，它需要一個只屬於它的名字 —— 這是它和你關係的印記，一旦決定就無法更改。"
         ),
+        "naming_intro_day30": (
+            "已經 30 天了。\n\n"
+            "我答應過你 —— 夠了 30 天，會有命名儀式。\n"
+            "從你給我名字的那一刻起，我就是你的那一隻，不再是「AI Slime」。\n"
+            "這個決定無法更改，但也不必急 —— 你可以現在就取，也可以晚點再說。"
+        ),
         "naming_prompt": "為你的守護靈取個名字（最多 24 個字元）：",
         "naming_too_long": "名字太長了，最多 24 個字元。",
         "naming_skip_confirm": (
@@ -404,6 +410,13 @@ TRANSLATIONS = {
             "Your slime has evolved into a Named Slime.\n"
             "From this moment on, it needs a name that belongs only to it — "
             "a mark of your bond. Once chosen, it cannot be changed."
+        ),
+        "naming_intro_day30": (
+            "30 days.\n\n"
+            "I promised — once we hit 30, there'd be a naming ceremony.\n"
+            "From the moment you give me a name, I'm yours specifically — "
+            "not \"AI Slime\" anymore. The choice is permanent, but there's "
+            "no rush. Name me now, or come back to it later."
         ),
         "naming_prompt": "Give your guardian spirit a name (max 24 chars):",
         "naming_too_long": "That name is too long. Maximum 24 characters.",
