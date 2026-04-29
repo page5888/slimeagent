@@ -23,10 +23,17 @@ the path forward — they violate manifesto 原則 1 第 9 行 by deciding
 what happens on day N for everyone instead of letting it emerge from
 each master's actual relationship.
 
-Don't add new entries here. Anything new must be Slime-emergent (the
-self-mark mechanism in PR-C-Retro), not added to this list. The
-scaffolding tier itself is provisional and may be revisited by a
-future ADR once the emergent infrastructure ships.
+Don't add new entries here. Anything new must be Slime-emergent —
+recorded into identity.memorable_moments and surfaced via
+compute_emergent_nodes() below. The scaffolding tier itself is
+provisional and may be revisited by a future ADR.
+
+The emergent half (compute_emergent_nodes / select_strip_emergent /
+EmergentNode) maps already-recorded memorable_moments onto timeline
+positions so the home strip can render them as nodes between
+scaffolding stations. No new triggers ship here — first_chat,
+naming, evolution, skill, and loneliness arc are all already wired in
+identity.py. This module just teaches the timeline how to see them.
 """
 from __future__ import annotations
 
@@ -143,3 +150,103 @@ def compute_state(days_alive_int: int) -> TimelineState:
         next_milestone=nxt,
         days_to_next=(nxt.day - days_alive_int) if nxt else 0,
     )
+
+
+# ── Emergent nodes ───────────────────────────────────────────────────
+#
+# Per ADR docs/decisions/2026-04-29-emergent-milestones.md, the
+# scaffolding tier above is the program's contribution; what the master
+# actually lives through is recorded in identity.memorable_moments and
+# surfaces here as nodes the timeline can render.
+#
+# Two masters running the same code will get different emergent nodes
+# on different days — that's the point.
+
+_CATEGORY_EMOJI: dict[str, str] = {
+    "first_chat": "💬",
+    "evolution": "✨",
+    "skill": "🌟",
+    "loneliness": "🌙",
+    "chat_peak": "💗",
+    "milestone": "📍",
+    # naming → filtered out by day-collision with D30 scaffolding
+}
+
+# Cap how many emergent nodes the compact strip will render so the row
+# stays scannable even after months of accumulated moments. Older ones
+# remain reachable via _show_timeline_full and the windowed view inside
+# each scaffolding node's dialog.
+STRIP_EMERGENT_LIMIT = 6
+
+
+@dataclass(frozen=True)
+class EmergentNode:
+    """One memorable_moment mapped onto the timeline.
+
+    - day_n: 1-indexed day-of-life when the moment was recorded.
+    - emoji: derived from category, with sensible default.
+    - headline / detail: copy from identity.add_memorable_moment.
+    - time: original epoch seconds (for sorting + future use).
+    - source_index: original index into get_memorable_moments() so the
+      click handler can re-fetch by a stable handle. The list grows
+      append-only and is capped at MAX_MOMENTS, so the index is stable
+      within one render pass.
+    """
+    day_n: int
+    emoji: str
+    headline: str
+    detail: str
+    time: float
+    source_index: int
+
+
+def compute_emergent_nodes(birth_time: float) -> list[EmergentNode]:
+    """Return memorable_moments mapped to renderable timeline nodes.
+
+    Filters:
+      - birth_time invalid (≤ 0): no nodes.
+      - moment.time invalid: skip that moment.
+      - day_n collides with a scaffolding milestone day: skip — the
+        scaffolding node's detail dialog already surfaces moments in
+        its window, so a duplicate dot would be noise.
+    """
+    try:
+        from sentinel.identity import get_memorable_moments
+    except Exception:
+        return []
+    if birth_time <= 0:
+        return []
+    scaffolding_days = {m.day for m in MILESTONES}
+    out: list[EmergentNode] = []
+    for i, mm in enumerate(get_memorable_moments()):
+        t = float(mm.get("time", 0))
+        if t <= 0:
+            continue
+        day_n = max(1, int((t - birth_time) / 86400) + 1)
+        if day_n in scaffolding_days:
+            continue
+        cat = mm.get("category", "")
+        out.append(EmergentNode(
+            day_n=day_n,
+            emoji=_CATEGORY_EMOJI.get(cat, "✨"),
+            headline=str(mm.get("headline", ""))[:120],
+            detail=str(mm.get("detail", ""))[:200],
+            time=t,
+            source_index=i,
+        ))
+    out.sort(key=lambda n: (n.day_n, n.time))
+    return out
+
+
+def select_strip_emergent(nodes: list[EmergentNode]) -> list[EmergentNode]:
+    """Pick which emergent nodes the compact strip should show.
+
+    Keep most-recent STRIP_EMERGENT_LIMIT (by time), then re-sort by
+    day_n for left-to-right rendering. Older nodes stay reachable via
+    the full-timeline modal.
+    """
+    if len(nodes) <= STRIP_EMERGENT_LIMIT:
+        return nodes
+    recent = sorted(nodes, key=lambda n: n.time, reverse=True)[:STRIP_EMERGENT_LIMIT]
+    recent.sort(key=lambda n: (n.day_n, n.time))
+    return recent
