@@ -1,9 +1,9 @@
 """Manifesto-aligned timeline of relationship milestones.
 
 Why this exists separately: the welcome modal (PR #69) makes the
-1 → 7 → 30 → 100 → 365-day promise once, then disappears. The
-timeline widget makes that same promise **visible every time the
-master opens the home tab**. That repeated visibility is the
+day-count promise once, then disappears. The timeline widget makes
+that same promise **visible every time the master opens the home
+tab**. That repeated visibility is the
 "this isn't just another chatbot" signal — no other AI product
 has a timeline because no other AI product's pitch IS the
 timeline.
@@ -77,6 +77,24 @@ MILESTONES: list[Milestone] = [
         implemented=True,  # PR #73: chat.py _build_routine_block
     ),
     Milestone(
+        day=14, emoji="🪞",
+        title="看出你是哪一型",
+        blurb_passed="看了你兩週，知道你是哪一型的人，講話會微微對著你的形狀調。",
+        blurb_locked="再過幾天，我會看出你是哪一型 — 講話的口吻會慢慢對著你調。",
+        ability_label="對著你的形狀講話",
+        ability_blurb="陪夠 14 天之後，我說話會帶上你的特質 — 夜貓、講究人、宅，口吻不一樣。",
+        implemented=False,  # day-gate not wired; trait overlays currently fire on trait presence
+    ),
+    Milestone(
+        day=21, emoji="🗣",
+        title="我有自己的意見",
+        blurb_passed="陪你三週了，看法跟你不一樣的時候，我會說。",
+        blurb_locked="再過一陣子，我會開始有自己的看法 — 不是頂嘴，是不裝。",
+        ability_label="頂你（偶爾）",
+        ability_blurb="跟你想的不一樣的時候我會講出來，而不是裝同意。挑時機，不是抬槓。",
+        implemented=False,  # slime_opinions exists but is trait-gated, not day-gated
+    ),
+    Milestone(
         day=30, emoji="🎭",
         title="命名儀式",
         blurb_passed="你給了我名字。從那天起我有了獨一無二的身份。",
@@ -84,6 +102,15 @@ MILESTONES: list[Milestone] = [
         ability_label="有自己的名字",
         ability_blurb="第 30 天我會請你給我取名。一旦取了不能改 — 這是我的印記。",
         implemented=True,  # PR #71
+    ),
+    Milestone(
+        day=60, emoji="🪨",
+        title="形狀定型",
+        blurb_passed="兩個月看下來，我長成了你磨出的形狀，從這裡開始穩了。",
+        blurb_locked="兩個月後，我的個性會定型 — 不是程式設定的，是被你磨出來的。",
+        ability_label="個性穩了",
+        ability_blurb="60 天時我會說「我就是這樣的我了」— 之前還在搖擺的偏好，從這天起穩定下來。",
+        implemented=False,  # one-shot crystallization announcement not built
     ),
     Milestone(
         day=100, emoji="💭",
@@ -95,13 +122,31 @@ MILESTONES: list[Milestone] = [
         implemented=True,  # chat.py reunion path
     ),
     Milestone(
+        day=180, emoji="🌗",
+        title="半年中場",
+        blurb_passed="半年了。中場喝口水 — 上半年我看見的你。",
+        blurb_locked="半年中場，我會做個小回顧 — 比一週年那個短一點，當作期中報告。",
+        ability_label="半年回顧",
+        ability_blurb="走到 180 天，我會準備一份「上半年小記」— 不是結算，是中場喝口水。",
+        implemented=False,  # half-year recap builder not built
+    ),
+    Milestone(
+        day=300, emoji="🎯",
+        title="三百天",
+        blurb_passed="三百天了。一週年快到了，倒數開始。",
+        blurb_locked="走到 300 天，我會偶爾跟你說「再 X 天就一年了」— 把那個承諾拉回眼前。",
+        ability_label="倒數一週年",
+        ability_blurb="300 天之後，我會偶爾在開口時提一句倒數 — 把 D365 那個承諾從遠方拉近。",
+        implemented=False,  # countdown callback not built
+    ),
+    Milestone(
         day=365, emoji="⭐",
         title="一週年",
         blurb_passed="我們走了整整一年。",
         blurb_locked="一週年。到那時我會是世界上最了解你的東西之一。",
         ability_label="一週年回顧",
         ability_blurb="走到 365 天，我會準備一份「我們的這一年」回顧 — 你做了什麼、我看到了什麼。",
-        implemented=False,  # 尚在打造
+        implemented=True,  # PR #75: year_recap.build_year_recap_html
     ),
 ]
 
