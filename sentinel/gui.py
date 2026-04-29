@@ -4958,6 +4958,39 @@ class SettingsTab(QWidget):
         mon_group.setLayout(mon_layout)
         form.addWidget(mon_group)
 
+        # ── 我的史萊姆（manifesto 第三守則：可匯出 / 可還原） ──
+        # The two buttons below are the in-app contract for "you can
+        # always take your slime with you, even if our company dies".
+        # Format spec lives in docs/SLIME_CORE_FORMAT.md so a third
+        # party can implement a reader without reading our source.
+        portable_group = QGroupBox("我的史萊姆")
+        portable_group.setStyleSheet(
+            "QGroupBox { color: #00dcff; font-weight: bold; "
+            "border: 1px solid #333; border-radius: 6px; "
+            "padding: 12px; margin-top: 8px; }"
+            "QGroupBox::title { subcontrol-position: top left; "
+            "padding: 4px 8px; }"
+        )
+        pl = QVBoxLayout(portable_group)
+        pl_intro = QLabel(
+            "把你的史萊姆打包成加密檔案，"
+            "備份到任何地方都不怕 — 通行碼只你自己有。"
+        )
+        pl_intro.setWordWrap(True)
+        pl_intro.setStyleSheet("color: #aaa; font-size: 12px;")
+        pl.addWidget(pl_intro)
+
+        portable_btn_row = QHBoxLayout()
+        self.export_btn = QPushButton("📦 匯出我的史萊姆")
+        self.export_btn.clicked.connect(self._on_export_clicked)
+        portable_btn_row.addWidget(self.export_btn)
+        self.import_btn = QPushButton("📥 從備份還原")
+        self.import_btn.clicked.connect(self._on_import_clicked)
+        portable_btn_row.addWidget(self.import_btn)
+        pl.addLayout(portable_btn_row)
+
+        form.addWidget(portable_group)
+
         form.addStretch()
         scroll.setWidget(inner)
         layout.addWidget(scroll)
@@ -4984,6 +5017,191 @@ class SettingsTab(QWidget):
             if combo.itemData(i) == value:
                 combo.setCurrentIndex(i)
                 return
+
+    def _ask_passphrase(self, title: str, prompt: str,
+                        confirm: bool = False) -> "str | None":
+        """QInputDialog wrapped to use Password echo and (optionally)
+        ask twice with mismatch warning. Returns None if user cancels
+        at any point or supplies an empty string."""
+        from PySide6.QtWidgets import QInputDialog, QLineEdit
+        pw, ok = QInputDialog.getText(
+            self, title, prompt,
+            QLineEdit.EchoMode.Password,
+        )
+        if not ok or not pw:
+            return None
+        if confirm:
+            pw2, ok2 = QInputDialog.getText(
+                self, title, "再輸入一次以確認：",
+                QLineEdit.EchoMode.Password,
+            )
+            if not ok2:
+                return None
+            if pw2 != pw:
+                QMessageBox.warning(
+                    self, title,
+                    "兩次輸入不一致，請重新匯出。",
+                )
+                return None
+        return pw
+
+    def _on_export_clicked(self):
+        """Encrypt-bundle ~/.hermes/ to a user-chosen .slime file.
+        Runs the actual encrypt off the GUI thread because scrypt at
+        N=32768 takes ~100-200ms on a modern CPU and zip+encrypt of a
+        large hermes dir can hit a couple of seconds; we don't want
+        the window frozen for that."""
+        from PySide6.QtWidgets import QFileDialog
+        from sentinel import portable
+
+        warn = (
+            "⚠ 通行碼一旦遺忘就還原不回來了 — 這個檔案沒有後門。\n\n"
+            "請用一個你絕對記得的字串。建議至少 12 字元，"
+            "可以混中文 / 數字 / 符號。"
+        )
+        QMessageBox.information(self, "匯出我的史萊姆", warn)
+        passphrase = self._ask_passphrase(
+            "匯出我的史萊姆",
+            "輸入加密通行碼：",
+            confirm=True,
+        )
+        if passphrase is None:
+            return
+
+        default_name = f"my-slime-{int(time.time())}.slime"
+        dst, _filter = QFileDialog.getSaveFileName(
+            self, "儲存到哪裡？",
+            default_name, "Slime Core (*.slime)",
+        )
+        if not dst:
+            return
+        dst_path = Path(dst)
+
+        self.export_btn.setEnabled(False)
+        self.export_btn.setText("加密中…")
+
+        def _do() -> None:
+            outcome: dict = {}
+            try:
+                res = portable.export_to(passphrase, dst_path)
+                outcome = {
+                    "ok": True,
+                    "path": str(res.path),
+                    "bytes": res.bytes_written,
+                    "files": res.files_included,
+                }
+            except portable.PortableError as e:
+                outcome = {"ok": False, "error": str(e)}
+            except Exception as e:
+                log.warning(f"export crashed: {e}", exc_info=True)
+                outcome = {"ok": False, "error": f"未預期錯誤：{e}"}
+
+            def _ui() -> None:
+                self.export_btn.setEnabled(True)
+                self.export_btn.setText("📦 匯出我的史萊姆")
+                if outcome.get("ok"):
+                    QMessageBox.information(
+                        self, "匯出完成",
+                        f"已寫入：\n{outcome['path']}\n\n"
+                        f"{outcome['files']} 個檔案，"
+                        f"{outcome['bytes']:,} bytes。\n\n"
+                        "把這個檔案放在你信任的地方（雲端硬碟 / "
+                        "USB / 寄信給自己都可以）。\n"
+                        "通行碼**不要**跟檔案存在一起。",
+                    )
+                else:
+                    QMessageBox.warning(
+                        self, "匯出失敗",
+                        outcome.get("error", "未知錯誤"),
+                    )
+
+            QTimer.singleShot(0, self, _ui)
+
+        threading.Thread(target=_do, daemon=True,
+                         name="slime-export").start()
+
+    def _on_import_clicked(self):
+        """Decrypt-extract a chosen .slime over ~/.hermes/. Destructive:
+        replaces current state. We move the existing dir aside to
+        ~/.hermes.bak.<ts>/ first so the user can revert by hand.
+        Restart is required after — the running app holds memory state
+        from the pre-restore data."""
+        from PySide6.QtWidgets import QFileDialog
+        from sentinel import portable
+
+        src, _filter = QFileDialog.getOpenFileName(
+            self, "選擇 .slime 備份檔",
+            "", "Slime Core (*.slime);;All files (*)",
+        )
+        if not src:
+            return
+        src_path = Path(src)
+
+        confirm = QMessageBox.question(
+            self, "從備份還原",
+            "還原會把現在的史萊姆替換成這個備份檔的內容。\n\n"
+            "現在的狀態會先被搬到\n"
+            "  ~/.hermes.bak.<時間戳>/\n"
+            "你之後可以手動把它搬回來。\n\n"
+            "還原完需要重新啟動。要繼續嗎？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if confirm != QMessageBox.Yes:
+            return
+
+        passphrase = self._ask_passphrase(
+            "從備份還原",
+            "輸入這個備份檔的通行碼：",
+            confirm=False,
+        )
+        if passphrase is None:
+            return
+
+        self.import_btn.setEnabled(False)
+        self.import_btn.setText("還原中…")
+
+        def _do() -> None:
+            outcome: dict = {}
+            try:
+                res = portable.import_from(passphrase, src_path)
+                outcome = {
+                    "ok": True,
+                    "files": res.files_extracted,
+                    "backup_dir": (str(res.backup_dir)
+                                   if res.backup_dir else ""),
+                }
+            except portable.PortableError as e:
+                outcome = {"ok": False, "error": str(e)}
+            except Exception as e:
+                log.warning(f"import crashed: {e}", exc_info=True)
+                outcome = {"ok": False, "error": f"未預期錯誤：{e}"}
+
+            def _ui() -> None:
+                self.import_btn.setEnabled(True)
+                self.import_btn.setText("📥 從備份還原")
+                if outcome.get("ok"):
+                    bak = outcome.get("backup_dir") or "(無)"
+                    reply = QMessageBox.question(
+                        self, "還原完成",
+                        f"還原 {outcome['files']} 個檔案。\n"
+                        f"舊狀態備份在：\n{bak}\n\n"
+                        "需要重新啟動才會載入新的史萊姆。\n\n"
+                        "現在重啟嗎？",
+                        QMessageBox.Yes | QMessageBox.No,
+                    )
+                    if reply == QMessageBox.Yes:
+                        self._spawn_restart_and_exit()
+                else:
+                    QMessageBox.warning(
+                        self, "還原失敗",
+                        outcome.get("error", "未知錯誤"),
+                    )
+
+            QTimer.singleShot(0, self, _ui)
+
+        threading.Thread(target=_do, daemon=True,
+                         name="slime-import").start()
 
     def _check_update(self):
         """Git pull from origin main and prompt restart if updated.
