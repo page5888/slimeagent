@@ -1395,6 +1395,18 @@ class HomeTab(QWidget):
         )
         layout.setSpacing(_tk.SPACE["md"])
 
+        # ── Retention 一行（manifesto v0.7-alpha exit criterion） ──
+        # days_alive 是 wall-clock，days_opened 是「真的有打開的天數」。
+        # 沒有第二個數字就無法驗證『養』有沒有黏住主人 ──
+        # 沒有度量就只能憑感覺說「應該還行」。
+        self.attendance_label = QLabel("")
+        self.attendance_label.setStyleSheet(
+            f"color: {_tk.PALETTE['text_muted']};"
+            f" font-size: {_tk.FONT_SIZE['meta']}px;"
+            f" padding: 0 0 4px 4px;"
+        )
+        layout.addWidget(self.attendance_label)
+
         # ── 每日反思卡（核心 wedge） ──
         # Note: we used to render a SlimeWidget here as well so the
         # card felt like "a face speaking", but at 240x240 it pushed
@@ -1510,7 +1522,30 @@ class HomeTab(QWidget):
             self.evo_card["value"].setText(f"{evo.title}")
             self.obs_card["value"].setText(f"{evo.total_observations:,}")
         except Exception:
-            pass
+            evo = None
+
+        # Retention line. Held in __init__ above the daily card.
+        # Format choices:
+        #   • Day 0 (just born): just say "今天是第 1 天 ✨" — the
+        #     percentage / opened-count math is meaningless and
+        #     would read as cold on the first day.
+        #   • Otherwise: "陪你 N 天 ｜ 你來了 M 天 (X%)" — frames the
+        #     user as the one showing up (養 is the user's verb).
+        try:
+            from sentinel.usage import attendance_summary
+            birth = float(getattr(evo, "birth_time", 0)) if evo else 0
+            s = attendance_summary(birth)
+            alive_d = max(1, int(s["days_alive"]) + 1)
+            opened = s["days_opened"]
+            if alive_d <= 1:
+                self.attendance_label.setText("今天是第 1 天 ✨")
+            else:
+                self.attendance_label.setText(
+                    f"陪你 {alive_d} 天 ｜ 你來了 {opened} 天 "
+                    f"({s['attendance_pct']}%)"
+                )
+        except Exception as e:
+            log.debug("attendance refresh failed: %s", e)
 
         # Daily card may need to repaint if it just generated in a
         # background thread mid-session, or if the user clicked
