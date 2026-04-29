@@ -1628,12 +1628,19 @@ class HomeTab(QWidget):
             else:
                 color = muted
                 weight = "normal"
+            # Each node is a link — clicking opens that milestone's
+            # detail (memories from that period if passed, locked
+            # blurb + countdown if not). text-decoration:none keeps
+            # the strip from looking like a hyperlink soup.
             cell = (
                 f"<td align='center' style='padding:0 4px;'>"
+                f"<a href='timeline:{m.day}' "
+                f"style='text-decoration:none;color:{color};'>"
                 f"<div style='font-size:18px;color:{color};"
                 f"font-weight:{weight};'>{m.emoji}</div>"
                 f"<div style='font-size:10px;color:{color};'>"
                 f"D{m.day}</div>"
+                f"</a>"
                 f"</td>"
             )
             nodes_html.append(cell)
@@ -1676,6 +1683,141 @@ class HomeTab(QWidget):
     def _on_timeline_link(self, href: str) -> None:
         if href == "timeline:full":
             self._show_timeline_full()
+            return
+        # Per-node link: timeline:<day>
+        if href.startswith("timeline:"):
+            try:
+                day = int(href.split(":", 1)[1])
+            except ValueError:
+                return
+            self._show_timeline_node(day)
+
+    def _show_timeline_node(self, day: int) -> None:
+        """One milestone's detail dialog — clicked from the strip.
+
+        Three states:
+          - passed + implemented: show passed blurb + ability info +
+            any memorable moments that fell within this milestone's
+            window (between previous milestone and this one).
+          - passed + unbuilt: passed blurb + 「尚在打造」 honesty.
+          - locked: locked blurb + countdown + ability info.
+        """
+        from sentinel.milestones import MILESTONES
+        from sentinel.evolution import load_evolution
+
+        m = next((x for x in MILESTONES if x.day == day), None)
+        if m is None:
+            return
+
+        try:
+            evo = load_evolution()
+            days = max(1, int(evo.days_alive()) + 1)
+            birth_time = float(getattr(evo, "birth_time", 0))
+        except Exception:
+            days = 1
+            birth_time = 0
+        passed = m.day <= days
+
+        prev_day = 0
+        idx = MILESTONES.index(m)
+        if idx > 0:
+            prev_day = MILESTONES[idx - 1].day
+
+        parts = ["<html><body style='line-height:1.6;'>"]
+        # Header
+        if passed and m.implemented:
+            color, mark = "#ffa502", "✓"
+            status_line = "已走過 · 已解鎖"
+        elif passed and not m.implemented:
+            color, mark = "#f0c674", "⚠"
+            status_line = "已到那天，但這個能力尚在打造"
+        else:
+            color, mark = "#888", "⌛"
+            remaining = m.day - days
+            status_line = f"還沒到 · 還有 {remaining} 天"
+        parts.append(
+            f"<p style='margin:0 0 8px 0;'>"
+            f"<span style='color:{color};font-size:16px;font-weight:bold;'>"
+            f"{mark} 第 {m.day} 天 · {m.emoji} {m.title}</span><br>"
+            f"<span style='color:#888;font-size:11px;'>{status_line}</span>"
+            f"</p>"
+        )
+        # Promise / receipt blurb
+        blurb = m.blurb_passed if passed else m.blurb_locked
+        parts.append(
+            f"<p style='margin:8px 0;color:#ccc;'>{blurb}</p>"
+        )
+        # Ability description (functional)
+        parts.append(
+            f"<p style='margin:8px 0;color:#888;font-size:12px;'>"
+            f"<b style='color:#00dcff;'>能力 · {m.ability_label}</b><br>"
+            f"{m.ability_blurb}</p>"
+        )
+
+        # Memories — only meaningful if we've passed and birth_time
+        # known. Window: (prev_day, day], so each click shows what
+        # happened between this milestone and the one before.
+        if passed and birth_time > 0:
+            window_moments = self._moments_in_window(
+                birth_time, prev_day, m.day,
+            )
+            if window_moments:
+                parts.append(
+                    "<p style='margin:12px 0 4px 0;color:#888;"
+                    "font-size:11px;font-style:italic;'>"
+                    f"這段期間（D{prev_day + 1}–D{m.day}）的紀錄："
+                    "</p>"
+                )
+                for mm in window_moments[:3]:
+                    parts.append(
+                        f"<p style='margin:4px 0 4px 12px;'>"
+                        f"<span style='color:#cfd8dc;'>· {mm.get('headline','')}</span>"
+                        + (f"<br><span style='color:#666;font-size:11px;'>"
+                           f"&nbsp;&nbsp;{mm.get('detail','')}</span>"
+                           if mm.get("detail") else "")
+                        + "</p>"
+                    )
+            elif m.implemented:
+                parts.append(
+                    "<p style='margin:12px 0;color:#5e6470;font-size:11px;"
+                    "font-style:italic;'>"
+                    "這段期間還沒有特別記下的時刻。"
+                    "</p>"
+                )
+
+        parts.append("</body></html>")
+
+        box = QMessageBox(self)
+        box.setWindowTitle(f"D{m.day} · {m.title}")
+        box.setTextFormat(Qt.RichText)
+        box.setText("".join(parts))
+        box.setStandardButtons(QMessageBox.Ok)
+        ok = box.button(QMessageBox.Ok)
+        if ok is not None:
+            ok.setText("關上")
+        box.exec()
+
+    @staticmethod
+    def _moments_in_window(
+        birth_time: float, prev_day: int, this_day: int,
+    ) -> list[dict]:
+        """Return memorable_moments whose timestamps fall in
+        (prev_day, this_day] of life. Newest first."""
+        try:
+            from sentinel.identity import get_memorable_moments
+        except Exception:
+            return []
+        if birth_time <= 0:
+            return []
+        lo = birth_time + prev_day * 86400  # exclusive lower
+        hi = birth_time + this_day * 86400  # inclusive upper
+        out = []
+        for mm in get_memorable_moments():
+            t = float(mm.get("time", 0))
+            if lo < t <= hi:
+                out.append(mm)
+        out.sort(key=lambda x: x.get("time", 0), reverse=True)
+        return out
 
     def _show_timeline_full(self) -> None:
         """Expand to a full timeline modal — every milestone with
