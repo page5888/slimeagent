@@ -74,7 +74,7 @@ MILESTONES: list[Milestone] = [
         blurb_locked="陪你 7 天，我會開始說「我認識你了一點」。",
         ability_label="引用觀察",
         ability_blurb="開始說「最近你都...」— 把我看到的你的節奏說回去給你聽。",
-        implemented=False,  # 尚在打造
+        implemented=True,  # PR #73: chat.py _build_routine_block
     ),
     Milestone(
         day=30, emoji="🎭",

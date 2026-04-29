@@ -60,6 +60,33 @@ class EvolutionState:
         return self.slime_name or "AI Slime"
 
 
+# ─── Affinity vocabulary ─────────────────────────────────────────────────
+#
+# Two parallel dicts keyed by the same affinity slug. Plain labels go
+# in the 能力 tab and the D7+ chat routine block; poetic titles drive
+# the evolution-direction line on the home tab.
+
+AFFINITY_LABELS: dict[str, str] = {
+    "coding":        "程式開發",
+    "communication": "溝通",
+    "research":      "研究探索",
+    "creative":      "創作",
+    "multitasking":  "多工切換",
+    "deep_focus":    "深度專注",
+    "late_night":    "夜間活動",
+}
+
+AFFINITY_TITLES: dict[str, str] = {
+    "coding":        "程式開發守護者",
+    "communication": "溝通網絡中樞",
+    "research":      "知識探索嚮導",
+    "creative":      "創意靈感守護",
+    "multitasking":  "多維情境管理者",
+    "deep_focus":    "心流守護者",
+    "late_night":    "暗夜守望者",
+}
+
+
 # ─── Evolution Milestones ────────────────────────────────────────────────
 
 EVOLUTION_TIERS = [
@@ -695,15 +722,7 @@ def _update_direction(state: EvolutionState):
         state.evolution_direction = "正在觀察中，尚未確定進化方向..."
         return
 
-    TRAIT_DESCRIPTIONS = {
-        "coding": "程式開發守護者",
-        "communication": "溝通網絡中樞",
-        "research": "知識探索嚮導",
-        "creative": "創意靈感守護",
-        "multitasking": "多維情境管理者",
-        "deep_focus": "心流守護者",
-        "late_night": "暗夜守望者",
-    }
+    TRAIT_DESCRIPTIONS = AFFINITY_TITLES
 
     top_traits = [TRAIT_DESCRIPTIONS.get(t, t) for t in state.dominant_traits[:2]]
     state.evolution_direction = " × ".join(top_traits)
