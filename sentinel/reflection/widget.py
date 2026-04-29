@@ -189,7 +189,25 @@ class DailyCardWidget(QWidget):
         """Load yesterday's card from disk if it exists; otherwise
         kick off background generation. Safe to call repeatedly —
         won't double-trigger generation thanks to `_generating` lock.
+
+        Day-1 special case: if the slime hasn't been alive long
+        enough to HAVE a yesterday-with-data, we show an honest
+        "I just got here" state instead of either spinning a loader
+        forever or rendering a fake-looking error. Manifesto says
+        empty IS the truth on day 1; surface that, don't hide it.
         """
+        # Day-1 short-circuit. We can't have observations from
+        # yesterday if the slime was born today, so don't even try
+        # to call the LLM — show the honest day-1 panel.
+        try:
+            from sentinel.evolution import load_evolution
+            evo = load_evolution()
+            if evo.days_alive() < 1.0:
+                self._render_day_one()
+                return
+        except Exception as e:
+            log.debug(f"day-1 probe failed, falling through: {e}")
+
         date_iso = yesterday_key()
         existing = load_card(date_iso)
         if existing:
@@ -247,6 +265,29 @@ class DailyCardWidget(QWidget):
         self.observation_body.setText("正在翻昨天的記憶…")
         self.insight_body.setText("")
         self.task_body.setText("")
+        self._set_feedback_enabled(False)
+
+    def _render_day_one(self):
+        """Honest day-1 state. Manifesto says empty IS the truth
+        right now — don't fake an error or a spinner.
+
+        Tone notes: same letter-y tone as the welcome modal. Don't
+        bullet-list capabilities; don't apologise; do invite the
+        user to start the relationship now if they want to."""
+        self.title_lbl.setText("我剛剛轉生到你的電腦")
+        self.date_lbl.setText("第 1 天")
+        self.observation_body.setText(
+            "我還沒看到你的昨天——因為昨天的我還沒存在。\n"
+            "從今天開始我會慢慢看，明天早上會在這裡寫下我看到的你。"
+        )
+        self.insight_body.setText(
+            "這格之後會放我對你的觀察心得。\n"
+            "現在還沒有，是正常的。"
+        )
+        self.task_body.setText(
+            "你不用做什麼。\n"
+            "想跟我說話也可以——對話分頁，隨時來。"
+        )
         self._set_feedback_enabled(False)
 
     def _render_error(self):

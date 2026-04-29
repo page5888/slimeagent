@@ -3158,7 +3158,11 @@ class MemoryTab(QWidget):
                 lines.append(line)
             self.log_text.setPlainText("\n\n".join(lines))
         else:
-            self.log_text.setPlainText("尚無學習紀錄。觀察活動後會自動記錄學習成果。")
+            self.log_text.setPlainText(
+                "我還在看你，還沒到要寫下感想的時候。\n"
+                "前幾天這裡會一直空著，是正常的——"
+                "不用調設定、也不用重啟。"
+            )
 
     def retranslate(self):
         self.refresh_btn.setText(t("status_refresh"))
@@ -7215,6 +7219,19 @@ class MainWindow(QMainWindow):
         except Exception as e:
             log.warning(f"routine handler registration failed at startup: {e}")
 
+        # Welcome ritual (manifesto-aligned day-1 framing). The window
+        # has to actually be on screen first, so we defer with
+        # singleShot(0, self, ...) — fires after the first paint.
+        # No-op after the first time it's been shown (persisted in
+        # ~/.hermes/onboarding.json). Wrapped in try so a corrupt
+        # onboarding file can't block boot.
+        try:
+            from sentinel.onboarding import is_welcome_shown
+            if not is_welcome_shown():
+                QTimer.singleShot(0, self, self._show_welcome_ritual)
+        except Exception as e:
+            log.warning(f"onboarding probe failed: {e}")
+
         # Slime self-expression auto-trigger.
         # `maybe_generate_weekly` is idempotent within a 6-day window,
         # so calling it on every startup is safe — the function itself
@@ -7707,6 +7724,33 @@ class MainWindow(QMainWindow):
         # 強制結束 Python process，確保 CMD 也會關閉
         import os
         os._exit(0)
+
+    def _show_welcome_ritual(self):
+        """First-launch welcome modal (manifesto day-1 framing).
+
+        Fired once via the onboarding state file, never re-shown
+        unless the user deletes ~/.hermes/onboarding.json. This is
+        the moment that decides whether a new download survives the
+        first 30 seconds — without it, the empty default app reads
+        as "half-finished" rather than "intentionally patient".
+
+        Body copy lives in sentinel/onboarding.py so it can be
+        edited without touching GUI plumbing.
+        """
+        from sentinel.onboarding import (
+            WELCOME_TITLE, WELCOME_BODY, mark_welcome_shown,
+        )
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Information)
+        box.setWindowTitle(WELCOME_TITLE)
+        box.setText(WELCOME_BODY)
+        box.setStandardButtons(QMessageBox.Ok)
+        # Make the button label warmer than default "OK".
+        ok_btn = box.button(QMessageBox.Ok)
+        if ok_btn is not None:
+            ok_btn.setText("好")
+        box.exec()
+        mark_welcome_shown()
 
     def closeEvent(self, event):
         """按 X 時的行為：詢問要最小化還是完全關閉。"""
