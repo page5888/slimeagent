@@ -54,3 +54,4 @@ ADR 是**當下的決策**（為什麼選這條路）。
 ## 既有的 ADR
 
 - [`2026-04-29-emergent-milestones.md`](2026-04-29-emergent-milestones.md) — 從 scripted 轉向 emergent 的時間里程碑
+- [`2026-04-29-slime-voice-anchors.md`](2026-04-29-slime-voice-anchors.md) — Slime 調性錨點（具體 vs 抽象，三個親筆示範）
