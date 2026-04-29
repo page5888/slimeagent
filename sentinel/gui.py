@@ -1597,15 +1597,21 @@ class HomeTab(QWidget):
         fl.addWidget(value_lbl)
         return {"frame": frame, "value": value_lbl}
 
-    def _render_timeline_html(self, days_alive_int: int) -> str:
+    def _render_timeline_html(self, days_alive_int: int, birth_time: float = 0.0) -> str:
         """Compact horizontal strip — emoji nodes + connector lines +
         one summary line below.
 
-        Past nodes render in amber; current/next-up renders boxed in
-        cyan; future nodes render dimmed. Hover or click expands the
-        full descriptions via _on_timeline_link → _show_timeline_full.
+        Past scaffolding nodes render in amber; current/next-up renders
+        boxed in cyan; future nodes render dimmed. Emergent nodes
+        (memorable_moments mapped onto the timeline) render between
+        scaffolding stations as small amber dots — they're by definition
+        past, since they record events that already happened. Click any
+        node to expand its detail.
         """
-        from sentinel.milestones import MILESTONES, compute_state
+        from sentinel.milestones import (
+            MILESTONES, compute_state,
+            compute_emergent_nodes, select_strip_emergent,
+        )
         from sentinel.ui import tokens as _tk
         state = compute_state(days_alive_int)
         amber = _tk.PALETTE["amber"]
@@ -1614,8 +1620,47 @@ class HomeTab(QWidget):
         text = _tk.PALETTE["text"]
         line_dim = _tk.PALETTE.get("border_subtle", "#3a3a3a")
 
+        emergent = select_strip_emergent(compute_emergent_nodes(birth_time))
+        emerg_idx = 0
+
+        def _emit_connector(passed: bool) -> str:
+            seg_color = amber if passed else line_dim
+            return (
+                f"<td valign='middle' style='padding:0;'>"
+                f"<div style='border-bottom:1px solid {seg_color};"
+                f"min-width:12px;height:1px;margin-bottom:14px;'></div>"
+                f"</td>"
+            )
+
+        def _emit_emergent(node) -> str:
+            # Smaller, no D-label, links by source_index. Always amber
+            # since emergent records are by definition past events.
+            return (
+                f"<td align='center' style='padding:0 2px;'>"
+                f"<a href='timeline:e:{node.source_index}' "
+                f"style='text-decoration:none;color:{amber};' "
+                f"title='{node.headline}'>"
+                f"<div style='font-size:13px;color:{amber};'>"
+                f"{node.emoji}</div>"
+                f"<div style='font-size:9px;color:{muted};"
+                f"margin-top:1px;'>·</div>"
+                f"</a>"
+                f"</td>"
+            )
+
         nodes_html = []
         for i, m in enumerate(MILESTONES):
+            # Emit any emergent nodes whose day_n falls before this
+            # scaffolding station (and after the previous one). Each
+            # gets its own connector segment so the line stays
+            # continuous regardless of how many emergents land here.
+            while emerg_idx < len(emergent) and emergent[emerg_idx].day_n < m.day:
+                if nodes_html:  # not the very first cell
+                    prev_passed = True  # left of an emergent dot is always passed
+                    nodes_html.append(_emit_connector(prev_passed))
+                nodes_html.append(_emit_emergent(emergent[emerg_idx]))
+                emerg_idx += 1
+
             is_passed = m.day <= days_alive_int
             is_next = (state.next_milestone is not None
                        and m.day == state.next_milestone.day)
@@ -1628,10 +1673,14 @@ class HomeTab(QWidget):
             else:
                 color = muted
                 weight = "normal"
-            # Each node is a link — clicking opens that milestone's
-            # detail (memories from that period if passed, locked
-            # blurb + countdown if not). text-decoration:none keeps
-            # the strip from looking like a hyperlink soup.
+            # Connector before this scaffolding cell (if anything
+            # already emitted). Color: amber if both sides are past.
+            if nodes_html:
+                # left side past iff there are passed scaffolding/emergent
+                # before this; conservative check is "this scaffold passed
+                # OR previous scaffold passed".
+                prev_scaffold_passed = (i > 0 and MILESTONES[i - 1].day <= days_alive_int)
+                nodes_html.append(_emit_connector(is_passed or prev_scaffold_passed))
             cell = (
                 f"<td align='center' style='padding:0 4px;'>"
                 f"<a href='timeline:{m.day}' "
@@ -1644,14 +1693,13 @@ class HomeTab(QWidget):
                 f"</td>"
             )
             nodes_html.append(cell)
-            if i < len(MILESTONES) - 1:
-                seg_color = amber if MILESTONES[i + 1].day <= days_alive_int else line_dim
-                nodes_html.append(
-                    f"<td valign='middle' style='padding:0;'>"
-                    f"<div style='border-bottom:1px solid {seg_color};"
-                    f"min-width:18px;height:1px;margin-bottom:14px;'></div>"
-                    f"</td>"
-                )
+
+        # Any emergent nodes after the last scaffolding station (rare —
+        # would mean a moment recorded post-D365).
+        while emerg_idx < len(emergent):
+            nodes_html.append(_emit_connector(True))
+            nodes_html.append(_emit_emergent(emergent[emerg_idx]))
+            emerg_idx += 1
 
         if state.next_milestone is None:
             summary = (
@@ -1684,13 +1732,99 @@ class HomeTab(QWidget):
         if href == "timeline:full":
             self._show_timeline_full()
             return
-        # Per-node link: timeline:<day>
+        # Emergent node: timeline:e:<source_index>
+        if href.startswith("timeline:e:"):
+            try:
+                idx = int(href.split(":", 2)[2])
+            except (ValueError, IndexError):
+                return
+            self._show_emergent_node(idx)
+            return
+        # Per-scaffolding-node link: timeline:<day>
         if href.startswith("timeline:"):
             try:
                 day = int(href.split(":", 1)[1])
             except ValueError:
                 return
             self._show_timeline_node(day)
+
+    def _show_emergent_node(self, source_index: int) -> None:
+        """Detail dialog for one emergent (Slime-marked) moment.
+
+        These are different from scaffolding milestones in two ways:
+        they have no locked/passed duality (they're always past), and
+        they carry no "ability" — just headline + detail + the day it
+        landed on. The dialog deliberately stays small to signal "this
+        is one moment in your relationship", not "this is a feature".
+        """
+        try:
+            from sentinel.identity import get_memorable_moments
+            from sentinel.milestones import (
+                compute_emergent_nodes, MILESTONES,
+            )
+            from sentinel.evolution import load_evolution
+        except Exception:
+            return
+
+        moments = get_memorable_moments()
+        if not (0 <= source_index < len(moments)):
+            return
+        mm = moments[source_index]
+
+        try:
+            evo = load_evolution()
+            birth_time = float(getattr(evo, "birth_time", 0))
+        except Exception:
+            birth_time = 0.0
+        if birth_time <= 0:
+            return
+
+        # Re-derive day_n the same way compute_emergent_nodes does so
+        # the dialog and the strip can never disagree.
+        t = float(mm.get("time", 0))
+        day_n = max(1, int((t - birth_time) / 86400) + 1)
+        cat = mm.get("category", "")
+        # Reuse strip mapping by going through compute_emergent_nodes
+        # so emoji choices live in one place.
+        emoji = "✨"
+        for n in compute_emergent_nodes(birth_time):
+            if n.source_index == source_index:
+                emoji = n.emoji
+                break
+
+        headline = str(mm.get("headline", "")).strip() or "(無標題)"
+        detail = str(mm.get("detail", "")).strip()
+
+        parts = ["<html><body style='line-height:1.6;'>"]
+        parts.append(
+            f"<p style='margin:0 0 8px 0;'>"
+            f"<span style='color:#ffa502;font-size:16px;font-weight:bold;'>"
+            f"{emoji} {headline}</span><br>"
+            f"<span style='color:#888;font-size:11px;'>"
+            f"第 {day_n} 天 · 我自己標記下來的時刻"
+            f"</span></p>"
+        )
+        if detail:
+            parts.append(
+                f"<p style='margin:8px 0;color:#ccc;'>{detail}</p>"
+            )
+        parts.append(
+            "<p style='margin:12px 0 0 0;color:#5e6470;font-size:11px;"
+            "font-style:italic;'>"
+            "這不是排程的節點 — 是因為發生過所以留下來。"
+            "</p>"
+        )
+        parts.append("</body></html>")
+
+        box = QMessageBox(self)
+        box.setWindowTitle(f"D{day_n} · {headline[:24]}")
+        box.setTextFormat(Qt.RichText)
+        box.setText("".join(parts))
+        box.setStandardButtons(QMessageBox.Ok)
+        ok = box.button(QMessageBox.Ok)
+        if ok is not None:
+            ok.setText("關上")
+        box.exec()
 
     def _show_timeline_node(self, day: int) -> None:
         """One milestone's detail dialog — clicked from the strip.
@@ -1860,32 +1994,68 @@ class HomeTab(QWidget):
         return out
 
     def _show_timeline_full(self) -> None:
-        """Expand to a full timeline modal — every milestone with
-        its blurb (passed or locked depending on whether reached).
-        Manifesto-aligned tone; the locked descriptions are the
-        promises, the passed descriptions are the receipts."""
-        from sentinel.milestones import MILESTONES
+        """Expand to a full timeline modal — scaffolding milestones
+        AND every emergent moment, interleaved by day.
+
+        Scaffolding entries carry the program's promise/receipt copy
+        (locked vs passed). Emergent entries carry whatever Slime
+        recorded at the time. Mixing them in one chronological list
+        shows the master that the timeline is a real history, not
+        just a fixed scoreboard."""
+        from sentinel.milestones import MILESTONES, compute_emergent_nodes
         try:
             from sentinel.evolution import load_evolution
             evo = load_evolution()
             days = max(1, int(evo.days_alive()) + 1)
+            birth_time = float(getattr(evo, "birth_time", 0))
         except Exception:
             days = 1
+            birth_time = 0.0
+
+        # Build a unified list of (day_n, kind, payload) entries and
+        # sort once. kind="scaffold" carries a Milestone, kind="emergent"
+        # carries an EmergentNode. Stable sort keeps emergent nodes in
+        # their original (time-ordered) sequence within the same day.
+        entries: list[tuple[int, str, object]] = []
+        for m in MILESTONES:
+            entries.append((m.day, "scaffold", m))
+        for n in compute_emergent_nodes(birth_time):
+            entries.append((n.day_n, "emergent", n))
+        entries.sort(key=lambda e: (e[0], 0 if e[1] == "scaffold" else 1))
 
         lines = ["<html><body style='line-height:1.6;'>"]
-        for m in MILESTONES:
-            passed = m.day <= days
-            color = "#ffa502" if passed else "#888"
-            mark = "✓" if passed else "⌛"
-            blurb = m.blurb_passed if passed else m.blurb_locked
-            lines.append(
-                f"<p style='margin:8px 0;'>"
-                f"<span style='color:{color};font-weight:bold;'>"
-                f"{mark} 第 {m.day} 天 · {m.emoji} {m.title}"
-                f"</span><br>"
-                f"<span style='color:#ccc;font-size:13px;'>{blurb}</span>"
-                f"</p>"
-            )
+        for day_n, kind, payload in entries:
+            if kind == "scaffold":
+                m = payload  # type: ignore[assignment]
+                passed = m.day <= days
+                color = "#ffa502" if passed else "#888"
+                mark = "✓" if passed else "⌛"
+                blurb = m.blurb_passed if passed else m.blurb_locked
+                lines.append(
+                    f"<p style='margin:8px 0;'>"
+                    f"<span style='color:{color};font-weight:bold;'>"
+                    f"{mark} 第 {m.day} 天 · {m.emoji} {m.title}"
+                    f"</span><br>"
+                    f"<span style='color:#ccc;font-size:13px;'>{blurb}</span>"
+                    f"</p>"
+                )
+            else:
+                n = payload  # type: ignore[assignment]
+                # Emergent rows are indented and dimmer so the eye
+                # reads scaffolding as the spine and emergent as
+                # punctuation between stations.
+                detail_html = (
+                    f"<br><span style='color:#888;font-size:12px;'>"
+                    f"{n.detail}</span>"
+                ) if n.detail else ""
+                lines.append(
+                    f"<p style='margin:4px 0 4px 16px;'>"
+                    f"<span style='color:#d4a35a;font-size:13px;'>"
+                    f"· 第 {n.day_n} 天 · {n.emoji} {n.headline}"
+                    f"</span>"
+                    f"{detail_html}"
+                    f"</p>"
+                )
         lines.append("</body></html>")
 
         box = QMessageBox(self)
@@ -1929,7 +2099,9 @@ class HomeTab(QWidget):
                 )
             # Timeline shares the same alive_d so we don't double-
             # compute and never fall out of sync with the line above.
-            self.timeline_label.setText(self._render_timeline_html(alive_d))
+            self.timeline_label.setText(
+                self._render_timeline_html(alive_d, birth)
+            )
         except Exception as e:
             log.debug("attendance/timeline refresh failed: %s", e)
 
