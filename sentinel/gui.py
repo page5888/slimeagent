@@ -477,6 +477,21 @@ class ChatTab(QWidget):
         self.input_field.clear()
         self.send_btn.setEnabled(False)
         self._append_user(text)
+
+        # Manifesto 第一守則, day-1: scan for self-harm / suicide
+        # intent BEFORE the LLM ever sees the message. An LLM riff
+        # on this kind of input is the wrong shape regardless of
+        # alignment quality — the user needs human resources, not a
+        # chatbot. We surface a hand-off card instead and skip the
+        # round-trip entirely. The audit log records only that the
+        # net fired, never the text.
+        from sentinel.safety import check_crisis, format_handoff_html
+        if check_crisis(text) is not None:
+            self.chat_display.append(format_handoff_html())
+            self.chat_display.moveCursor(QTextCursor.End)
+            self.send_btn.setEnabled(True)
+            return
+
         self._show_thinking()
 
         # Process in background thread
