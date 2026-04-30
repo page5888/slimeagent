@@ -4,6 +4,31 @@
 
 ---
 
+## [Unreleased]
+
+### Fixed — Telegram idle report 不再 48 條/天 heartbeat 噪音
+
+使用者實機回報：「Telegram 一直發訊息，**很認真地提醒我電腦有甚麼問題、但是很煩**。」自己的對應方法是把 API 拿掉，順便把真實警告也關掉了。**這是預設設計問題，未來每個串 Telegram 的使用者都會踩。**
+
+根因：`daemon.monitor_loop` 的 idle-report block 每 30 分鐘**無條件**送「💤 *AI Slime 定期報告*\n系統正常\n{snapshot}」，48 條/天的 heartbeat 把真實警告（CPU 異常、LLM 全爆等）淹沒在噪音裡。
+
+修法（跟 ADR 2026-04-30 護欄 C「通道升級需要主人明示同意、預設關」一致）：
+
+- **新增 `sentinel/idle_report.py`** — 純函式 `compose_message(warnings, snapshot_summary, llm_warning)`，**有訊號才回傳訊息、否則回 `None`**。daemon 拿到 `None` 就沉默。
+- **daemon 的 idle-report block 改成條件式發送** — 只在以下任一條件成立時才呼叫 `bot_send_fn`：
+  - `snapshot.warnings` 非空（CPU/RAM/disk 真有問題）
+  - `compose_idle_warning()` 回傳警告（LLM 主 provider 全爆）
+- 本機 cron 檢查（loneliness、emergent self-mark）**照常每 30 分鐘跑**——它們改本機狀態、不發 Telegram。
+- 真實警告路徑（`analyze_events` → `bot_send_fn`，daemon line 154）跟崩潰訊息（line 225）完全不變。
+
+哲學：Telegram 是訊號通道，不是 heartbeat 通道。30 分鐘 heartbeat 本來就是 implicit consent 的副作用，正好趁這次拔掉。
+
+不加 `enable_heartbeat` 開關的理由：heartbeat-style notification 是普遍的爛 UX，給設定就是為爛預設背書。要回到舊行為的人可以自己改 daemon。
+
+6 個 unit test：empty / llm-only / snapshot-only / both / "" 視同 None / list 與 summary 解耦。62/62 全綠。
+
+---
+
 ## [0.7.1] — 2026-04-30
 
 0.7.0 落地了 emergent self-mark MVP；0.7.1 是「**讓它真的看得到**」的 patch release——把 0.7.0 的核心新功能（slime 自主節點標記、LLM 多 provider fallback）變成**可觀察、可測試、可在出問題時自動 surface** 的東西。沒有新使用者功能；只把已上線的東西不再隱形。

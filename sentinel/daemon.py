@@ -177,26 +177,31 @@ def monitor_loop(bot_send_fn):
                         log.warning(f"speech-style distill error: {e}")
                     last_chat_count = current_chat_count
 
-            # Idle report (every 30 min)
+            # Idle cycle (every 30 min). Telegram message ONLY fires
+            # when there's actually news — see sentinel.idle_report and
+            # ADR 2026-04-30. The cron checks below (loneliness, emergent
+            # self-mark) run every cycle regardless: they update local
+            # state, not Telegram.
             if now - last_idle_report >= IDLE_REPORT_INTERVAL:
                 last_idle_report = now
                 snapshot = take_snapshot()
-                report = (
-                    f"💤 *AI Slime 定期報告*\n系統正常。\n{snapshot.summary()}"
-                )
-                # If primary LLM provider is silently blocked today,
-                # surface that into the same idle message so the master
-                # sees it on Telegram without having to tail sentinel.log.
-                # Stateless — embeds into every idle report while the
-                # condition holds; recovers automatically.
+
+                llm_warning = None
                 try:
                     from sentinel.llm_health import compose_idle_warning
-                    warn = compose_idle_warning()
-                    if warn:
-                        report = f"{report}\n{warn}"
+                    llm_warning = compose_idle_warning()
                 except Exception as e:
                     log.debug(f"compose_idle_warning failed: {e}")
-                bot_send_fn(report)
+
+                from sentinel.idle_report import compose_message
+                message = compose_message(
+                    warnings=snapshot.warnings,
+                    snapshot_summary=snapshot.summary(),
+                    llm_warning=llm_warning,
+                )
+                if message is not None:
+                    bot_send_fn(message)
+                # else: stay silent. No heartbeat-only Telegram messages.
                 # I. Narrative arc: check for loneliness during idle reports
                 # (rate-limited internally — at most one loneliness moment per
                 # 30 days regardless of how often we call this).
