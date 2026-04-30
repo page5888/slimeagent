@@ -1,0 +1,95 @@
+# PR-time guardrails — catch broken-on-merge before it lands on main.
+#
+# What this checks:
+#   1. Every .py file under sentinel/ parses (compileall — no syntax errors)
+#   2. Core Qt-free modules import cleanly (catches missing-name / circular
+#      ImportError that compileall can't see)
+#
+# What this deliberately does NOT check:
+#   - Qt UI behavior — no headless renderer in a Linux container
+#     (release.yml's windows-latest job covers the build path on tag push)
+#   - smoke_test_wallet.py / smoke_test_creator_reward.py — need 5888
+#     wallet credentials, not safe in CI
+#   - Linting / formatting — project doesn't enforce one yet; not the
+#     job of this workflow to introduce a style argument by stealth
+#
+# Why Linux not Windows:
+#   Faster + cheaper minutes, and the syntax / import surface is OS-
+#   agnostic. The Windows-specific build path is exercised on every
+#   tag push by release.yml.
+
+name: PR Checks
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Cancel stale runs when a PR is updated — saves minutes and shows the
+# latest commit's status in the PR UI.
+concurrency:
+  group: pr-checks-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  syntax-and-import:
+    name: Syntax + import smoke
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'         # matches release.yml
+          cache: 'pip'
+          cache-dependency-path: sentinel/requirements.txt
+
+      - name: Install dependencies
+        # PySide6 is several hundred MB; pip cache absorbs the cost
+        # after the first run. We install everything from
+        # requirements.txt because the import smoke below should fail
+        # if a module ever quietly grows a top-level Qt dep — better
+        # to learn that here than at user-machine import time.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r sentinel/requirements.txt
+
+      - name: Syntax check (compileall)
+        # -q suppresses the "Listing ..." chatter; non-zero exit means
+        # at least one .py file did not parse. Equivalent to "does this
+        # branch even import" without running any code.
+        run: python -m compileall -q sentinel
+
+      - name: Smoke-import core modules
+        # These are the modules whose imports we want to be load-bearing
+        # in CI — pure logic / state / LLM glue, no Qt. If any of them
+        # gain a top-level Qt dep this will fail (PySide6 IS installed
+        # above, but importing it without a display still raises on
+        # Linux, which is the signal we want).
+        run: |
+          python - <<'PY'
+          import importlib
+          modules = [
+              "sentinel.config",
+              "sentinel.learner",
+              "sentinel.evolution",
+              "sentinel.identity",
+              "sentinel.milestones",
+              "sentinel.llm",
+              "sentinel.emergent_self_mark",
+              "sentinel.safety",
+          ]
+          failures = []
+          for name in modules:
+              try:
+                  importlib.import_module(name)
+                  print(f"OK   {name}")
+              except Exception as e:
+                  failures.append((name, e))
+                  print(f"FAIL {name}: {type(e).__name__}: {e}")
+          if failures:
+              raise SystemExit(f"{len(failures)} module(s) failed to import")
+          PY
