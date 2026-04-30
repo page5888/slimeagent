@@ -5,7 +5,7 @@
 > 一隻在桌面背景陪你的 AI 玩具——觀察你、認識你、陪你 30 年的一隻，不是市面上最聰明的那隻。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.7.1-00dcff.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.7.2-00dcff.svg)](CHANGELOG.md)
 [![Platform](https://img.shields.io/badge/platform-Windows-lightgrey.svg)]()
 
 **[📜 Manifesto / 北極星](docs/manifesto.md)** · **[📦 Slime Core 格式](docs/SLIME_CORE_FORMAT.md)** · **[官方首頁](https://slimeagent-relay.onrender.com/)** · **[社群市場](https://slimeagent-relay.onrender.com/market)** · **[更新記錄](CHANGELOG.md)** · **[5888 錢包](https://wallet-5888.web.app)**
