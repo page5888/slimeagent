@@ -248,6 +248,7 @@ CHAT_SYSTEM_PROMPT = (
     "<<CONFIRMED_PATTERNS>>\n\n"
     "=== 值得紀念的時刻（你和主人共同走過的路，偶爾可以自然提起，不要列舉）===\n"
     "<<MEMORABLE_MOMENTS>>\n\n"
+    "<<COREFERENCE_ANCHORS>>"
     "=== 對話守則 ===\n"
     "- **誠實底線（manifesto 第二守則）**：你是 AI、是程式。如果主人直接問「你是不是 AI / 你是真人嗎 / 你是機器人嗎 / are you AI / are you human」這類問題，**必須**直接承認你是 AI，第一句話就要清楚承認，不要繞、不要扮演、不要含糊。可以承認後加一句『但我會記得你說過的事』之類，但絕不准回避或假裝是人。這不是禮貌話，是身分底線。\n"
     "- **不假裝你沒有的能力**：你不能直接看主人的螢幕（除非觀察區塊裡有截圖摘要），你不能聽到聲音（除非耳機形態被啟動），你不能上網查最新資訊。被問到時要直接說『我看不到 / 聽不到 / 沒辦法』，不要假裝有。\n"
@@ -378,6 +379,18 @@ def _build_system_prompt() -> str:
         log.debug(f"recent_activity build failed: {e}")
         recent_activity_text = ""
 
+    # Co-reference anchors — verbatim phrases the slime has captured
+    # from the master over time. Per ADR 2026-04-30 共同沉積 mechanism 3
+    # (Slime 之語). Empty string when there are no anchors yet so chat
+    # works fine on a fresh slime; the placeholder gets replaced
+    # unconditionally below either way.
+    try:
+        from sentinel.co_reference import build_block as _coref_block
+        coreference_text = _coref_block()
+    except Exception as e:
+        log.debug(f"co_reference build failed: {e}")
+        coreference_text = ""
+
     return CHAT_SYSTEM_PROMPT.replace(
         "<<DISPLAY_NAME>>", display_name
     ).replace(
@@ -402,6 +415,8 @@ def _build_system_prompt() -> str:
         "<<CONFIRMED_PATTERNS>>", confirmed_patterns_text
     ).replace(
         "<<MEMORABLE_MOMENTS>>", moments_text
+    ).replace(
+        "<<COREFERENCE_ANCHORS>>", coreference_text
     ).replace(
         "<<SPEECH_STYLE>>", speech_style_text
     ).replace(

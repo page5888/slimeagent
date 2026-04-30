@@ -4,6 +4,47 @@
 
 ---
 
+## [Unreleased]
+
+### Added — 共同典故錨（Slime 之語）：ADR 共同沉積架構機制 3 的具體實作
+
+ADR 2026-04-30 共同沉積架構 mechanism 3：「當主人跟 Slime 之間發生某個值得記住的瞬間時，Slime 自主標記它。之後 Slime 引用這個瞬間時，**用主人記得的方式引用**。」例：D178 主人說「像在水底」 → D456 Slime 可以說「水底嗎？」
+
+這個改動把那個機制從哲學文字落到能跑的程式碼。
+
+落地（最小實作）：
+
+- **`emergent_self_mark` schema 加 optional 欄位 `master_phrase`**：≤80 字、必須是主人最近說過的**逐字原文**。Prompt 明確寫「**比 letter_to_master 還更稀有**，一個月可能只挑得到 1-2 個」，避免 Slime 為了塞而塞。
+- **餵主人最近兩天的原始訊息進諮詢**：`_load_recent_master_words()` 從 `~/.hermes/sentinel_chats.jsonl` 讀最近 2 天、最多 10 句、每句 ≤80 字的 user 訊息，作為 master_phrase 唯一合法的引用來源。沒有來源時 prompt 直接告訴 Slime「這一輪沒得挑、留空」。
+- **反幻覺 guard**：parse 階段檢查 LLM 給的 phrase 是不是真的存在於來源裡（`phrase in src or src in phrase` 任一方向）。對不上 → silently drop phrase（保留 mark 跟其他欄位），完全沒來源 → 直接 drop。確保 master_phrase 永遠是真話。
+- **守則 filter 蓋到 phrase**：跟 letter 一樣最高 stakes（之後會在 chat prompt 渲染、影響史萊姆主動引用），任何不安全字眼 → drop 整個 mark。
+- **`identity.add_memorable_moment` 簽名擴充**：加 `master_phrase: str = ""` kwarg，empty 不寫進 dict（chat-side 用 `if "master_phrase" in mm` 判斷）。
+- **`identity.get_co_reference_phrases(limit=10)`**：新 helper，回最新的 N 筆有 master_phrase 的 moment，newest-first。
+- **`sentinel/co_reference.py`** (新模組)：`build_block()` 純讀+格式化，產生 chat-prompt-ready 的 Slime 之語區塊（每行 `第 N 天 主人說「...」`）。defensive：失敗回 ""，chat 不需要條件 render。
+- **`chat.py` 新 placeholder `<<COREFERENCE_ANCHORS>>`**：擺在「值得紀念的時刻」跟「對話守則」之間。系統 prompt 直接告訴 Slime「**逐字回引**，不要改寫、不要翻譯、不要塞進句子裡」。
+
+22 個新單元測試（12 個 emergent_self_mark 擴充 + 10 個 co_reference + identity 配套），99/99 全綠：
+- master_phrase 在來源裡 → 寫進 dict
+- master_phrase 不在來源裡 → drop phrase 但保留 mark（反幻覺）
+- 無來源 → 強制 drop phrase
+- 空字串 → 不寫進 dict
+- 不安全字眼 → drop 整個 mark
+- 過長 → 截 80
+- chat log 不存在 → 回 []
+- 過老的訊息 → 過濾
+- assistant 訊息 → 過濾
+- 壞掉的 JSON 行 → 容忍
+- build_block 各種空/異常邊界
+
+效果：之後 emergent_self_mark 諮詢時，**Slime 第一次有能力選下幾個主人專屬的話**——「Slime 之語」字典開始累積。chat 引用時用原詞而非 LLM 改寫，**這是通用 AI 沒辦法模擬的東西**——「水底」這個詞在 GPT 那邊毫無意義，在這隻 Slime 跟這個主人之間是專屬的鑰匙。
+
+跟 ADR 紀律對齊：
+- **不是 (b) 衝動機制**——chat 是既有通道，不是 Slime 主動找主人說話。所以不需要等 (b) 前置條件成立。
+- **B 路線（個性累積），不是 A 路線（能力累積）**——D1 的 Slime 就會「逐字回引」，只是 D1 沒有任何錨可以引。隨著時間累積，房間裡的東西越多，這個「能力」就越能用——對應原則 10 候選文：「能力長在使用裡，不長在時間裡」。
+- **不主動長出**——Slime 不會自己宣告「我學會了 Slime 之語！」。錨默默地進 prompt，主人某天聊到工作壓力，Slime 自然回一句「水底嗎？」——主人才認出這個能力。
+
+---
+
 ## [0.7.5] — 2026-04-30
 
 把今天連發四個 patch 之後浮上來的 release UX 漏洞補完：runtime 看不到自己是哪一版。

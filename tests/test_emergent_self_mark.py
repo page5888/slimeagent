@@ -167,6 +167,11 @@ class TestRecordFlow(unittest.TestCase):
             mock.patch("sentinel.learner.load_memory", side_effect=fake_load),
             mock.patch("sentinel.learner.save_memory", side_effect=fake_save),
             mock.patch("sentinel.emergent_log.record_consultation"),
+            # _load_recent_master_words reads ~/.hermes/sentinel_chats.jsonl
+            # by default — pin to empty list so tests don't depend on
+            # whatever the real file happens to contain. Tests that
+            # need a non-empty source patch this individually.
+            mock.patch.object(esm, "_load_recent_master_words", return_value=[]),
         ]
         for p in self._patches:
             p.start()
@@ -348,6 +353,209 @@ class TestRecordFlow(unittest.TestCase):
             self.assertTrue(esm.record_emergent_moment_if_due())
         moments = self.fake_memory.get("memorable_moments", [])
         self.assertLessEqual(len(moments[0]["letter_to_master"]), 200)
+
+    # ── master_phrase / co-reference anchor (ADR 共同沉積 mech 3) ──
+
+    def _patch_master_words(self, words):
+        return mock.patch.object(
+            esm, "_load_recent_master_words", return_value=list(words),
+        )
+
+    def test_master_phrase_persisted_when_quoted_from_source(self):
+        # Slime picked a phrase that's literally in the source words.
+        # That's the legitimate path — it should land in the moment.
+        reply = json.dumps({
+            "mark": True,
+            "headline": "主人今天用了一個我之前沒聽過的比喻",
+            "detail": "我把那句話收進來了。",
+            "master_phrase": "像在水底",
+        })
+        with self._patch_evo(), \
+             self._patch_master_words(["最近寫 code 像在水底",
+                                       "今天好累"]), \
+             self._patch_llm(reply):
+            self.assertTrue(esm.record_emergent_moment_if_due())
+        moments = self.fake_memory.get("memorable_moments", [])
+        self.assertEqual(len(moments), 1)
+        self.assertEqual(moments[0]["master_phrase"], "像在水底")
+
+    def test_master_phrase_dropped_when_not_in_source(self):
+        # Anti-hallucination guard: the LLM returned a phrase that
+        # doesn't appear in the source. Drop the phrase but KEEP the
+        # mark — headline/detail can still be valid.
+        reply = json.dumps({
+            "mark": True,
+            "headline": "今天值得記",
+            "detail": "原因略",
+            "master_phrase": "主人從沒說過的句子",
+        })
+        with self._patch_evo(), \
+             self._patch_master_words(["主人說過的話一",
+                                       "主人說過的話二"]), \
+             self._patch_llm(reply):
+            self.assertTrue(esm.record_emergent_moment_if_due())
+        moments = self.fake_memory.get("memorable_moments", [])
+        self.assertEqual(len(moments), 1)
+        # Mark survived...
+        self.assertEqual(moments[0]["headline"], "今天值得記")
+        # ...but the hallucinated phrase did not.
+        self.assertNotIn("master_phrase", moments[0])
+
+    def test_master_phrase_dropped_when_no_source_words(self):
+        # No source was given — any phrase the LLM returns is
+        # hallucinated. Drop unconditionally.
+        reply = json.dumps({
+            "mark": True,
+            "headline": "今天值得記",
+            "detail": "可是沒有對話",
+            "master_phrase": "我直接編一句",
+        })
+        with self._patch_evo(), \
+             self._patch_master_words([]), \
+             self._patch_llm(reply):
+            self.assertTrue(esm.record_emergent_moment_if_due())
+        moments = self.fake_memory.get("memorable_moments", [])
+        self.assertNotIn("master_phrase", moments[0])
+
+    def test_no_master_phrase_field_when_llm_omits_it(self):
+        # Common case — most marks won't carry a phrase. Moment dict
+        # should NOT carry the master_phrase key at all.
+        reply = json.dumps({
+            "mark": True,
+            "headline": "h",
+            "detail": "d",
+        })
+        with self._patch_evo(), \
+             self._patch_master_words(["主人說了什麼"]), \
+             self._patch_llm(reply):
+            self.assertTrue(esm.record_emergent_moment_if_due())
+        moments = self.fake_memory.get("memorable_moments", [])
+        self.assertNotIn("master_phrase", moments[0])
+
+    def test_empty_string_master_phrase_not_persisted(self):
+        reply = json.dumps({
+            "mark": True,
+            "headline": "h",
+            "detail": "d",
+            "master_phrase": "",
+        })
+        with self._patch_evo(), \
+             self._patch_master_words(["主人說了什麼"]), \
+             self._patch_llm(reply):
+            self.assertTrue(esm.record_emergent_moment_if_due())
+        moments = self.fake_memory.get("memorable_moments", [])
+        self.assertNotIn("master_phrase", moments[0])
+
+    def test_unsafe_master_phrase_drops_whole_mark(self):
+        # Safety filter must apply to the phrase too — it surfaces
+        # later in chat prompts so unsafe content there is a real
+        # leak channel.
+        reply = json.dumps({
+            "mark": True,
+            "headline": "h",
+            "detail": "d",
+            "master_phrase": "去死啦",
+        })
+        with self._patch_evo(), \
+             self._patch_master_words(["你去死啦講真的"]), \
+             self._patch_llm(reply):
+            self.assertFalse(esm.record_emergent_moment_if_due())
+        self.assertEqual(len(self.fake_memory.get("memorable_moments", [])), 0)
+
+    def test_long_master_phrase_truncated(self):
+        long_phrase = "啊" * 200
+        reply = json.dumps({
+            "mark": True,
+            "headline": "h",
+            "detail": "d",
+            "master_phrase": long_phrase,
+        })
+        # Source contains the same long string so substring guard
+        # passes, then 80-char cap kicks in.
+        with self._patch_evo(), \
+             self._patch_master_words([long_phrase]), \
+             self._patch_llm(reply):
+            self.assertTrue(esm.record_emergent_moment_if_due())
+        moments = self.fake_memory.get("memorable_moments", [])
+        self.assertLessEqual(len(moments[0]["master_phrase"]), 80)
+
+
+# ── _load_recent_master_words file-IO (no LLM, no full flow) ────────
+
+
+class TestLoadRecentMasterWords(unittest.TestCase):
+    def test_returns_empty_when_file_missing(self):
+        # Point at a path that definitely doesn't exist by patching
+        # Path.home — _load_recent_master_words has its own
+        # exists()-check that should swallow this.
+        from pathlib import Path
+        with mock.patch.object(Path, "home", return_value=Path("/nonexistent_xyzzy_root")):
+            self.assertEqual(esm._load_recent_master_words(time.time()), [])
+
+    def test_skips_assistant_rows(self):
+        import tempfile, os, json as _j
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            (home / ".hermes").mkdir()
+            chat_path = home / ".hermes" / "sentinel_chats.jsonl"
+            now = time.time()
+            with chat_path.open("w", encoding="utf-8") as f:
+                f.write(_j.dumps({"time": now - 60, "role": "assistant", "text": "ai 講"}) + "\n")
+                f.write(_j.dumps({"time": now - 30, "role": "user", "text": "主人說一"}) + "\n")
+                f.write(_j.dumps({"time": now - 10, "role": "user", "text": "主人說二"}) + "\n")
+            with mock.patch.object(Path, "home", return_value=home):
+                got = esm._load_recent_master_words(now)
+        # Both user lines, in chronological order (newest last).
+        self.assertEqual(got, ["主人說一", "主人說二"])
+
+    def test_skips_lines_older_than_lookback(self):
+        import tempfile, json as _j
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            (home / ".hermes").mkdir()
+            chat_path = home / ".hermes" / "sentinel_chats.jsonl"
+            now = time.time()
+            with chat_path.open("w", encoding="utf-8") as f:
+                # Way old — should be filtered.
+                f.write(_j.dumps({"time": now - 30 * 86400, "role": "user", "text": "古早"}) + "\n")
+                # Recent — should appear.
+                f.write(_j.dumps({"time": now - 60, "role": "user", "text": "剛剛"}) + "\n")
+            with mock.patch.object(Path, "home", return_value=home):
+                got = esm._load_recent_master_words(now)
+        self.assertEqual(got, ["剛剛"])
+
+    def test_caps_at_limit(self):
+        import tempfile, json as _j
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            (home / ".hermes").mkdir()
+            chat_path = home / ".hermes" / "sentinel_chats.jsonl"
+            now = time.time()
+            with chat_path.open("w", encoding="utf-8") as f:
+                for i in range(20):
+                    f.write(_j.dumps({"time": now - i, "role": "user", "text": f"n={i}"}) + "\n")
+            with mock.patch.object(Path, "home", return_value=home):
+                got = esm._load_recent_master_words(now)
+        self.assertEqual(len(got), esm._MASTER_WORDS_LIMIT)
+
+    def test_tolerates_corrupt_lines(self):
+        import tempfile, json as _j
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            (home / ".hermes").mkdir()
+            chat_path = home / ".hermes" / "sentinel_chats.jsonl"
+            now = time.time()
+            with chat_path.open("w", encoding="utf-8") as f:
+                f.write("this is not json\n")
+                f.write(_j.dumps({"time": now - 5, "role": "user", "text": "ok"}) + "\n")
+                f.write("garbage 2\n")
+            with mock.patch.object(Path, "home", return_value=home):
+                got = esm._load_recent_master_words(now)
+        self.assertEqual(got, ["ok"])
 
 
 if __name__ == "__main__":
