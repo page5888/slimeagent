@@ -4,7 +4,9 @@
 
 ---
 
-## [Unreleased]
+## [0.7.5] — 2026-04-30
+
+把今天連發四個 patch 之後浮上來的 release UX 漏洞補完：runtime 看不到自己是哪一版。
 
 ### Added — 主畫面 header 顯示版本號（runtime 終於可以驗證版本）
 
