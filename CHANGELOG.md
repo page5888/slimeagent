@@ -4,6 +4,25 @@
 
 ---
 
+## [Unreleased]
+
+### Added — 主畫面 header 顯示版本號（runtime 終於可以驗證版本）
+
+實機觀察：今天連發 0.7.1 → 0.7.2 → 0.7.3 → 0.7.4 四個 patch，每次都叫主人「重啟 daemon 套用」——但**主人沒有任何方法確認重啟後跑的真的是新版本**。版本字串只活在 `README.md` 的 badge 跟 `CHANGELOG.md` 的標題裡，runtime 看不到、log 也沒寫、GUI 也沒顯示。重啟 = 憑信心。
+
+修：
+
+- 新增 `sentinel/_version.py`：單一真相來源 `__version__ = "0.7.5"`。發版流程之後 cut release 時這個常數要跟 `README.md` 的 badge / `CHANGELOG.md` 的標題一起 bump（檔案開頭註解寫了警語）。
+- `sentinel/__init__.py` re-export `__version__`，讓 `from sentinel import __version__` 直接通。
+- `sentinel/__main__.py` 開機 `print` 跟 `log.info` 都帶版本號：`[AI Slime] Starting v0.7.5...` 跟 `AI Slime v0.7.5 starting`。重啟之後 tail `~/.hermes/sentinel.log` 第一行就能驗版。
+- `sentinel/gui.py` header 在「⟳ 更新+重啟」按鈕**左邊**加一個小灰字 `v0.7.5`（11px、`#666`、跟 subtitle 同調性），hover tooltip：「目前執行版本：v0.7.5  點右邊 ⟳ 更新+重啟 拉最新版」。
+
+效果：版本驗證從「憑信心」變成「瞄一眼 header 或 tail 一行 log」。下次再連發 patch，主人重啟之後看 header 就知道有沒有套用——這個以前的 release UX 漏洞補完。
+
+77/77 既有測試全綠。沒有資料遷移、沒有功能變動（除了多一個 QLabel）。
+
+---
+
 ## [0.7.4] — 2026-04-30
 
 兩個 daemon 觀測性／行為的關鍵修復，外加 Slime 第三份哲學基礎 ADR。沒有新功能、沒有資料遷移——但兩個修復都是「沒人發現的 bug 一直在擋產品方向」的那一類，發現的時候很冷汗。

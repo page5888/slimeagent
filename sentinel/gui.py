@@ -8006,6 +8006,24 @@ class MainWindow(QMainWindow):
         header_layout.addWidget(self.title_label)
         header_layout.addStretch()
 
+        # Version label — small grey text just to the left of the
+        # update button. Without this, the user had no in-app way to
+        # tell which build was running after an update — they had to
+        # open ~/.hermes/sentinel.log or just trust that ⟳ pulled.
+        # Reads sentinel/_version.py so a single source-of-truth bump
+        # lights up here, the boot log line, and any future surfaces
+        # together.
+        from sentinel._version import __version__ as _slime_version
+        self.version_label = QLabel(f"v{_slime_version}")
+        self.version_label.setStyleSheet(
+            "color: #666; font-size: 11px; padding: 0 6px 0 0;"
+        )
+        self.version_label.setToolTip(
+            f"目前執行版本：v{_slime_version}\n"
+            "點右邊 ⟳ 更新+重啟 拉最新版。"
+        )
+        header_layout.addWidget(self.version_label)
+
         # Update + restart button — pulls latest main and re-launches.
         # Without this, every "I shipped a fix" round-trip was: user
         # alt-tabs, finds the cmd window, closes it, double-clicks

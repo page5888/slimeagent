@@ -34,7 +34,9 @@ logging.basicConfig(
     handlers=_log_handlers,
 )
 
-print("[AI Slime] Starting...", flush=True)
+from sentinel._version import __version__
+print(f"[AI Slime] Starting v{__version__}...", flush=True)
+logging.getLogger("sentinel").info("AI Slime v%s starting", __version__)
 
 
 def _print_fatal_and_pause(stage: str, exc: BaseException) -> None:
