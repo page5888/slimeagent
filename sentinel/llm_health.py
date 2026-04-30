@@ -186,3 +186,41 @@ def get_today_summary(now: Optional[float] = None,
         "primary_blocked": primary_blocked,
         "primary_provider": primary_provider,
     }
+
+
+# ── Idle-report integration ─────────────────────────────────────────
+
+
+def compose_idle_warning(now: Optional[float] = None,
+                         path: Path = LOG_PATH) -> Optional[str]:
+    """Return a one-line warning to embed in daemon's idle report, or None.
+
+    Surfaces the silent-fallback case: every model in the primary
+    provider's list has hit a rate error today, so the daemon is
+    quietly using fallback providers and the master has no signal
+    unless they go look at sentinel.log.
+
+    Returns:
+        - A formatted string when `primary_blocked` is True.
+        - None when no primary provider info is available, no rate
+          errors today, or only some primary models are affected.
+
+    Stateless on purpose. The daemon's idle report fires every
+    IDLE_REPORT_INTERVAL (default 30 min, ~48 messages/day) — adding
+    a line to messages that have something to say doesn't change the
+    base rate, and keeping it stateless means the warning stops on
+    its own when conditions change (e.g. master adds a new key, model
+    quotas reset, a fallback ALSO starts blocking and primary is no
+    longer the bottleneck).
+    """
+    summary = get_today_summary(now=now, path=path)
+    if not summary["primary_blocked"]:
+        return None
+    prov = summary["primary_provider"]
+    bucket = summary["by_provider"].get(prov, {})
+    n_errors = bucket.get("count", 0)
+    n_models = len(bucket.get("models", {}))
+    return (
+        f"⚠️ LLM: {prov} 今天 {n_models} 個 model 全踩過 rate error "
+        f"（共 {n_errors} 次），daemon 正在靜默 fallback 到備援 provider。"
+    )

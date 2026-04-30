@@ -211,5 +211,68 @@ class TestSummary(unittest.TestCase):
         self.assertFalse(summary["primary_blocked"])
 
 
+class TestComposeIdleWarning(unittest.TestCase):
+    def test_returns_none_when_no_data(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "llm_health.jsonl"
+            with mock.patch("sentinel.config.LLM_PROVIDERS",
+                            _FakeProvidersConfig.LLM_PROVIDERS):
+                self.assertIsNone(h.compose_idle_warning(
+                    now=time.time(), path=path))
+
+    def test_returns_none_when_only_partial_block(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "llm_health.jsonl"
+            now = time.time()
+            # Only 1 of 3 primary models hit; primary_blocked=False.
+            _write_rows(path, [
+                {"ts": now, "type": "rate_error",
+                 "provider": "Gemini", "model": "gemini-2.5-flash"},
+            ])
+            with mock.patch("sentinel.config.LLM_PROVIDERS",
+                            _FakeProvidersConfig.LLM_PROVIDERS):
+                self.assertIsNone(h.compose_idle_warning(now=now, path=path))
+
+    def test_returns_warning_when_fully_blocked(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "llm_health.jsonl"
+            now = time.time()
+            _write_rows(path, [
+                {"ts": now, "type": "rate_error",
+                 "provider": "Gemini", "model": "gemini-2.5-flash"},
+                {"ts": now, "type": "rate_error",
+                 "provider": "Gemini", "model": "gemini-2.0-flash-lite"},
+                {"ts": now, "type": "rate_error",
+                 "provider": "Gemini", "model": "gemini-2.0-flash"},
+            ])
+            with mock.patch("sentinel.config.LLM_PROVIDERS",
+                            _FakeProvidersConfig.LLM_PROVIDERS):
+                msg = h.compose_idle_warning(now=now, path=path)
+        self.assertIsNotNone(msg)
+        self.assertIn("Gemini", msg)
+        self.assertIn("3", msg)            # 3 models hit
+        self.assertIn("rate error", msg)
+        self.assertIn("fallback", msg)
+
+    def test_warning_count_reflects_actual_errors(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "llm_health.jsonl"
+            now = time.time()
+            # Hit each primary model multiple times to verify the
+            # error-count reflects the row count, not the model count.
+            rows = []
+            for model in ["gemini-2.5-flash", "gemini-2.0-flash-lite",
+                          "gemini-2.0-flash"]:
+                rows.extend([
+                    {"ts": now, "type": "rate_error",
+                     "provider": "Gemini", "model": model}
+                ] * 4)  # 4 errors per model = 12 total
+            _write_rows(path, rows)
+            with mock.patch("sentinel.config.LLM_PROVIDERS",
+                            _FakeProvidersConfig.LLM_PROVIDERS):
+                msg = h.compose_idle_warning(now=now, path=path)
+        self.assertIn("12", msg)
+
+
 if __name__ == "__main__":
     unittest.main()

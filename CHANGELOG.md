@@ -26,6 +26,14 @@ ADR 2026-04-30 釘住了 (b) 衝動機制的護欄，並列出三個必須同時
 
 下一次想寫 (b) 之前，跑 `python scripts/check_b_preconditions.py` 看數字、不要憑感覺。
 
+### Changed — daemon idle report 主動 surface LLM 靜默 fallback
+
+PR #86 的 `llm_health` 預設只能透過 `scripts/llm_health_today.py` 主動查；主人不會每天打那條 CLI。daemon 每 30 分鐘的 idle report 既然已經透過 Telegram bot 推訊息，把警告嵌進去最自然。
+
+- 新增 `llm_health.compose_idle_warning()`：主 provider 的全部 model 都今天踩過 rate error 時回傳一行警告字串，否則回 None。stateless——條件改變時自動停止警告，不需要 reset 任何狀態。
+- daemon `monitor_loop` 的 idle-report block 在發出 `💤 *AI Slime 定期報告*` 前先 query 警告，有就 append 到同一條訊息（不發第二條）。
+- 4 個新 unit test：no data / partial block / full block / error count reflects rows。
+
 ---
 
 ## [0.7.0] — 2026-04-30
