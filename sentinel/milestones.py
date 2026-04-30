@@ -169,6 +169,7 @@ _CATEGORY_EMOJI: dict[str, str] = {
     "loneliness": "🌙",
     "chat_peak": "💗",
     "milestone": "📍",
+    "emergent_self_mark": "🌿",
     # naming → filtered out by day-collision with D30 scaffolding
 }
 

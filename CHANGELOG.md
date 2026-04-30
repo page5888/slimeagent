@@ -4,6 +4,20 @@
 
 ---
 
+## [Unreleased]
+
+### Added — Emergent self-mark（ADR 2026-04-29 (a)+(c) MVP）
+
+- **Slime 自主節點標記（`sentinel/emergent_self_mark.py`）** — 史萊姆自己決定哪天值得在時間軸上留一個點。daemon 的 idle 週期每 ~30 分鐘觸發一次，但內部速率上限把實際 LLM 諮詢壓到 ≤ 1 次/天、實際標記 ≤ 1 次/週；scaffolding 日（D1/D7/D30/D100/D365）整天跳過，不跟既有節點搶同一格。
+- **三大守則（不傷害/不欺騙/不消失）內建在 system prompt** — 模型替換不會弄丟這個約束。Schema-constrained JSON 輸出，史萊姆可以回 `{"mark": false}` 拒絕標記（這是常態），平凡的一天就讓它平凡。輸出再過一道 crisis-keyword 過濾，避免把「我不該存在」這類句子寫成永久 timeline 節點。
+- **timeline 顯示新 category** — `emergent_self_mark` 對應 🌿，跟 first_chat / evolution / skill / loneliness / chat_peak / milestone 視覺上能區分。
+
+### What this is *not*
+
+ADR 的 (b) 衝動機制（覆蓋 chat / voice / 寫信等多通道、要全套守則過濾 + 表達通道）仍未開工。本次只做最短閉環：**一個觀察通道 + 一個輸出通道（時間軸標記）**。等 (a)+(c) 在主人實機上跑出真實的 emergent dots，再評估 (b) 的範圍。
+
+---
+
 ## [0.6.0] — 2026-04-26
 
 ### Added — Autonomy 思想驗證閉環完成
