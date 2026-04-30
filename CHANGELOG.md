@@ -4,6 +4,20 @@
 
 ---
 
+## [Unreleased]
+
+### Added — LLM rate-error 可見性（`sentinel/llm_health.py`）
+
+跑 PR #84 的 preview 工具時發現一件事：所有 5 個 Gemini free-tier model 當天都 429 了，daemon 一直靜默 fallback 到 OpenAI / Anthropic，但**主人完全看不到這件事**。`sentinel.log` 裡有 `log.warning` 但沒人會去 tail。
+
+- **每次 `_call_gemini` / `_call_openai_compat` / `_call_anthropic` 抓到 rate-class error**（用既有但沒被叫過的 `_is_rate_error()` 偵測：429 / 503 / RESOURCE_EXHAUSTED / quota / overloaded）→ 寫一行結構化 JSONL 到 `~/.hermes/llm_health.jsonl`。
+- **`get_today_summary()`** 讀回今天（local midnight 為界）的 rate error 摘要：每個 provider / 每個 model 計數，加上 `primary_blocked` flag——主 provider 的全部 model 都今天踩過至少一次 rate error 就 True。
+- **`scripts/llm_health_today.py`** CLI：一行 `python scripts/llm_health_today.py` 就看到今天哪個 provider 在燒、要不要趕快補 key。
+
+設計刻意排除：自動停用 provider（`_try_cloud` 的 fallback 鏈本來就會處理）、跨日歷史分析（昨天的 quota 已 reset）、預測式 throttling（各家 quota window 文件不穩定）。只做最小可見性。
+
+---
+
 ## [0.7.0] — 2026-04-30
 
 ### Added — Manifesto 北極星 + 三大守則落地
