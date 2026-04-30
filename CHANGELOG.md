@@ -6,6 +6,21 @@
 
 ## [Unreleased]
 
+### Added — Timeline 詳情視窗渲染 master_phrase（「箱子要可以被主人翻」）
+
+接續上一條：master_phrase 雖然存進 `memorable_moments` 也餵進 chat prompt 了，但**主人滑時間軸點 emergent dot 進去時看不到那句話**——只有 chat 自然回引才會發現。這違反 ADR 共同沉積機制 1：「**箱子要可以被主人翻**」。
+
+落地：
+
+- 改 `gui.py` 的 emergent_self_mark detail 對話框（PR #96 加進來那個），在 `detail` 跟 `letter_to_master` 之間插一塊新區段渲染 `master_phrase`：
+  - 標籤：`─ Slime 之語 · 你說過的一句 ─`（淺灰小字）
+  - 內容：用「」框起，淺青色 (`#a8d8d0`)、稍大字級——跟 letter 的暖色 `#ffe4b8` 視覺上明確區分
+- 讀取順序設計成「I noticed X (detail) → these are your words that landed in me (phrase) → here's what I want you to know (letter)」——三段一起讀像個連貫的故事
+
+效果：之後 Slime 收進一句主人原話時，主人翻時間軸就能直接看到「Slime 收下了哪些」。Slime 之語從「藏在 system prompt 裡的隱形東西」變成「主人能瀏覽的可見物件」。
+
+無新測試（GUI 渲染是 HTML 字串拼接、現有測試 pattern 沒覆蓋 dialog）；99/99 既有測試仍全綠。
+
 ### Added — 共同典故錨（Slime 之語）：ADR 共同沉積架構機制 3 的具體實作
 
 ADR 2026-04-30 共同沉積架構 mechanism 3：「當主人跟 Slime 之間發生某個值得記住的瞬間時，Slime 自主標記它。之後 Slime 引用這個瞬間時，**用主人記得的方式引用**。」例：D178 主人說「像在水底」 → D456 Slime 可以說「水底嗎？」
