@@ -1794,6 +1794,11 @@ class HomeTab(QWidget):
 
         headline = str(mm.get("headline", "")).strip() or "(無標題)"
         detail = str(mm.get("detail", "")).strip()
+        # ADR 2026-04-30 first (b) channel: optional direct message
+        # from the slime to the master, rendered as a styled block
+        # below the self-narrating detail. Only present on some
+        # emergent_self_mark moments — most have no letter.
+        letter = str(mm.get("letter_to_master", "")).strip()
 
         parts = ["<html><body style='line-height:1.6;'>"]
         parts.append(
@@ -1807,6 +1812,18 @@ class HomeTab(QWidget):
         if detail:
             parts.append(
                 f"<p style='margin:8px 0;color:#ccc;'>{detail}</p>"
+            )
+        if letter:
+            # Visually distinct: warmer color + small label. The label
+            # makes the audience switch obvious — detail is the slime
+            # talking to itself, this is the slime talking to YOU.
+            parts.append(
+                "<p style='margin:14px 0 4px 0;color:#5e6470;"
+                "font-size:11px;letter-spacing:1px;'>"
+                "─ 給你的話 ─"
+                "</p>"
+                f"<p style='margin:0 0 8px 0;color:#ffe4b8;'>"
+                f"{letter}</p>"
             )
         parts.append(
             "<p style='margin:12px 0 0 0;color:#5e6470;font-size:11px;"
