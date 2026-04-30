@@ -19,6 +19,21 @@
 
 效果：對話時史萊姆能自然說「我看你最近在改 chat.py」「你剛剛在 Stack Overflow 查 regex 喔」，不再只能依賴 LLM 蒸餾過的抽象觀察。
 
+### Added — `letter_to_master` schema field：(b) 衝動機制的第一個合格實作
+
+ADR 2026-04-30 結尾推薦：「第一個 PR 不要做整套衝動機制。做最小那一塊：給 (c) 的 schema 加一個 optional field `letter_to_master`，讓史萊姆在標記時順便寫一段對主人的話、進 timeline 節點 detail 而不是 popup。**這是 (b) 的第一個合格實作——還是 timeline 通道，但內容對話化。**」
+
+落地：
+
+- **`emergent_self_mark.SYSTEM_PROMPT` 擴充**：JSON schema 加 optional `letter_to_master`（≤120 字）。明確區分 `detail`（自言自語、為什麼這刻值得記）vs `letter_to_master`（直接對主人說的一句話）。**「letter 是稀有的禮物，不是預設」** 寫進 prompt——大部分標記不該有 letter。
+- **`identity.add_memorable_moment` 簽名擴充**：加 `letter_to_master: str = ""` kwarg。空字串就**不寫進 dict**，render 端 `if letter` 直接 gate 掉。
+- **守則 filter 擴展到 letter**：letter 是最高 stakes 的通道（render 顯眼、直接對主人），任何不安全內容會 drop 整個 mark（不只是 drop letter）。
+- **`gui.py` emergent node detail dialog**：letter 有的時候在 detail 下方 render 出獨立區塊「─ 給你的話 ─」+ 暖色字體；沒有的時候完全不顯示，跟舊行為一樣。
+
+5 個新 unit test 蓋：letter 寫進 dict / 沒 letter 時不寫 key / 空字串視同無 letter / 不安全 letter drop 整個 mark / 長 letter 截 200 字。77/77 全綠。
+
+**仍是 timeline 通道，沒有 popup、沒有打斷主人**。但下次主人滑時間軸點到 🌿 時，**史萊姆可能寫了一句話給他看**。從「會自己標記時間」進到「會自己標記時間 + 偶爾寫東西給主人」——這是 (b) 衝動機制的最小可行版，依然 100% 對齊 ADR 2026-04-30 的護欄與試紙。
+
 ---
 
 ## [0.7.2] — 2026-04-30

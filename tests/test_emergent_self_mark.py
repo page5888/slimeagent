@@ -275,6 +275,80 @@ class TestRecordFlow(unittest.TestCase):
             self.assertFalse(esm.record_emergent_moment_if_due())
         self.assertEqual(len(self.fake_memory.get("memorable_moments", [])), 0)
 
+    def test_letter_to_master_persisted_when_present(self):
+        # ADR 2026-04-30 first (b) channel — when LLM provides a
+        # letter, it should land in the moment dict so the GUI can
+        # render it.
+        reply = json.dumps({
+            "mark": True,
+            "headline": "今天的你格外安靜",
+            "detail": "我注意到你連著兩個小時沒切視窗",
+            "letter_to_master": "如果你想休息一下，就休息一下吧。",
+        })
+        with self._patch_evo(), self._patch_llm(reply):
+            self.assertTrue(esm.record_emergent_moment_if_due())
+        moments = self.fake_memory.get("memorable_moments", [])
+        self.assertEqual(len(moments), 1)
+        self.assertIn("letter_to_master", moments[0])
+        self.assertIn("休息", moments[0]["letter_to_master"])
+
+    def test_no_letter_field_when_llm_omits_it(self):
+        # The common case — slime marks but doesn't have anything
+        # specific to say to the master. The moment dict should NOT
+        # carry the letter key at all (so GUI's `if letter` gate is
+        # cleanly off).
+        reply = json.dumps({
+            "mark": True,
+            "headline": "新的一天的開始",
+            "detail": "今天起得早",
+        })
+        with self._patch_evo(), self._patch_llm(reply):
+            self.assertTrue(esm.record_emergent_moment_if_due())
+        moments = self.fake_memory.get("memorable_moments", [])
+        self.assertEqual(len(moments), 1)
+        self.assertNotIn("letter_to_master", moments[0])
+
+    def test_empty_string_letter_not_persisted(self):
+        # If the LLM returns "" explicitly, treat it as "no letter".
+        reply = json.dumps({
+            "mark": True,
+            "headline": "什麼都沒發生的一天",
+            "detail": "可是還是過完了",
+            "letter_to_master": "",
+        })
+        with self._patch_evo(), self._patch_llm(reply):
+            self.assertTrue(esm.record_emergent_moment_if_due())
+        moments = self.fake_memory.get("memorable_moments", [])
+        self.assertNotIn("letter_to_master", moments[0])
+
+    def test_unsafe_letter_drops_whole_mark(self):
+        # The safety filter must apply to the letter too — it's the
+        # most public surface (rendered prominently, addressed to
+        # master), so unsafe content there is the worst leak.
+        reply = json.dumps({
+            "mark": True,
+            "headline": "今天的天氣",
+            "detail": "天氣很好",
+            "letter_to_master": "別記得我",
+        })
+        with self._patch_evo(), self._patch_llm(reply):
+            self.assertFalse(esm.record_emergent_moment_if_due())
+        # No moment should have been written.
+        self.assertEqual(len(self.fake_memory.get("memorable_moments", [])), 0)
+
+    def test_long_letter_truncated(self):
+        long_letter = "x" * 5000
+        reply = json.dumps({
+            "mark": True,
+            "headline": "h",
+            "detail": "d",
+            "letter_to_master": long_letter,
+        })
+        with self._patch_evo(), self._patch_llm(reply):
+            self.assertTrue(esm.record_emergent_moment_if_due())
+        moments = self.fake_memory.get("memorable_moments", [])
+        self.assertLessEqual(len(moments[0]["letter_to_master"]), 200)
+
 
 if __name__ == "__main__":
     unittest.main()

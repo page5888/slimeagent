@@ -234,16 +234,27 @@ def get_reunion_context() -> dict:
 
 # ── Memorable moments (D) ────────────────────────────────────────────
 
-def add_memorable_moment(category: str, headline: str, detail: str = "") -> bool:
+def add_memorable_moment(category: str, headline: str, detail: str = "",
+                         letter_to_master: str = "") -> bool:
     """Record a relationship highlight. Returns True if recorded.
 
     category examples:
-      "naming"       — master named the slime
-      "first_chat"   — first ever conversation
-      "evolution"    — tier advancement
-      "skill"        — adaptive skill unlocked
-      "chat_peak"    — emotionally significant exchange
-      "milestone"    — round-number stat (100 obs, 1000 obs, ...)
+      "naming"             — master named the slime
+      "first_chat"         — first ever conversation
+      "evolution"          — tier advancement
+      "skill"              — adaptive skill unlocked
+      "chat_peak"          — emotionally significant exchange
+      "milestone"          — round-number stat (100 obs, 1000 obs, ...)
+      "emergent_self_mark" — slime self-marked an observation worth keeping
+
+    letter_to_master:
+      Optional ≤200-char direct message to the master, rendered in the
+      timeline node detail dialog when the master clicks the dot.
+      Distinct from `detail` semantically — `detail` is self-narration
+      ("why this moment mattered to ME"), `letter_to_master` is
+      directly addressed ("here's what I want to say to YOU"). The
+      first (b)-class output channel per ADR 2026-04-30 — still
+      timeline-only, no popup, no interrupt.
     """
     from sentinel.learner import load_memory, save_memory
 
@@ -260,12 +271,19 @@ def add_memorable_moment(category: str, headline: str, detail: str = "") -> bool
         if m.get("category") == category and (now - m.get("time", 0)) < MIN_MOMENT_GAP_SECONDS:
             return False
 
-    moments.append({
+    moment = {
         "time": now,
         "category": category,
         "headline": headline,
         "detail": (detail or "").strip()[:200],
-    })
+    }
+    # Only persist the letter field when there's actual content. Keeps
+    # rows that don't carry one from gaining a noise key, and lets the
+    # render-side use `if "letter_to_master" in mm` as the gate.
+    letter = (letter_to_master or "").strip()[:200]
+    if letter:
+        moment["letter_to_master"] = letter
+    moments.append(moment)
     # Cap size — drop oldest (except preserve "naming" forever if possible)
     if len(moments) > MAX_MOMENTS:
         # Keep naming, drop oldest non-naming
