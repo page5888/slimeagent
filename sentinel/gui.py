@@ -1799,6 +1799,13 @@ class HomeTab(QWidget):
         # below the self-narrating detail. Only present on some
         # emergent_self_mark moments — most have no letter.
         letter = str(mm.get("letter_to_master", "")).strip()
+        # ADR 共同沉積 mech 3 (Slime 之語): optional verbatim quote
+        # from the master that slime captured. Rendered between
+        # detail and letter so the read-order tells a coherent
+        # story — "I noticed X (detail) → these are your words
+        # that landed in me (phrase) → here's what I want you to
+        # know (letter)". Most marks have neither phrase nor letter.
+        phrase = str(mm.get("master_phrase", "")).strip()
 
         parts = ["<html><body style='line-height:1.6;'>"]
         parts.append(
@@ -1812,6 +1819,19 @@ class HomeTab(QWidget):
         if detail:
             parts.append(
                 f"<p style='margin:8px 0;color:#ccc;'>{detail}</p>"
+            )
+        if phrase:
+            # Cool sage colour to differentiate from the warm letter
+            # below — letter is slime → master, phrase is the master's
+            # own voice preserved verbatim. Quote marks make the
+            # "this is your exact words" framing unambiguous.
+            parts.append(
+                "<p style='margin:14px 0 4px 0;color:#5e6470;"
+                "font-size:11px;letter-spacing:1px;'>"
+                "─ Slime 之語 · 你說過的一句 ─"
+                "</p>"
+                f"<p style='margin:0 0 8px 0;color:#a8d8d0;font-size:14px;'>"
+                f"「{phrase}」</p>"
             )
         if letter:
             # Visually distinct: warmer color + small label. The label
