@@ -4,6 +4,25 @@
 
 ---
 
+## [Unreleased]
+
+### Fixed — daemon log 檔從來沒被寫過（FileHandler 被靜默吃掉）
+
+實機觀察：4:46pm 主人在 cmd 視窗看到 Telegram `409 Conflict` 錯誤，事後想回放、發現 `~/.hermes/sentinel.log` **從 4 月 14 日後就沒更新過**——但 daemon 一直在跑、其他 `~/.hermes/sentinel_*.jsonl` 資料檔都正常更新。
+
+根因：`sentinel/__main__.py` 在 entry-point 一開始呼叫了 `logging.basicConfig(stream=sys.stdout)`，把 root logger 設成 stdout-only。**`logging.basicConfig` 一旦 root logger 已經有 handler 就變 no-op**，所以 `sentinel/daemon.py` 後面那段 `basicConfig(handlers=[StreamHandler, FileHandler])` 從第一天起就被靜默忽略——FileHandler 從來沒被掛上去，所有 daemon log 只噴到 cmd 視窗的 stdout，視窗一關就消失。`~/.hermes/sentinel.log` 那 2.5 MB 檔案是更早的 Hermes 專案留下的化石（stack trace 也都指向 `D:\srbow_bots\hermes\venv`）。
+
+修法：
+
+- `__main__.py` 改成在唯一一處設好 logging：stdout handler + `~/.hermes/sentinel.log` FileHandler 同時掛上。`Path.home() / ".hermes"` 不存在時 `mkdir(parents=True, exist_ok=True)` 自己建。FileHandler 構造若失敗（權限、磁碟滿）回 stdout-only 並印警告，daemon 仍能起來。
+- `daemon.py` 移除原本那段重複的 `basicConfig`（反正本來就沒生效），加註解標明 logging 由 `__main__.py` 統一設定，避免下次有人又來 reintroduce 同一個 bug。
+
+效果：daemon 從現在起會把所有 INFO 以上訊息**同時**寫到 stdout 跟 `~/.hermes/sentinel.log`。下次再出 Telegram 衝突、LLM 失敗、Telegram bot 拉 update 失敗，stack trace 都會留檔——cmd 視窗關了也不會丟。
+
+77/77 既有測試全綠，沒有功能變動、沒有資料遷移、沒有 schema 變化。
+
+---
+
 ## [0.7.3] — 2026-04-30
 
 實機回報「史萊姆只會跟我說電腦狀況、看不到我在做什麼」之後拆成兩個獨立改動：**A 讓他看見**、**B 讓他偶爾寫東西給主人**。配合一條 CI 升級紀錄。
