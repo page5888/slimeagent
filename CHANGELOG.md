@@ -4,6 +4,23 @@
 
 ---
 
+## [Unreleased]
+
+### Added — chat 帶當下螢幕活動進 prompt（`sentinel/recent_activity.py`）
+
+實機回報：「他也不會看我的電腦我在做什麼。」 資料其實一直都在——`activity_tracker` 每次主人切視窗就寫 `~/.hermes/sentinel_activity.jsonl`，`learner` 跟 `reflection/generator` 都有讀。**只有 `chat.py` 的系統 prompt 沒讀。**
+
+- 新增 `sentinel/recent_activity.py` — 純讀+格式化 helper：聚合最近 30 分鐘的視窗活動（按 process 排名 + top window titles），回傳一個 chat-prompt-ready 的 block。沒有資料時回 `""`，chat 直接 splice 進 prompt 不需要條件 render。
+- `chat.py` 加新 placeholder `<<RECENT_ACTIVITY>>`、`_build_system_prompt` 呼叫 `recent_activity.build_block()`。defensive：建構失敗 chat 仍正常工作。
+- 預設保留：每處最多 3 個視窗標題、最多 5 個 process、單個標題截 80 字，避免提示噪音。
+- 沒有新感應器、沒有 VLM 呼叫、**沒有擴張隱私面**——同一份 jsonl 早已被 learner / reflection 讀過、送過 LLM。系統 prompt 「你不能直接看主人的螢幕（除非觀察區塊裡有截圖摘要）」這條規則**仍然成立**，這個 module 只看 process 名稱跟 window title，不看 pixels。
+
+8 個 unit test：missing/empty/only-old → ""、aggregate by process、cap titles per process、cap processes shown、corrupt-lines tolerance、long-title truncation、custom window size、missing-duration row。72/72 全綠。
+
+效果：對話時史萊姆能自然說「我看你最近在改 chat.py」「你剛剛在 Stack Overflow 查 regex 喔」，不再只能依賴 LLM 蒸餾過的抽象觀察。
+
+---
+
 ## [0.7.2] — 2026-04-30
 
 Single-fix patch release. 真實使用者實機回報 Telegram 噪音問題（48 條/天 heartbeat 把真實警告淹沒），0.7.1 release 30 分鐘後送出修法。

@@ -271,7 +271,8 @@ CHAT_SYSTEM_PROMPT = (
     "當前系統狀態：\n"
     "<<SYSTEM_STATE>>\n\n"
     "最近的觀察紀錄：\n"
-    "<<RECENT_OBS>>"
+    "<<RECENT_OBS>>\n\n"
+    "<<RECENT_ACTIVITY>>"
 )
 
 
@@ -365,6 +366,18 @@ def _build_system_prompt() -> str:
     # Learned speech style (distilled from past chats)
     speech_style_text = format_speech_style_for_prompt(memory.get("speech_style", {}))
 
+    # Recent window activity — bring the master's last 30 min of foreground
+    # apps/titles into the system prompt so chat replies can naturally
+    # reference what the master is doing right now ("我看你在改 daemon.py")
+    # rather than only aggregate observations. Defensive: helper module
+    # returns "" on missing/empty file so chat still works without it.
+    try:
+        from sentinel.recent_activity import build_block as _activity_block
+        recent_activity_text = _activity_block()
+    except Exception as e:
+        log.debug(f"recent_activity build failed: {e}")
+        recent_activity_text = ""
+
     return CHAT_SYSTEM_PROMPT.replace(
         "<<DISPLAY_NAME>>", display_name
     ).replace(
@@ -399,6 +412,8 @@ def _build_system_prompt() -> str:
         "<<SYSTEM_STATE>>", system_summary
     ).replace(
         "<<RECENT_OBS>>", recent_obs
+    ).replace(
+        "<<RECENT_ACTIVITY>>", recent_activity_text
     )
 
 
