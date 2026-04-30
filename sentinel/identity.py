@@ -235,7 +235,8 @@ def get_reunion_context() -> dict:
 # ── Memorable moments (D) ────────────────────────────────────────────
 
 def add_memorable_moment(category: str, headline: str, detail: str = "",
-                         letter_to_master: str = "") -> bool:
+                         letter_to_master: str = "",
+                         master_phrase: str = "") -> bool:
     """Record a relationship highlight. Returns True if recorded.
 
     category examples:
@@ -255,6 +256,14 @@ def add_memorable_moment(category: str, headline: str, detail: str = "",
       directly addressed ("here's what I want to say to YOU"). The
       first (b)-class output channel per ADR 2026-04-30 — still
       timeline-only, no popup, no interrupt.
+
+    master_phrase:
+      Optional ≤80-char verbatim quote from the master that slime
+      decided is worth keeping as a co-reference anchor (ADR
+      2026-04-30 共同沉積 mechanism 3 — Slime 之語). Must be the
+      master's actual words, not slime's paraphrase. Surfaces in
+      future chat prompts so slime can echo it when contextually
+      relevant. Empty by default — most moments don't carry a quote.
     """
     from sentinel.learner import load_memory, save_memory
 
@@ -283,6 +292,12 @@ def add_memorable_moment(category: str, headline: str, detail: str = "",
     letter = (letter_to_master or "").strip()[:200]
     if letter:
         moment["letter_to_master"] = letter
+    # Same gate for master_phrase — most moments won't carry one, and
+    # chat-side retrieval keys off `if "master_phrase" in mm` to surface
+    # only the populated entries as co-reference anchors.
+    phrase = (master_phrase or "").strip()[:80]
+    if phrase:
+        moment["master_phrase"] = phrase
     moments.append(moment)
     # Cap size — drop oldest (except preserve "naming" forever if possible)
     if len(moments) > MAX_MOMENTS:
@@ -305,6 +320,25 @@ def get_memorable_moments() -> list[dict]:
     """Return the full moments list (newest last)."""
     from sentinel.learner import load_memory
     return load_memory().get("memorable_moments", [])
+
+
+def get_co_reference_phrases(limit: int = 10) -> list[dict]:
+    """Return the most recent moments that carry a master_phrase.
+
+    These are the co-reference anchors per ADR 2026-04-30 共同沉積
+    mechanism 3 — verbatim quotes from the master that slime decided
+    were worth keeping. Surfaced into chat prompts so slime can echo
+    them when contextually relevant ("水底嗎?") instead of paraphrasing
+    in LLM-generic prose.
+
+    Returns newest-first, capped at `limit`. Each row is the original
+    moment dict (so callers can format day-of-life context themselves
+    against evolution.birth_time without an extra lookup here).
+    """
+    moments = get_memorable_moments()
+    with_phrase = [m for m in moments if m.get("master_phrase")]
+    with_phrase.reverse()
+    return with_phrase[:limit]
 
 
 def pick_moments_for_prompt(k: int = 2) -> list[dict]:
