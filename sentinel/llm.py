@@ -42,6 +42,20 @@ def _is_rate_error(error_str: str) -> bool:
     return any(k.lower() in error_str.lower() for k in keywords)
 
 
+def _record_rate_error(provider_name: str, model: str, error_str: str) -> None:
+    """Defensive wrapper around llm_health.record_rate_error.
+
+    Health logging must never break the real call path's exception
+    handling. We lazy-import inside a try/except so a bad llm_health
+    edit can't take the LLM caller down with it.
+    """
+    try:
+        from sentinel.llm_health import record_rate_error
+        record_rate_error(provider_name, model, error_str)
+    except Exception as e:
+        log.debug(f"llm_health record failed: {e}")
+
+
 def _call_gemini(provider: dict, prompt: str, system: str = "",
                  temperature: float = 0.5, max_tokens: int = 800) -> str | None:
     """Call Gemini API."""
@@ -60,7 +74,10 @@ def _call_gemini(provider: dict, prompt: str, system: str = "",
             )
             return response.text.strip()
         except Exception as e:
-            log.warning(f"Gemini/{model} failed: {e}")
+            err = str(e)
+            log.warning(f"Gemini/{model} failed: {err}")
+            if _is_rate_error(err):
+                _record_rate_error("Gemini", model, err)
             continue  # 任何錯誤都繼續嘗試下一個 model
     return None
 
@@ -85,7 +102,10 @@ def _call_openai_compat(provider: dict, prompt: str, system: str = "",
             )
             return response.choices[0].message.content.strip()
         except Exception as e:
-            log.warning(f"{provider['name']}/{model} failed: {e}")
+            err = str(e)
+            log.warning(f"{provider['name']}/{model} failed: {err}")
+            if _is_rate_error(err):
+                _record_rate_error(provider["name"], model, err)
             continue  # 任何錯誤都繼續嘗試下一個 model
     return None
 
@@ -107,7 +127,10 @@ def _call_anthropic(provider: dict, prompt: str, system: str = "",
             response = client.messages.create(**kwargs)
             return response.content[0].text.strip()
         except Exception as e:
-            log.warning(f"Anthropic/{model} failed: {e}")
+            err = str(e)
+            log.warning(f"Anthropic/{model} failed: {err}")
+            if _is_rate_error(err):
+                _record_rate_error("Anthropic", model, err)
             continue  # 任何錯誤都繼續嘗試下一個 model
     return None
 
