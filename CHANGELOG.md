@@ -4,35 +4,29 @@
 
 ---
 
-## [Unreleased]
+## [0.7.1] — 2026-04-30
 
-### Added — LLM rate-error 可見性（`sentinel/llm_health.py`）
+0.7.0 落地了 emergent self-mark MVP；0.7.1 是「**讓它真的看得到**」的 patch release——把 0.7.0 的核心新功能（slime 自主節點標記、LLM 多 provider fallback）變成**可觀察、可測試、可在出問題時自動 surface** 的東西。沒有新使用者功能；只把已上線的東西不再隱形。
 
-跑 PR #84 的 preview 工具時發現一件事：所有 5 個 Gemini free-tier model 當天都 429 了，daemon 一直靜默 fallback 到 OpenAI / Anthropic，但**主人完全看不到這件事**。`sentinel.log` 裡有 `log.warning` 但沒人會去 tail。
+### Added — 觀察性與 dev tooling（4 條獨立的可見性層）
 
-- **每次 `_call_gemini` / `_call_openai_compat` / `_call_anthropic` 抓到 rate-class error**（用既有但沒被叫過的 `_is_rate_error()` 偵測：429 / 503 / RESOURCE_EXHAUSTED / quota / overloaded）→ 寫一行結構化 JSONL 到 `~/.hermes/llm_health.jsonl`。
-- **`get_today_summary()`** 讀回今天（local midnight 為界）的 rate error 摘要：每個 provider / 每個 model 計數，加上 `primary_blocked` flag——主 provider 的全部 model 都今天踩過至少一次 rate error 就 True。
-- **`scripts/llm_health_today.py`** CLI：一行 `python scripts/llm_health_today.py` 就看到今天哪個 provider 在燒、要不要趕快補 key。
+- **Emergent self-mark dry-run preview**（#84，`scripts/preview_emergent_self_mark.py`）— 用真實的 evolution + memory 資料跑一次 LLM 諮詢、印出 prompt / raw reply / parsed verdict，但**不寫入記憶、不消耗每週標記額度**。給人類眼球用、不是 unit test。第一次跑就抓到 Gemini free-tier 5 個 model 當天全爆的事實，間接催生了下一條 llm_health 觀察。
+- **LLM rate-error 每日紀錄**（#86，`sentinel/llm_health.py` + `scripts/llm_health_today.py`）— `_call_gemini` / `_call_openai_compat` / `_call_anthropic` 在 except block 偵測 rate-class error（既有但從沒被叫過的 `_is_rate_error()`）就寫 `~/.hermes/llm_health.jsonl`。`get_today_summary()` 讀回今天（local midnight）每個 provider / 每個 model 的計數 + `primary_blocked` flag。CLI 印一頁摘要、退出碼 2 = 主 provider 全 model 全爆。
+- **Emergent self-mark 結構化 consultation log + ADR (b) 開工訊號 check**（#89，`sentinel/emergent_log.py` + `scripts/check_b_preconditions.py`）— `record_emergent_moment_if_due` 在每個 termination state（`mark` / `refuse` / `parse_fail` / `unsafe` / `llm_none` / `empty_headline`）寫一行 JSONL；`summarize_recent(days)` 算拒絕率。`check_b_preconditions.py` 把 ADR 2026-04-30 的三個 (b) 開工條件編成 runnable check：條件 #1+#2 全 PASS exit 0、否則 exit 1。下次想寫 (b) 之前看數字、不要憑感覺。
+- **Regression tests + CI 接 unittest**（#85，`tests/test_emergent_self_mark.py`）— PR #81 開發時的 inline smoke check（6 條路徑）promote 成 26 個 unittest case；`pr-checks.yml` 加 `python -m unittest discover -s tests -v` step。後續 PR #86 / #89 / #90 繼續加，0.7.1 結尾累計 56 個 unit test 全綠。
 
-設計刻意排除：自動停用 provider（`_try_cloud` 的 fallback 鏈本來就會處理）、跨日歷史分析（昨天的 quota 已 reset）、預測式 throttling（各家 quota window 文件不穩定）。只做最小可見性。
+### Changed — daemon 主動 surface 靜默 fallback
 
-### Added — ADR (b) 開工訊號可程式化檢查（`sentinel/emergent_log.py` + `scripts/check_b_preconditions.py`）
+- **daemon idle report 嵌入 LLM health 警告**（#90）— `llm_health.compose_idle_warning()` 在 `primary_blocked` 時回傳一行警告字串、否則 None。daemon `monitor_loop` 的 idle-report block 把警告 append 到既有的「💤 *AI Slime 定期報告*」訊息——主人在 Telegram 上看得到，不用記得跑 CLI。stateless 設計：條件改變時自動停止警告，不需要 reset 路徑。
 
-ADR 2026-04-30 釘住了 (b) 衝動機制的護欄，並列出三個必須同時成立才能開始寫的條件。三個條件中前兩個（樣本數、拒絕率）需要真實資料才能判斷——而 PR #81 落地時沒留結構化資料，只有 `sentinel.log` 裡的 prose log line。
+### Docs
 
-- **新增 `sentinel/emergent_log.py`**：每次 `record_emergent_moment_if_due` 走完一個 termination state（`mark` / `refuse` / `parse_fail` / `unsafe` / `llm_none` / `empty_headline`）就寫一行 JSONL 到 `~/.hermes/emergent_self_mark_log.jsonl`。Fire-and-forget；defensive wrapper 在 `emergent_self_mark.py` 確保 log 出錯不會影響真實決策流。
-- **`summarize_recent(days=30)`**：讀回過去 N 天每個 outcome 的計數 + 拒絕率（`1 - mark / total`）。空檔回 `rejection_rate=0.0` 區分「還沒資料」vs「100% 拒絕」。
-- **`scripts/check_b_preconditions.py`**：把 ADR 的三個條件編成 runnable check：mark count ≥ 5（PASS/FAIL）、拒絕率 ≥ 80%（PASS/FAIL/WAIT）、主人有沒有問起（手動勾，腳本印 `?`）。conditions #1+#2 都過時 exit 0、否則 exit 1。
+- **ADR `2026-04-30-impulse-mechanism-framing.md`**（#88）— (b) 衝動機制的護欄與試紙。**今天不寫實作 spec**，因為還沒有 (a)+(c) 跑出的真實樣本。釘了 4 個風險、4 條護欄、5 題試紙、3 個開工訊號（前兩個由 #89 的 `check_b_preconditions.py` 自動檢查）。
+- **README 對齊 0.7.0 內容**（#87）— badge 已在 0.7.0 改 `0.7-alpha → 0.7.0`，這次把內文也對齊：新增「陪伴與時間軸（v0.7）」表（D1/D7/D30/D100/D365 / 反思卡 / 自畫像 / 自主節點 / `.slime`）；GUI tab 9 → 5（v0.7-alpha lite 真實狀態）；資料檔案目錄補 `aislime_memory.db` / `llm_health.jsonl` / `reflection_cards/`；project structure tree 補 10 個新模組。
 
-下一次想寫 (b) 之前，跑 `python scripts/check_b_preconditions.py` 看數字、不要憑感覺。
+### Internal note
 
-### Changed — daemon idle report 主動 surface LLM 靜默 fallback
-
-PR #86 的 `llm_health` 預設只能透過 `scripts/llm_health_today.py` 主動查；主人不會每天打那條 CLI。daemon 每 30 分鐘的 idle report 既然已經透過 Telegram bot 推訊息，把警告嵌進去最自然。
-
-- 新增 `llm_health.compose_idle_warning()`：主 provider 的全部 model 都今天踩過 rate error 時回傳一行警告字串，否則回 None。stateless——條件改變時自動停止警告，不需要 reset 任何狀態。
-- daemon `monitor_loop` 的 idle-report block 在發出 `💤 *AI Slime 定期報告*` 前先 query 警告，有就 append 到同一條訊息（不發第二條）。
-- 4 個新 unit test：no data / partial block / full block / error count reflects rows。
+0.7.0 → 0.7.1 之間沒有任何**行為改變**——史萊姆對主人的回應、判斷邏輯、評分公式、進化條件全部一樣。差別只在工程方寫了眼睛跟耳朵：daemon 自己出問題時會講出來、`(b)` 該不該開動有客觀數字答。下一個 release（無論 0.8 還是 1.0）開始可以再做使用者面對的功能。
 
 ---
 
