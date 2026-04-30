@@ -55,3 +55,4 @@ ADR 是**當下的決策**（為什麼選這條路）。
 
 - [`2026-04-29-emergent-milestones.md`](2026-04-29-emergent-milestones.md) — 從 scripted 轉向 emergent 的時間里程碑
 - [`2026-04-29-slime-voice-anchors.md`](2026-04-29-slime-voice-anchors.md) — Slime 調性錨點（具體 vs 抽象，三個親筆示範）
+- [`2026-04-30-impulse-mechanism-framing.md`](2026-04-30-impulse-mechanism-framing.md) — (b) 衝動機制的護欄與試紙（不寫實作 spec，先釘住不該做的事）
