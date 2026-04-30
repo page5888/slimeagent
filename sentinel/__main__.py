@@ -3,11 +3,35 @@ import os
 import sys
 import logging
 import traceback
+from pathlib import Path
+
+# Logging is configured here, at the single entry point, on purpose.
+# logging.basicConfig is a no-op once the root logger has any handler,
+# so whoever configures it first wins. If we configure stdout-only here
+# and then daemon.py tries to add a FileHandler later, the second call
+# is silently dropped — which is exactly the bug that hid Telegram 409
+# Conflict tracebacks for weeks (no file log; cmd-window stdout vanishes
+# when the user closes the console).
+_log_handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
+try:
+    _log_dir = Path.home() / ".hermes"
+    _log_dir.mkdir(parents=True, exist_ok=True)
+    _log_handlers.append(
+        logging.FileHandler(_log_dir / "sentinel.log", encoding="utf-8")
+    )
+except Exception as _log_setup_err:
+    # File logging is best-effort. If permissions/disk fail, keep stdout
+    # so the daemon still boots — print surfaces the issue to the cmd
+    # window even though our normal log channel is degraded.
+    print(
+        f"[AI Slime] file log setup failed, stdout-only: {_log_setup_err}",
+        flush=True,
+    )
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-    stream=sys.stdout,
+    handlers=_log_handlers,
 )
 
 print("[AI Slime] Starting...", flush=True)

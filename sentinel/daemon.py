@@ -21,17 +21,9 @@ from sentinel.brain import analyze_events, build_context
 from sentinel.learner import distill_from_activity, distill_speech_style, get_profile_summary, load_memory
 from sentinel.chat import handle_message
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler(
-            str(__import__('pathlib').Path.home() / ".hermes" / "sentinel.log"),
-            encoding='utf-8',
-        ),
-    ],
-)
+# Logging is configured by sentinel/__main__.py before this module is
+# imported. Calling basicConfig here is a no-op once handlers exist on
+# the root logger, so we just grab the named logger and go.
 log = logging.getLogger("sentinel")
 
 running = True
