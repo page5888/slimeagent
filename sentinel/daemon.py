@@ -193,6 +193,18 @@ def monitor_loop(bot_send_fn):
                 except Exception as e:
                     log.warning(f"loneliness arc check error: {e}")
 
+                # ADR 2026-04-29 (a)+(c): let the slime itself decide whether
+                # today is worth marking on its timeline. Internal caps
+                # ensure ≤1 LLM consultation per 24h and ≤1 actual mark
+                # per 7 days, so the idle cycle's higher tick rate is fine.
+                try:
+                    from sentinel.emergent_self_mark import (
+                        record_emergent_moment_if_due,
+                    )
+                    record_emergent_moment_if_due()
+                except Exception as e:
+                    log.warning(f"emergent self-mark check error: {e}")
+
             time.sleep(2)
 
     except Exception as e:
