@@ -4,7 +4,9 @@
 
 ---
 
-## [Unreleased]
+## [0.7.2] — 2026-04-30
+
+Single-fix patch release. 真實使用者實機回報 Telegram 噪音問題（48 條/天 heartbeat 把真實警告淹沒），0.7.1 release 30 分鐘後送出修法。
 
 ### Fixed — Telegram idle report 不再 48 條/天 heartbeat 噪音
 
