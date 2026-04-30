@@ -4,6 +4,51 @@
 
 ---
 
+## [0.7.7] — 2026-05-01
+
+### Removed — 移除三條 push 推送通道（manifesto 紅線 + ADR 共同沉積機制 4 連續違反）
+
+實機觀察：凌晨 2:24 - 早上 7:26 五個小時內，主人睡覺時間，Telegram 收到 28 次 daemon 自動推送：
+
+- 11x「🧘 你已經連續使用電腦 N 分鐘了。站起來走走吧」
+- 9x「🤔 你在 claude.exe 已經專注了 N 分鐘。如果卡住了...如果是心流狀態請忽略我 😊」
+- 6x「💧 記得喝水！保持水分對專注力很重要」
+- 1x「🌙 已經凌晨 N 點了...你的身體需要休息」
+- 2x「🧠 AI Slime 定期報告」（CPU/RAM/螢幕觀察）
+
+**全部都是寫死的模板配計時器**——同一個句子換編號重發。
+
+這違反：
+
+1. **manifesto 紅線**：「不做 daily streak / login reward / push notification 來『召回』主人」
+2. **ADR 共同沉積機制 4**「不主動長出原則」 — 「Slime 的所有新能力，都不能自動 unlock」
+3. **ADR 共同沉積 D30-D90 紀律**：「不主動 push notification、不顯示『你已經 N 天/分鐘沒...』、不在主人不在時進行召回動作、Slime 對主人的態度是『在不在都好』」
+4. **編劇試紙**：兩隻同一份程式的史萊姆會在同一天用同一句話打擾兩個主人
+
+修——`gui.py` 的 daemon 觀察迴圈裡三條 push 通道全部移除：
+
+- **`advisor.evaluate()` for-loop（健康/效率/環境/情境模板提醒）** 整段拿掉。`advisor.py` 模組保留檔案但 import 跟 call site 都解綁——之後若做 pull-style advice（主人主動翻看才出現的），再重新 wire。
+- **`generate_insight()` LLM 推送**（蒸餾完成後 push 「🔮 AI Slime 的洞察」）一起停用。同樣是計時觸發後 push Telegram。
+- **「🧠 AI Slime 定期報告」每 30 分鐘 push CPU/RAM/螢幕觀察** 整段拿掉。這個比較尷尬：PR #92（v0.7.2）已經把 daemon 端的 idle_report 改成 content-conditional，但**沒人注意到 GUI 端有平行的 push 路徑在做同一件事**——daemon 端不再無條件發了，GUI 端還是每半小時無條件發。今天才被抓出來。
+
+### Fixed — 順便修一個 indent bug：activity_buf / analyze_events 過去被縮排在 advice loop 裡
+
+`activity_buf.append()` 跟 `analyze_events()` 的呼叫被誤縮排在 `for advice in advisor.evaluate(...)` 的迴圈裡——意思是**大部分 tick 沒有 advice 出現的時候，這兩個就根本沒跑**。`analyze_events` 是 content-conditional 的真實警告（disk full / file event burst），不該被廢棄的 advice loop 吞掉。趁拆 advice loop 時把它們拉回 top-level。
+
+### 保留下來的東西
+
+- **`analyze_events` 的真實警告 send_notification** — 這個是 content-conditional，只在 `snapshot.warnings` 或檔案 burst 時觸發，不是計時器。disk full 該叫醒主人就叫醒，這不是 dark pattern。
+- **進化通知** (`🧬 *AI Slime 進化*`) — 真實事件觸發，不是計時器。
+- **Daemon 端的 idle_report**（PR #92 修過的，content-conditional）— 不變。
+
+99/99 既有測試全綠（這個改動是 GUI thread 的程式碼，現有測試不覆蓋；行為改變的驗證靠實機重啟後 Telegram 不再被轟炸）。
+
+### 跟 daemon 端早先修法的關係
+
+PR #99 修了 `daemon.py` 的 cron 計時 bug（活躍主人讓 cron 永遠跑不到）。今天才發現 **GUI 端有自己平行的觀察迴圈**——daemon thread 跟 GUI thread 各跑一個迴圈、各做半套觀察、各 push 各的 Telegram。重複度高，發版時兩邊容易不一致（PR #92 改了 daemon 端、沒改 GUI 端就是案例）。長期該收斂成一條，但這個 PR 只先停掉 GUI 端的 push，重構等之後排上來。
+
+---
+
 ## [0.7.6] — 2026-04-30
 
 ADR 共同沉積架構機制 3 的最小可行實作——「Slime 之語」終於從哲學文字變成能跑的程式碼，配合一個讓主人能瀏覽收進來的話的 GUI 渲染。沒有 daemon 行為改變、沒有資料遷移；新功能在底下默默累積，主人某天聊到對的情境時自然顯現。

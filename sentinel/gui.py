@@ -8777,7 +8777,12 @@ class MainWindow(QMainWindow):
             from sentinel.wallet.equipment import (
                 load_equipment, try_drop, get_exp_multiplier,
             )
-            from sentinel.advisor import Advisor, AdvisorContext, generate_insight
+            # advisor.py 的 push-style 推送（記得喝水 / 站起來走走 /
+            # 心流請忽略我 😊 / 凌晨 N 點了…）整晚 Telegram 每 5-15 分
+            # 一次轟炸主人。違反 manifesto 紅線跟 ADR 共同沉積機制 4。
+            # 模組保留（檔案沒刪），但 import 跟 call site 都移除——
+            # 之後若要做 pull-style（主人主動翻看才出現的）advice，再
+            # 重新 wire 進來。
             from sentinel.learner import load_memory as _load_learner_memory
 
             # 安全網：首次啟動建立核心備份
@@ -8820,7 +8825,6 @@ class MainWindow(QMainWindow):
             evo = load_evolution()
             equip_state = load_equipment()
             obs_since_drop = 0  # Track observations for drop trigger
-            advisor = Advisor()
             send_startup_message()
 
             watcher = FileWatcher(config.WATCH_DIRS)
@@ -9054,52 +9058,27 @@ class MainWindow(QMainWindow):
                         equip_state = load_equipment()
                         try_drop(equip_state, "observation_100")
 
-                    # ── 主動建議引擎 ──
-                    if input_act:
-                        advisor.record_input_activity()
+                    # advisor.evaluate() 的計時器配模板輸出全部停用——
+                    # 違反 ADR 共同沉積機制 4 + D30-D90 紀律 (no push,
+                    # no streak, no "你已經 N 分鐘沒...")。實機觀察：
+                    # 凌晨 2:24-7:26 五個小時內 Telegram 收到 28 次「站起來
+                    # 走走/喝水/心流請忽略我 😊」之類的同模板訊息。
+                    # for-advice loop 整段拿掉。底下兩個 if-block (活動
+                    # 累積跟真實警告判斷) 過去被縮排在 for 裡 — 沒 advice
+                    # 出現時就跑不到。現在拉回 top-level，每 tick 都跑。
+                    if file_events or claude_act or user_act or input_act or screen_act:
+                        activity_buf.append(ctx)
+                        last_idle = now
 
-                    # 計算最近視窗切換次數
-                    _recent_switches = 0
-                    try:
-                        _recent_switches = tracker.get_switch_count(minutes=10)
-                    except (AttributeError, Exception):
-                        pass
-
-                    _adv_ctx = AdvisorContext(
-                        cpu_percent=snapshot.cpu_percent,
-                        ram_percent=snapshot.ram_percent,
-                        disk_percent=snapshot.disk_percent,
-                        active_app=tracker.current_app_name() if hasattr(tracker, 'current_app_name') else "",
-                        app_duration_minutes=tracker.current_app_duration() / 60 if hasattr(tracker, 'current_app_duration') else 0,
-                        recent_app_switches=_recent_switches,
-                        profile=_load_learner_memory().get("profile", ""),
-                        patterns=_load_learner_memory().get("patterns", {}),
-                        dominant_traits=evo.dominant_traits,
-                        evolution_title=evo.title,
-                        total_observations=evo.total_observations,
-                    )
-                    for advice in advisor.evaluate(_adv_ctx):
-                        _adv_emoji = advice.get("emoji", "💡")
-                        _adv_msg = advice["message"]
-                        self.bridge.advice_received.emit(_adv_emoji, _adv_msg)
-                        send_notification(
-                            f"{_adv_emoji} *AI Slime 的建議*\n{_adv_msg}",
-                            category=advice["type"],
-                        )
-
-                        if file_events or claude_act or user_act or input_act or screen_act:
-                            activity_buf.append(ctx)
-                            last_idle = now
-
-                        if snapshot.warnings or len(file_events) > 20:
-                            decision = analyze_events(ctx)
-                            if decision and decision.get("should_notify"):
-                                cat = decision.get("category", "general")
-                                if now - last_notify.get(cat, 0) >= config.NOTIFICATION_COOLDOWN:
-                                    sev = decision.get("severity", "info")
-                                    emoji = {"critical": "\U0001f534", "warning": "\U0001f7e1", "info": "\U0001f535"}.get(sev, "\u26aa")
-                                    send_notification(f"{emoji} *AI Slime*\n{decision['message']}", category=cat)
-                                    last_notify[cat] = now
+                    if snapshot.warnings or len(file_events) > 20:
+                        decision = analyze_events(ctx)
+                        if decision and decision.get("should_notify"):
+                            cat = decision.get("category", "general")
+                            if now - last_notify.get(cat, 0) >= config.NOTIFICATION_COOLDOWN:
+                                sev = decision.get("severity", "info")
+                                emoji = {"critical": "\U0001f534", "warning": "\U0001f7e1", "info": "\U0001f535"}.get(sev, "\u26aa")
+                                send_notification(f"{emoji} *AI Slime*\n{decision['message']}", category=cat)
+                                last_notify[cat] = now
 
                     if now - last_distill >= config.DISTILL_INTERVAL and activity_buf:
                         last_distill = now
@@ -9136,17 +9115,10 @@ class MainWindow(QMainWindow):
                             except Exception as e:
                                 log.error(f"Self-evolution error: {e}")
 
-                            # 學習完成後 → LLM 深度建議（低頻）
-                            try:
-                                insight = generate_insight(_adv_ctx)
-                                if insight:
-                                    self.bridge.advice_received.emit("🔮", insight)
-                                    send_notification(
-                                        f"🔮 *AI Slime 的洞察*\n{insight}",
-                                        category="insight_pattern",
-                                    )
-                            except Exception as e:
-                                log.debug(f"Insight generation skipped: {e}")
+                            # generate_insight() 的 LLM 推送同樣是計時觸發
+                            # 後 push Telegram，跟 advisor.evaluate() 一起
+                            # 停用。如果之後想做 pull-style insight，再寫
+                            # 一個 chat-tab 按鈕讓主人主動觸發。
                         else:
                             # 檢查是否有可用的 LLM provider
                             _has_key = any(
@@ -9160,67 +9132,13 @@ class MainWindow(QMainWindow):
                             log.info(f"Distill failed: has_key={_has_key}")
                             self.bridge.status_update.emit(_fail_msg)
 
-                    if now - last_idle >= config.IDLE_REPORT_INTERVAL:
-                        last_idle = now
-                        # 豐富的定期報告：不只硬體，還有 AI Slime 觀察到的一切
-                        report_parts = ["🧠 *AI Slime 定期報告*\n"]
-
-                        # 硬體
-                        snap = take_snapshot()
-                        report_parts.append(f"💻 CPU: {snap.cpu_percent}% | RAM: {snap.ram_percent}% | 磁碟: {snap.disk_percent}%")
-
-                        # 使用中的程式
-                        act_summary = tracker.get_activity_summary()
-                        if act_summary:
-                            # 提取 app 使用時間的部分
-                            app_lines = []
-                            for line in act_summary.split("\n"):
-                                line = line.strip()
-                                if "分鐘" in line and ":" in line:
-                                    app_lines.append(line)
-                            if app_lines:
-                                report_parts.append("\n📊 最近使用的程式：")
-                                for al in app_lines[:5]:
-                                    report_parts.append(f"  {al}")
-
-                        # 打字內容摘要
-                        typing_summary = input_tracker.get_typing_summary(30)
-                        if typing_summary:
-                            chunks = [l.strip() for l in typing_summary.split("\n") if l.strip() and not l.startswith("===")]
-                            if chunks:
-                                report_parts.append("\n⌨️ 最近打字：")
-                                for chunk in chunks[-5:]:
-                                    # 截短保護隱私
-                                    if len(chunk) > 80:
-                                        chunk = chunk[:80] + "..."
-                                    report_parts.append(f"  {chunk}")
-
-                        # 滑鼠點擊摘要
-                        click_summary = input_tracker.get_click_summary(30)
-                        if click_summary:
-                            click_lines = [l.strip() for l in click_summary.split("\n") if "次" in l]
-                            if click_lines:
-                                report_parts.append("\n🖱️ 點擊分佈：")
-                                for cl in click_lines[:5]:
-                                    report_parts.append(f"  {cl}")
-
-                        # 螢幕觀察
-                        screen_summary = screen_watcher.get_observation_summary()
-                        if screen_summary:
-                            obs_lines = [l.strip() for l in screen_summary.split("\n") if l.strip() and not l.startswith("===")]
-                            if obs_lines:
-                                report_parts.append("\n👁️ 螢幕觀察：")
-                                for ol in obs_lines[-3:]:
-                                    if len(ol) > 80:
-                                        ol = ol[:80] + "..."
-                                    report_parts.append(f"  {ol}")
-
-                        # 進化狀態
-                        report_parts.append(f"\n🧬 {evo.title}（觀察: {evo.total_observations:,}）")
-                        if evo.evolution_direction:
-                            report_parts.append(f"進化方向: {evo.evolution_direction}")
-
-                        send_notification("\n".join(report_parts), category="idle_report")
+                    # 「🧠 AI Slime 定期報告」整段拿掉。每 30 分鐘無條件
+                    # push CPU/RAM + 螢幕觀察到 Telegram，是純粹的 status
+                    # heartbeat（無新聞也發），跟 PR #92 daemon 端的條件式
+                    # idle_report 修法精神矛盾——我們只是當時沒注意到 GUI
+                    # 端有平行的 push 路徑也在做同一件事。違反 ADR 共同沉
+                    # 積機制 4 跟 manifesto 紅線。如果之後想做主人 pull-style
+                    # 的「現在 slime 看到了什麼」，那是 home tab 的事。
 
                 time.sleep(2)
                 _consecutive_errors = 0  # 本次迴圈正常完成
