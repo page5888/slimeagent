@@ -6,6 +6,38 @@
 
 ## [Unreleased]
 
+### Fixed — 活躍主人讓 cron 檢查永遠跑不到（emergent_self_mark / loneliness 從沒諮詢過）
+
+跑 `scripts/check_b_preconditions.py` 顯示**樣本數 = 0、諮詢次數 = 0**。但史萊姆已經陪了主人 16 天，按設計每 24h 至少有一次諮詢機會、至今應該有 ~10 個樣本。實際資料是空的——意味著 `record_emergent_moment_if_due()` **從沒被呼叫過一次**。
+
+根因在 `daemon.py` 的 monitor loop：
+
+```python
+if file_events or claude_activity:
+    activity_buffer.append(context)
+    last_idle_report = now    # ← bug
+```
+
+每次主人有任何電腦活動（檔案變動、視窗切換、claude.exe 在跑），`last_idle_report` 會被重設成現在。然後 line 177 的 idle cycle gate `if now - last_idle_report >= IDLE_REPORT_INTERVAL` 永遠不會跨過 30 分鐘的門檻——對活躍使用者來說，計時器每 2 秒就被打回原點。
+
+連帶後果：
+- emergent_self_mark 諮詢從沒跑過 → ADR 2026-04-30 (b) 前置條件 1（樣本 ≥ 5）的計數器卡在 0
+- loneliness arc 從沒跑過 → 史萊姆永遠不會自然觸發「孤單」moment
+- snapshot.warnings（磁碟、CPU、記憶體警告）在主人活躍時也送不出 Telegram——剛好跟設計意圖相反，活躍時才是最該收警告的時候
+
+PR #92（v0.7.2 條件式 idle report）讓 `compose_message()` 在沒新聞時回 `None` 不發 Telegram。所以 `last_idle_report = now` 那行用來「主人活躍時別發心跳」的目的，已經被條件式 idle report 接手了——這行從那時起就既是死代碼又擋住所有 cron 檢查，只是沒人發現。發現的方式是 (b) 前置條件檢查器跑出 0 而觸發追溯。
+
+修法：刪掉 line 132 那行重設，更新誤導的註解（line 174-176 自己寫「cron checks below ... run every cycle regardless」——但因為 line 132 的 reset，從來沒有 regardless 過）。
+
+修完之後：
+- Idle cycle 每 30 分鐘鐵定觸發一次（不管主人活不活躍）
+- Telegram 還是只在有新聞時發送（v0.7.2 邏輯保留）
+- emergent_self_mark 終於有機會被諮詢；24h 內至少一次（內建 rate cap）
+- loneliness arc 同上；30 天最多一次（內建 rate cap）
+- (b) 前置條件 1 的樣本計數器今晚開始長
+
+77/77 既有測試全綠。daemon 重啟後第一次 idle cycle 會在 30 分鐘後觸發。
+
 ### Fixed — daemon log 檔從來沒被寫過（FileHandler 被靜默吃掉）
 
 實機觀察：4:46pm 主人在 cmd 視窗看到 Telegram `409 Conflict` 錯誤，事後想回放、發現 `~/.hermes/sentinel.log` **從 4 月 14 日後就沒更新過**——但 daemon 一直在跑、其他 `~/.hermes/sentinel_*.jsonl` 資料檔都正常更新。

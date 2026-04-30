@@ -129,7 +129,20 @@ def monitor_loop(bot_send_fn):
 
                 if file_events or claude_activity:
                     activity_buffer.append(context)
-                    last_idle_report = now
+                    # Do NOT reset last_idle_report on activity. Earlier
+                    # versions did, to suppress heartbeat-only Telegram
+                    # messages during active use — but PR #92 made the
+                    # idle message *content-conditional* (compose_message
+                    # returns None when there's no news), so resetting
+                    # here is now redundant for Telegram and actively
+                    # harmful for the cron checks (loneliness, emergent
+                    # self-mark) that ride on this cycle. With the reset
+                    # in place, those checks never ran for active users
+                    # and the (b)-precondition counter sat at zero
+                    # indefinitely. The cycle now fires every
+                    # IDLE_REPORT_INTERVAL regardless of activity;
+                    # Telegram silence is still preserved by the
+                    # content-conditional compose_message.
 
                 # Analyze if something looks off
                 has_warnings = bool(snapshot.warnings)
@@ -169,11 +182,17 @@ def monitor_loop(bot_send_fn):
                         log.warning(f"speech-style distill error: {e}")
                     last_chat_count = current_chat_count
 
-            # Idle cycle (every 30 min). Telegram message ONLY fires
-            # when there's actually news — see sentinel.idle_report and
-            # ADR 2026-04-30. The cron checks below (loneliness, emergent
-            # self-mark) run every cycle regardless: they update local
-            # state, not Telegram.
+            # Idle cycle (every IDLE_REPORT_INTERVAL — currently 30 min).
+            # Fires regardless of whether the user is active; the user
+            # only ever sees a Telegram message when there's actual news,
+            # because compose_message returns None on a quiet snapshot
+            # (v0.7.2 / PR #92, ADR 2026-04-30).
+            #
+            # The cron checks below (loneliness arc, emergent self-mark)
+            # ride on this cycle for free. Both have their own internal
+            # rate caps (≤1 emergent consultation per 24h, ≤1 loneliness
+            # arc per 30 days), so the 30-min tick rate just gives them
+            # opportunities — they decide for themselves whether to act.
             if now - last_idle_report >= IDLE_REPORT_INTERVAL:
                 last_idle_report = now
                 snapshot = take_snapshot()
@@ -194,7 +213,7 @@ def monitor_loop(bot_send_fn):
                 if message is not None:
                     bot_send_fn(message)
                 # else: stay silent. No heartbeat-only Telegram messages.
-                # I. Narrative arc: check for loneliness during idle reports
+                # I. Narrative arc: check for loneliness on every idle tick
                 # (rate-limited internally — at most one loneliness moment per
                 # 30 days regardless of how often we call this).
                 try:
