@@ -93,3 +93,12 @@ jobs:
           if failures:
               raise SystemExit(f"{len(failures)} module(s) failed to import")
           PY
+
+      - name: Run unit tests
+        # Stdlib unittest discovery — no pytest dep yet, since the
+        # project hasn't committed to one and CI is not the place to
+        # introduce that decision. New tests should live under tests/
+        # as test_*.py with unittest.TestCase classes; if/when this
+        # grows enough to justify pytest, swap in `pip install pytest`
+        # and `pytest tests/`.
+        run: python -m unittest discover -s tests -v
