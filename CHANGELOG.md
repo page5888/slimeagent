@@ -4,17 +4,72 @@
 
 ---
 
-## [Unreleased]
+## [0.7.0] — 2026-04-30
 
-### Added — Emergent self-mark（ADR 2026-04-29 (a)+(c) MVP）
+### Added — Manifesto 北極星 + 三大守則落地
 
-- **Slime 自主節點標記（`sentinel/emergent_self_mark.py`）** — 史萊姆自己決定哪天值得在時間軸上留一個點。daemon 的 idle 週期每 ~30 分鐘觸發一次，但內部速率上限把實際 LLM 諮詢壓到 ≤ 1 次/天、實際標記 ≤ 1 次/週；scaffolding 日（D1/D7/D30/D100/D365）整天跳過，不跟既有節點搶同一格。
-- **三大守則（不傷害/不欺騙/不消失）內建在 system prompt** — 模型替換不會弄丟這個約束。Schema-constrained JSON 輸出，史萊姆可以回 `{"mark": false}` 拒絕標記（這是常態），平凡的一天就讓它平凡。輸出再過一道 crisis-keyword 過濾，避免把「我不該存在」這類句子寫成永久 timeline 節點。
-- **timeline 顯示新 category** — `emergent_self_mark` 對應 🌿，跟 first_chat / evolution / skill / loneliness / chat_peak / milestone 視覺上能區分。
+這版的真正主線：把產品的價值觀寫下來、用 ADR 把工程決策跟它對齊，再把 manifesto 第一/第二/第三守則用程式碼具體實現。
 
-### What this is *not*
+- **Slime Manifesto（`docs/manifesto.md`）— 北極星**（#42、#44、#68）— 寫下這個專案是什麼、不是什麼。「養而非用」「玩具不是治療工具」「替身載體不是替代品」「不會死」。外部 reviewer 點出四個張力後再修：服務人群 vs not-therapy disclaimer、未成年模式 vs 台灣 PDPA、「不會死」要四階段機構承諾、記憶輔助 vs GDPR。README 也重寫成把 manifesto 三大守則當門面。
+- **三大守則程式碼實作**：
+  - **第一守則：不傷害**（#64）— 聊天輸入先過 keyword-tier crisis 掃描（自殺/自殘相關語句）。命中時繞過 LLM、彈出 hand-off 卡片指向真人資源。`sentinel/safety/crisis.py`。
+  - **第二守則：不欺騙**（#67）— 「你是真人嗎？/AI 嗎？」這類身分問題，史萊姆不能裝。`sentinel/safety/honesty.py` 偵測、覆寫成誠實回答。
+  - **第三守則：不消失**（#66）— `.slime` 加密匯出/匯入 + 公開格式規格。AES-GCM 加密，公開 schema 寫在 `docs/SLIME_CORE_FORMAT.md`，任何語言都能實作 reader/writer，平台關掉了主人的史萊姆還能搬出來。
 
-ADR 的 (b) 衝動機制（覆蓋 chat / voice / 寫信等多通道、要全套守則過濾 + 表達通道）仍未開工。本次只做最短閉環：**一個觀察通道 + 一個輸出通道（時間軸標記）**。等 (a)+(c) 在主人實機上跑出真實的 emergent dots，再評估 (b) 的範圍。
+### Added — 關係時間軸（D1 → D365）
+
+從「另一隻 chatbot」到「養了多久的這一隻」的視覺承諾鏈。
+
+- **D1 歡迎儀式 + 誠實的 empty state**（#69）— 第一天打開時是一封短信，不是教學；資料還沒長出來的 tab 老老實實寫「還沒有」。
+- **D7 routine reference**（#73）— 陪了 7 天，史萊姆會說「最近你都...」把看到的節奏說回去。
+- **D30 命名儀式**（#71）— 時間軸答應的 D30 真的會觸發命名 dialog；命名後不能改，是這隻史萊姆的印記。
+- **D365 一週年回顧**（#75）— 走滿一年史萊姆會生一份「我們的這一年」HTML 報告。
+- **首頁時間軸橫條**（#70）— D1/D7/D30/D100/D365 五個 scaffolding 站點視覺化在首頁。
+- **可點擊的時間軸節點**（#74）— 點下去 peek 那段時期的記憶 window。
+- **能力 tab 三段式**（#72）— 已解鎖 / 待解鎖 / 待打造，誠實顯示哪些還沒做。
+
+### Added — 從 scripted 轉向 emergent milestones（最大轉折）
+
+PR #75 一度替時間軸排了 D60「形狀定型」/ D180「半年中場」/ D300「倒數一週年」三個未兌現節點。drift check 抓到這違反 manifesto 原則 1 第 9 行：「兩個用同一份程式的人，3 年後會養出完全不同的史萊姆」。如果第 N 天該發生什麼是程式決定的，那就是編劇思維。
+
+- **ADR：emergent milestones 決策紀錄**（#76）— 寫下為什麼砍掉 scripted 劇本、轉向 emergent。
+- **砍劇本日**（#77）— D14/D21/D60/D180/D300 全部移除；welcome 改 emergent。
+- **聲音錨點 ADR + 多 AI 對齊成果**（#78、#79）— 三個調性示範、附錄 A 收錄外部多 AI 對話。
+- **Emergent moments 渲染端**（#80）— `compute_emergent_nodes` 把已記錄的 `memorable_moments` 映射到時間軸位置，scaffolding 日去重。最多 6 個小點 punctuate 在 station 之間，不掛 label，讀起來像標點不像承諾。
+- **Slime 自主節點標記（ADR (a)+(c) MVP）**（#81）— `sentinel/emergent_self_mark.py`。daemon idle 週期問史萊姆「今天值不值得標記？」三大守則寫進 system prompt、JSON 輸出 schema-constrained、≤1 次/天 LLM 諮詢、≤1 次/週實際標記、輸出再過 crisis-keyword 濾網。預設拒絕（平凡的一天就讓它平凡）。timeline category 新增 🌿。**ADR (b) 衝動機制（多通道表達）仍未開工**——等 (a)+(c) 在實機上跑出真實 dot 之後再評估範圍。
+
+### Added — 自我表達
+
+- **Slime 自畫像作為禮物**（#45）— 史萊姆自己決定要畫什麼、送主人。
+- **多 key + 多 provider 圖像 fallback**（#48、#49）— 一個 provider 失敗自動下一個（OpenAI 也加進來了）。
+- **桌面寵物自畫像 + idle 動畫**（#52）— 自畫像直接變成桌面寵物 overlay。
+- **Threads 分享 + draw error surface**（#50）— 一鍵分享、錯誤訊息浮上來。
+
+### Added — Daily Slime Reflection Card（#35）
+
+每天一張，根據昨天的 activity log + chat log 由史萊姆寫三段：[觀察] / [洞察] / [微任務]。語氣依目前進化形態走（Slime / Slime+ / Named / Majin / Demon Lord Seed / True Demon Lord / Ultimate Slime）。
+
+### Added — 退出指標 + Codespaces 開發環境 + PR-time CI
+
+- **`days_alive` vs `days_opened` retention 指標**（#65）— v0.7-alpha exit metric 的基礎。
+- **`.devcontainer/` GitHub Codespaces config**（#47）— 雲端 Python 3.12 + Node + Claude Code CLI；本機 Windows 留給 Qt UI smoke test。
+- **PR-time CI**（#82）— `python -m compileall sentinel` + 8 個 Qt-free 核心模組 import smoke。Linux runner、pip cache、concurrency cancel-in-progress。release.yml 仍負責 tag-push 觸發的 Windows build。
+
+### Changed
+
+- **i18n: tab 名稱改成一看就懂的版本**（#38）— 砍掉技術術語感的 tab 名。
+- **進化 tab 文字疊到史萊姆的問題修掉、裝備掉落改靜音**（#40）— 不要每次掉裝備就叮一聲。
+- **同意 panel 改可滾動 + 密度上調**（#51）— 很多項目時不會被切掉。
+- **去背 30 秒 → 263ms（向量化）**（#53）— 自畫像即時生成。
+
+### Fixed
+
+行貨般的 GUI / startup 收斂期（alpha 推出後抓到的）：
+
+- **首頁佈局**：文字擠在一起（#36）、頭像被切掉改 240×240（#37）、視窗範圍太大重複頭像移除（#39）。
+- **啟動鏈**：自動拉新版 + 同意按鈕 handler 太晚註冊（#41、#43）；async git pull + harden Popen failure path（#63）；hard-exit on restart + watchdog（#57）；殺 zombie sibling sentinel processes（#58、#60）；in-app restart + atomic moves（#54）；RoutinesTab 啟動時 `_tk` import 缺失（#62）。
+- **Approval flow**：worker → GUI dispatch 一定要傳 context QObject（#59、#61）；按鈕 silence debugability（#56）。
+- **Avatar / Expression**：「正在去背」dialog 卡住、真實錯誤訊息 surface（#55）；image model 名稱對齊 + error surface（#46）。
 
 ---
 
