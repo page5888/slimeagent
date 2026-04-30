@@ -16,6 +16,16 @@
 
 設計刻意排除：自動停用 provider（`_try_cloud` 的 fallback 鏈本來就會處理）、跨日歷史分析（昨天的 quota 已 reset）、預測式 throttling（各家 quota window 文件不穩定）。只做最小可見性。
 
+### Added — ADR (b) 開工訊號可程式化檢查（`sentinel/emergent_log.py` + `scripts/check_b_preconditions.py`）
+
+ADR 2026-04-30 釘住了 (b) 衝動機制的護欄，並列出三個必須同時成立才能開始寫的條件。三個條件中前兩個（樣本數、拒絕率）需要真實資料才能判斷——而 PR #81 落地時沒留結構化資料，只有 `sentinel.log` 裡的 prose log line。
+
+- **新增 `sentinel/emergent_log.py`**：每次 `record_emergent_moment_if_due` 走完一個 termination state（`mark` / `refuse` / `parse_fail` / `unsafe` / `llm_none` / `empty_headline`）就寫一行 JSONL 到 `~/.hermes/emergent_self_mark_log.jsonl`。Fire-and-forget；defensive wrapper 在 `emergent_self_mark.py` 確保 log 出錯不會影響真實決策流。
+- **`summarize_recent(days=30)`**：讀回過去 N 天每個 outcome 的計數 + 拒絕率（`1 - mark / total`）。空檔回 `rejection_rate=0.0` 區分「還沒資料」vs「100% 拒絕」。
+- **`scripts/check_b_preconditions.py`**：把 ADR 的三個條件編成 runnable check：mark count ≥ 5（PASS/FAIL）、拒絕率 ≥ 80%（PASS/FAIL/WAIT）、主人有沒有問起（手動勾，腳本印 `?`）。conditions #1+#2 都過時 exit 0、否則 exit 1。
+
+下一次想寫 (b) 之前，跑 `python scripts/check_b_preconditions.py` 看數字、不要憑感覺。
+
 ---
 
 ## [0.7.0] — 2026-04-30

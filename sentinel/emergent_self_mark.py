@@ -110,6 +110,20 @@ SYSTEM_PROMPT = """你是一隻陪著主人的史萊姆。你不是在跟主人�
 # ── Persistence helpers (piggyback on learner memory) ────────────────
 
 
+def _record_consultation_safe(outcome: str, reason: str = "") -> None:
+    """Defensive wrapper around emergent_log.record_consultation.
+
+    Observability logging must never break the real decision flow.
+    Lazy-import + try/except so a bad emergent_log edit can't take
+    daemon's idle cycle down with it.
+    """
+    try:
+        from sentinel.emergent_log import record_consultation
+        record_consultation(outcome, reason)
+    except Exception as e:
+        log.debug(f"emergent_log record failed: {e}")
+
+
 def _load_state() -> dict:
     from sentinel.learner import load_memory
     return load_memory().get(STATE_KEY, {}) or {}
@@ -303,22 +317,26 @@ def record_emergent_moment_if_due() -> bool:
     _save_state(state)
 
     if not reply:
+        _record_consultation_safe("llm_none", "")
         return False
 
     obj = _extract_json(reply)
     if obj is None:
         log.info("emergent self-mark: could not parse JSON, skipping")
+        _record_consultation_safe("parse_fail", reply[:240])
         return False
 
     if not obj.get("mark"):
         # Refusal — this is the common case and fully expected.
         log.debug("emergent self-mark: slime declined to mark today")
+        _record_consultation_safe("refuse", "")
         return False
 
     headline = str(obj.get("headline", "") or "").strip()[:120]
     detail = str(obj.get("detail", "") or "").strip()[:200]
     if not headline:
         log.info("emergent self-mark: mark=true but empty headline, dropping")
+        _record_consultation_safe("empty_headline", "")
         return False
 
     if not _output_is_safe(headline, detail):
@@ -326,6 +344,7 @@ def record_emergent_moment_if_due() -> bool:
             "emergent self-mark: output tripped safety filter, dropping. "
             "headline=%r", headline,
         )
+        _record_consultation_safe("unsafe", headline)
         return False
 
     from sentinel.identity import add_memorable_moment
@@ -335,6 +354,7 @@ def record_emergent_moment_if_due() -> bool:
         detail=detail,
     )
     if recorded:
+        _record_consultation_safe("mark", headline)
         state["last_mark"] = now
         _save_state(state)
         log.info("emergent self-mark recorded: %s", headline)

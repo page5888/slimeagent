@@ -160,9 +160,13 @@ class TestRecordFlow(unittest.TestCase):
 
         # Patch through learner; identity._save / _load go through it,
         # and so does esm._load_state / _save_state.
+        # Also stub the consultation-log writer at the import boundary
+        # inside esm so tests don't pollute ~/.hermes/. We don't need
+        # to verify log calls here — that's the job of test_emergent_log.
         self._patches = [
             mock.patch("sentinel.learner.load_memory", side_effect=fake_load),
             mock.patch("sentinel.learner.save_memory", side_effect=fake_save),
+            mock.patch("sentinel.emergent_log.record_consultation"),
         ]
         for p in self._patches:
             p.start()
