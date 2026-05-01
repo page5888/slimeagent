@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 .env
 .claude/
+.director-mode/
 *.egg-info/
 dist/
 build/
