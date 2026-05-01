@@ -8917,6 +8917,154 @@ class MainWindow(QMainWindow):
                 except Exception as e:
                     await update.message.reply_text(f"❌ 重啟失敗：{e}")
 
+            async def cmd_pending(update: Update, context):
+                """List pending approval items so master can approve from phone.
+
+                Each notification (e.g. 「AI Slime 提議：新技能 ID: 598b59」)
+                already carries a 6-char ID prefix; this command lists what
+                that prefix maps to plus everything else awaiting approval.
+                """
+                if update.message.chat_id != config.TELEGRAM_CHAT_ID:
+                    return
+                try:
+                    from sentinel.growth.approval import list_pending
+                    items = list_pending()
+                except Exception as e:
+                    await update.message.reply_text(f"❌ 讀取待同意失敗：{e}")
+                    return
+                if not items:
+                    await update.message.reply_text("✓ 沒有待同意的提議。")
+                    return
+                kind_label = {
+                    "skill_gen": "新技能", "self_mod": "自我修改", "action": "動作",
+                }
+                lines = [f"📋 *待同意（{len(items)}）*"]
+                for p in items:
+                    short = p.id[:6]
+                    label = kind_label.get(p.kind, p.kind)
+                    title = (p.title or "(無標題)").strip()
+                    if len(title) > 80:
+                        title = title[:80] + "…"
+                    lines.append(f"`{short}` · {label}\n  {title}")
+                lines.append(
+                    "\n用 `/approve <id>` 同意、`/reject <id> [reason]` 拒絕。\n"
+                    "id 用 6 個字以上前綴就會配對。"
+                )
+                await update.message.reply_text(
+                    "\n\n".join(lines), parse_mode="Markdown",
+                )
+
+            def _resolve_pending_prefix(prefix: str):
+                """Resolve a partial id to a unique pending item.
+
+                Returns (status, payload):
+                  ("ok", PendingApproval)  — exactly one match
+                  ("none", None)           — no match
+                  ("ambiguous", [ids…])    — multiple matches
+                """
+                from sentinel.growth.approval import list_pending
+                items = list_pending()
+                matches = [p for p in items if p.id.startswith(prefix)]
+                if not matches:
+                    return "none", None
+                if len(matches) > 1:
+                    return "ambiguous", [m.id[:8] for m in matches]
+                return "ok", matches[0]
+
+            async def cmd_approve(update: Update, context):
+                if update.message.chat_id != config.TELEGRAM_CHAT_ID:
+                    return
+                parts = (update.message.text or "").split(maxsplit=1)
+                if len(parts) < 2:
+                    await update.message.reply_text(
+                        "用法：`/approve <id>`\n先用 /pending 列出可用 id。",
+                        parse_mode="Markdown",
+                    )
+                    return
+                prefix = parts[1].strip()
+
+                status, payload = _resolve_pending_prefix(prefix)
+                if status == "none":
+                    await update.message.reply_text(
+                        f"❌ 找不到以 `{prefix}` 開頭的 pending 項目。"
+                        "用 /pending 看現有的。",
+                        parse_mode="Markdown",
+                    )
+                    return
+                if status == "ambiguous":
+                    ids = ", ".join(payload)
+                    await update.message.reply_text(
+                        f"⚠️ `{prefix}` 對到多筆：{ids}\n請用更長的 id。",
+                        parse_mode="Markdown",
+                    )
+                    return
+
+                target = payload
+                await update.message.reply_text(
+                    f"⏳ 核准中：{target.title}"
+                )
+                try:
+                    from sentinel.growth.approval import approve as _approve
+                    ok = _approve(target.id, approver="telegram")
+                except Exception as e:
+                    await update.message.reply_text(f"❌ 核准失敗：{e}")
+                    return
+                if ok:
+                    await update.message.reply_text(
+                        f"✅ 已核准 `{target.id[:8]}`：{target.title}",
+                        parse_mode="Markdown",
+                    )
+                else:
+                    await update.message.reply_text(
+                        "❌ 核准未生效——proposal 紀錄了，但背後的執行失敗。"
+                        "看 ~/.hermes/sentinel.log。"
+                    )
+
+            async def cmd_reject(update: Update, context):
+                if update.message.chat_id != config.TELEGRAM_CHAT_ID:
+                    return
+                parts = (update.message.text or "").split(maxsplit=2)
+                if len(parts) < 2:
+                    await update.message.reply_text(
+                        "用法：`/reject <id> [reason]`\n"
+                        "reason 是可選的說明，會寫進 audit log。",
+                        parse_mode="Markdown",
+                    )
+                    return
+                prefix = parts[1].strip()
+                reason = parts[2].strip() if len(parts) > 2 else ""
+
+                status, payload = _resolve_pending_prefix(prefix)
+                if status == "none":
+                    await update.message.reply_text(
+                        f"❌ 找不到 `{prefix}`。用 /pending 確認。",
+                        parse_mode="Markdown",
+                    )
+                    return
+                if status == "ambiguous":
+                    ids = ", ".join(payload)
+                    await update.message.reply_text(
+                        f"⚠️ `{prefix}` 對到多筆：{ids}",
+                        parse_mode="Markdown",
+                    )
+                    return
+
+                target = payload
+                try:
+                    from sentinel.growth.approval import reject as _reject
+                    ok = _reject(target.id, reason=reason, approver="telegram")
+                except Exception as e:
+                    await update.message.reply_text(f"❌ 拒絕失敗：{e}")
+                    return
+                if ok:
+                    suffix = f"\n原因：{reason}" if reason else ""
+                    await update.message.reply_text(
+                        f"🗑 已拒絕 `{target.id[:8]}`：{target.title}{suffix}",
+                        parse_mode="Markdown",
+                    )
+                else:
+                    await update.message.reply_text("❌ 拒絕未生效。")
+
             async def cmd_preflight(update: Update, context):
                 """Run scripts/preflight.py and send the verdict back.
 
@@ -8980,6 +9128,9 @@ class MainWindow(QMainWindow):
                 app.add_handler(CommandHandler("skills", cmd_skills))
                 app.add_handler(CommandHandler("restart", cmd_restart))
                 app.add_handler(CommandHandler("preflight", cmd_preflight))
+                app.add_handler(CommandHandler("pending", cmd_pending))
+                app.add_handler(CommandHandler("approve", cmd_approve))
+                app.add_handler(CommandHandler("reject", cmd_reject))
                 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
                 app.run_polling(drop_pending_updates=True)
             except Exception as e:
