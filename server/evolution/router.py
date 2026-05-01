@@ -22,7 +22,7 @@ from pydantic import BaseModel
 from server.auth.deps import get_current_user
 from server.wallet.service import spend_points
 from sentinel.wallet.client import WalletError
-from sentinel.wallet.market_rules import EVOLVE_COST, SPEND_TYPE_EVOLVE
+from sentinel.wallet.costs import EVOLVE_COST, SPEND_TYPE_EVOLVE
 
 router = APIRouter(prefix="/evolution", tags=["evolution"])
 

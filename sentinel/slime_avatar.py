@@ -172,32 +172,13 @@ class SlimeWidget(QWidget):
         self.update()
 
     def _load_equipped_visuals(self):
-        """Load equipped item visuals from equipment state."""
-        try:
-            from sentinel.wallet.equipment import load_equipment, EQUIPMENT_POOL
-            state = load_equipment()
-            visuals = {}
-            for slot, item_id in state.equipped.items():
-                if not item_id:
-                    continue
-                # Find the item in inventory
-                item = next((i for i in state.inventory if i["item_id"] == item_id), None)
-                if not item:
-                    continue
-                # Find the template
-                template = next(
-                    (t for t in EQUIPMENT_POOL if t["name"] == item["template_name"]),
-                    None,
-                )
-                if template and template.get("visual"):
-                    visuals[slot] = {
-                        "visual": template["visual"],
-                        "rarity": item["rarity"],
-                        "name": item["template_name"],
-                    }
-            self._equipped_visuals = visuals
-        except Exception:
-            self._equipped_visuals = {}
+        """Equipment system archived per ADR 2026-04-30-slime-stays-private.md.
+
+        Same stub as overlay.py's. v0.8 cycle replaces this with
+        birth_signature reader per
+        ADR 2026-05-01-slime-physical-individuation.md.
+        """
+        self._equipped_visuals = {}
 
     def _tick(self):
         self._anim_phase += 0.05
