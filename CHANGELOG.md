@@ -4,6 +4,30 @@
 
 ---
 
+## [0.7.8] — 2026-05-01
+
+### Fixed — emergent_self_mark / loneliness arc 從上線到現在從沒被諮詢過一次
+
+驗證 v0.7.7 時跑 `scripts/check_b_preconditions.py`，發現過了一晚 + 三次重啟之後 consultations 還是 **0**。`emergent_self_mark_state` 是空 `{}`，log 檔不存在，moments 表 0 筆 emergent_self_mark。
+
+追根：`record_emergent_moment_if_due()` 跟 `record_loneliness_arc_if_due()` 都只 wire 在 `daemon.monitor_loop` 裡。`daemon.monitor_loop` 只在 `python -m sentinel --no-gui` 模式才會跑——**`start.bat` 雙擊走的是 GUI 路徑，daemon thread 從沒被 spawn**。整個 (b) 機制 + 共同典故錨完全是死代碼。
+
+PR #99 修的 cron-reset bug 是真的 bug，但修的是一個**沒在跑的 code path**。昨天說「先讓它跑一週看資料累積」整個前提是錯的：什麼都不會累積，因為什麼都沒在跑。
+
+修：`gui.py` 觀察迴圈加一個 `last_cron` 計時器，每 `IDLE_REPORT_INTERVAL`（30 分鐘）呼叫一次 `record_emergent_moment_if_due()` + `record_loneliness_arc_if_due()`。兩個都包在 try 裡，任一壞掉不影響觀察迴圈。`last_cron` 從 `0.0` 起跳，daemon 起來第一個 tick 就會 fire 一次（不用等 30 分鐘看到資料）。
+
+兩個函式內部都有 rate cap（24h emergent / 30 天 loneliness），所以高頻呼叫沒成本。
+
+效果：v0.7.8 重啟後幾秒內 `~/.hermes/emergent_self_mark_log.jsonl` 應該會出現第一筆 consultation 紀錄（最可能 outcome 是 `refuse`——平凡的一天就誠實拒絕，這是設計意圖）。從那筆開始，(b) 前置條件 1 的計數器才**真的**開始長。
+
+99/99 既有測試全綠。
+
+### Architecture note — daemon thread 跟 GUI thread 平行的觀察迴圈是技術債
+
+這是這禮拜第二次踩到同一個雷（第一次是 PR #99 修了 daemon 端 cron 但 GUI 端沒同步、advisor push spam 也是 GUI 端獨有）。長期該把兩個迴圈合一，但這個 PR 只先補功能，重構排後面。
+
+---
+
 ## [0.7.7] — 2026-05-01
 
 ### Removed — 移除三條 push 推送通道（manifesto 紅線 + ADR 共同沉積機制 4 連續違反）
