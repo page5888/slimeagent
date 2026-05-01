@@ -240,8 +240,11 @@ _VOICE_DRIFT_BANNED = [
     "個人化催化劑", "回饋循環", "用戶體驗", "智能推薦", "貼心提醒",
     # Sycophant tail
     "你是不是準備要讓你的專案", "這種魔法",
-    # Brain-reading flex
-    "蒐集你的", "預判你的下一步", "我懂你的思考", "你腦中的", "我就是你",
+    # Brain-reading flex. Note: don't add a bare "我就是你" here
+    # — false-positive risk on innocent uses ("我就是你說的那個...").
+    # "你腦中的" already catches the canonical drift line
+    # 「我就是你腦中的 debug 工具」.
+    "蒐集你的", "預判你的下一步", "我懂你的思考", "你腦中的",
 ]
 
 
