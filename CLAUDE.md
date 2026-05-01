@@ -4,11 +4,19 @@
 
 **先讀 [`CONTEXT.md`](CONTEXT.md)**——這個專案的詞彙不一樣，沒讀完就動工會講錯話、用錯術語、誤解 ADR。
 
-權威來源：[`docs/manifesto.md`](docs/manifesto.md) + [`docs/decisions/`](docs/decisions/) 的 4 份 ADR：
+權威來源：[`docs/manifesto.md`](docs/manifesto.md) + [`docs/decisions/`](docs/decisions/) 的 8 份 ADR：
+
+哲學基礎（前 4 份）：
 - `2026-04-29-emergent-milestones.md` — 給方向不給劇本
 - `2026-04-29-slime-voice-anchors.md` — 三個調性錨點
 - `2026-04-30-impulse-mechanism-framing.md` — (b) 衝動機制護欄 + 5 題試紙
 - `2026-04-30-co-sediment-architecture.md` — 共同沉積、A vs B 路線、兩個面架構
+
+具體紅線（後 4 份，定義 Slime 不能做的事）：
+- `2026-04-30-slime-stays-private.md` — Slime 不向外（砍公頻 / 裝備 / 市場）
+- `2026-04-30-title-system.md` — 稱號系統取代 7 階段進化（v0.8 工程）
+- `2026-04-30-business-model.md` — 永遠免費，5888 備份是保險不是門票
+- `2026-04-30-no-individual-engagement.md` — 個體層級禁用 engagement metric
 
 ---
 
