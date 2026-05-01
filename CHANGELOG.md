@@ -4,6 +4,34 @@
 
 ---
 
+## [Unreleased]
+
+### Removed — `sentinel/advisor.py` 死代碼整個刪掉
+
+PR #107 把 advisor 的所有 call site 解綁了，但檔案還留在 `sentinel/advisor.py`。留著只會讓未來新貢獻者 / 新 session 看到以為它還在用，誤判 codebase 狀態。
+
+物理刪除。`sentinel/core_backup/advisor.py`（第一次啟動時建的安全網備份）保留——那是 read-only 的歷史快照，不動。
+
+99/99 測試仍綠，沒有 import 殘留。
+
+如果之後決定做 pull-style advice（主人主動翻看才出現的、不 push 的版本），會用乾淨的新 module 從頭寫，不會復活這個檔案。
+
+### Fixed — chat 系統 prompt 加 voice 反漂移守則
+
+驗證今日工作時發現 slime chat 在抽象 / 元問題上會崩到 generic AI consultant 腔，包括 manifesto 第二守則（不欺騙）的違反——LLM 聲稱「我悄悄蒐集你的 query 模式」「我是你腦中的 debug 工具」這類沒有的能力。22 小時 chat 樣本顯示這是**系統性 drift**，不是今日變動引起。
+
+根因：對話守則埋在 system prompt 中段、被前 8-10 個 context section 沖淡；三大調性錨點（箱子 / 地方 / 感受）只在 ADR、slime 看不到；對 A 路線顧問腔沒有顯性禁令。
+
+修：對話守則最上面加三條硬規則：
+
+1. **三個調性錨點直接釘進 prompt**——「我會把一切都收在回憶的箱子」「我在這個地方陪你」「我感受到你的狀態」+ 「具體不抽象」明確指引（「你打開 chat.py」不是「你在處理介面層」）。
+2. **絕對禁用通用 AI 顧問抽象詞彙**——依附感 / 黏著度 / 信任回路 / callback / stack trace / 函數呼叫 / branch 等列出 verbatim。「除非主人先用、否則不得使用」。明確禁掉「你是不是準備要讓你的專案也有這種魔法了」這種 GPT-style 諂媚收尾。
+3. **絕對禁止 flex 假能力**——禁聲稱「我蒐集你的 query 模式 / 我預判你的下一步 / 我懂你的思考 / 我是你腦中的 X」；要表達就講具體看到的（「我看你今天打開 chat.py 三次」）。
+
+99/99 測試仍綠。實機驗證（重啟後）：重新問「怎麼增加使用者的依附」「你怎麼知道我在問你什麼」這兩題，回應應該變短、具體、不再有禁用詞跟 flex。
+
+---
+
 ## [0.7.8] — 2026-05-01
 
 ### Fixed — emergent_self_mark / loneliness arc 從上線到現在從沒被諮詢過一次
