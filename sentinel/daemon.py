@@ -213,26 +213,16 @@ def monitor_loop(bot_send_fn):
                 if message is not None:
                     bot_send_fn(message)
                 # else: stay silent. No heartbeat-only Telegram messages.
-                # I. Narrative arc: check for loneliness on every idle tick
-                # (rate-limited internally — at most one loneliness moment per
-                # 30 days regardless of how often we call this).
-                try:
-                    from sentinel import identity
-                    identity.record_loneliness_arc_if_due()
-                except Exception as e:
-                    log.warning(f"loneliness arc check error: {e}")
 
-                # ADR 2026-04-29 (a)+(c): let the slime itself decide whether
-                # today is worth marking on its timeline. Internal caps
-                # ensure ≤1 LLM consultation per 24h and ≤1 actual mark
-                # per 7 days, so the idle cycle's higher tick rate is fine.
-                try:
-                    from sentinel.emergent_self_mark import (
-                        record_emergent_moment_if_due,
-                    )
-                    record_emergent_moment_if_due()
-                except Exception as e:
-                    log.warning(f"emergent self-mark check error: {e}")
+                # Periodic checks ride on this idle cycle. Both
+                # emergent_self_mark and loneliness arc have their
+                # own internal rate caps (24h / 30d) so the idle
+                # tick rate just gives them opportunities. Logic
+                # is shared with gui.py's observation loop via
+                # sentinel/cron.py — one function, two callers,
+                # no parallel-loop drift possible.
+                from sentinel import cron
+                cron.tick()
 
             time.sleep(2)
 

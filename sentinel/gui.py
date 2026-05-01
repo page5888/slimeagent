@@ -9525,30 +9525,17 @@ class MainWindow(QMainWindow):
                     # 積機制 4 跟 manifesto 紅線。如果之後想做主人 pull-style
                     # 的「現在 slime 看到了什麼」，那是 home tab 的事。
 
-                    # 內部 cron tick：emergent_self_mark + loneliness arc。
-                    # 這兩個檢查原本只 wire 在 daemon.monitor_loop（透過
-                    # `python -m sentinel --no-gui` 才會跑），但 start.bat
-                    # 雙擊走的是 GUI 路徑，daemon thread 從沒被 spawn——
-                    # 意思是 emergent_self_mark 從上線到現在從沒被諮詢
-                    # 過一次（驗證：state 是 {}、log 不存在、moments 0 筆）。
-                    # 把同樣的呼叫補進 GUI 觀察迴圈讓它真的會跑。內部都有
-                    # 自己的 rate cap（24h emergent / 30d loneliness），
-                    # 所以 30 分鐘的 tick 只是給機會，不會炸 LLM 配額。
-                    # 兩個都用 try 包，任一壞掉不會把觀察迴圈拖下來。
+                    # Periodic cron checks (emergent_self_mark + loneliness
+                    # arc). Logic is shared with daemon.monitor_loop via
+                    # sentinel/cron.py — one function, two callers, no
+                    # parallel-loop drift possible. We keep the timer
+                    # (last_cron) here because GUI's surrounding work is
+                    # different from daemon's idle cycle (which also
+                    # composes a Telegram idle_report on its tick).
                     if now - last_cron >= config.IDLE_REPORT_INTERVAL:
                         last_cron = now
-                        try:
-                            from sentinel.emergent_self_mark import (
-                                record_emergent_moment_if_due,
-                            )
-                            record_emergent_moment_if_due()
-                        except Exception as _esm_err:
-                            log.warning(f"emergent self-mark check error: {_esm_err}")
-                        try:
-                            from sentinel import identity as _identity
-                            _identity.record_loneliness_arc_if_due()
-                        except Exception as _lon_err:
-                            log.warning(f"loneliness arc check error: {_lon_err}")
+                        from sentinel import cron
+                        cron.tick()
 
                 time.sleep(2)
                 _consecutive_errors = 0  # 本次迴圈正常完成
