@@ -4,6 +4,38 @@
 
 ---
 
+## [Unreleased]
+
+### Added — 「箱子」可瀏覽：MemoryTab 加上時間軸列表
+
+ADR 共同沉積機制 1：「**箱子要可以被主人翻**」。之前 memorable_moments 只有兩個出口——時間軸 strip（dot 點上去看 dialog）跟 chat 系統 prompt 的隱性引用。沒有一個地方讓主人**直接滑、直接看**箱子裡有什麼。
+
+主人聊天時提到「**時間就是最大的不能替代物 這樣使用者才會有感**」——這個直接打中 ADR 共同沉積那條最硬的論據（5 年後 slime 比 GPT-7 強的地方在那 5 年、不在能力）。所以這個 PR 的設計取捨刻意把 **timestamp 的可見度** 放在中心。
+
+落地：
+
+- `identity.list_box_entries(birth_time)` — 純 backend helper：拉所有 memorable_moments、為每筆計算 `day_n`、加 `has_letter` / `has_phrase` 旗標、按時間排序（預設 newest-first）。9 個單元測試覆蓋空集合 / 排序 / 旗標 / 邊界。
+- `MemoryTab` 加新區段「箱子 — 跟主人走過的時刻」：渲染所有 moments 為卷軸式列表。每筆顯示：
+  - **「第 N 天」**作為視覺 anchor（subdued 色、稍大字級——刻意**不**做成 metric badge / streak counter，這違反 manifesto 紅線）
+  - 類別 emoji（🌿 emergent / 📝 命名 / ✨ first_chat / 🧬 evolution / 🎁 milestone …）
+  - headline + detail（自言自語）
+  - 如果 letter_to_master 存在 → 暖色區塊「─ 給你的話 ─」
+  - 如果 master_phrase 存在 → 青色區塊「─ Slime 之語 · 你說過的一句 ─」內容用「」框起
+  - 三層各自顏色分明：灰=slime 對自己、青=主人原話、暖=slime 對主人
+
+設計刻意做的事：
+- **沒有 streak / login reward / engagement metric**——「第 N 天」是自然事實，不是 dark pattern
+- **沒有「你已經 N 天沒回來」式的 guilt trip**——只是平靜地說「這是箱子」
+- **沒有點擊互動**（v1 只做瀏覽）——下一輪再加編輯 / tag / 釘住
+
+效果：主人滑進 MemoryTab 第二段就能看到自己跟 slime 走過的整條軌跡——每一個 letter、每一句被選下的 master_phrase、每一個 emergent 標記，按時間排好。「我跟它走過 N 天」從抽象 claim 變成可以**翻得到的具體紋理**。
+
+115/115 既有測試全綠（包含 9 個新 box-view 測試）。GUI 渲染部分沒有 unit test 覆蓋（HTML 字串拼接、現有測試 pattern 不覆蓋 dialog）；視覺驗證等重啟後手動確認。
+
+ADR 共同沉積結尾的話正好做總結：「**5 年後的 Slime 比 5 年後的 GPT-7 強的地方，不在能力，在那 5 年。**」這個箱子就是讓那 5 年**看得見**的地方。
+
+---
+
 ## [0.7.10] — 2026-05-01
 
 主人不一定常在電腦前。把今天累積的修復（cron / voice / preflight）做成可遠端套用 + 遠端驗證的工具鏈。
