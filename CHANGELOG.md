@@ -4,6 +4,25 @@
 
 ---
 
+## [Unreleased]
+
+### Added — Telegram `/restart` 跟 `/preflight` 遠端指令
+
+主人不一定常在電腦前。今天連發的修復（PR #108 cron / PR #110 voice / PR #112 preflight 等）都需要重啟 daemon 才能套用——但如果主人在外面，本來只能「等回家」。
+
+兩個新的 Telegram 指令補完遠端工具鏈：
+
+- **`/restart`** — 從 Telegram 觸發 daemon 重啟。實作上是 spawn 一個 detached `cmd.exe → start.bat`，start.bat 自己會把現有 sentinel kill 掉再啟新版（這是 .bat 本來就有的反雙實例邏輯）。新版啟動後會自己發開機訊息。
+- **`/preflight`** — 跑 `scripts/preflight.py` 把 7 個 health check 的結果回傳到 Telegram。輸出做過 Telegram 4096-char cap 處理（drift 訊息過長會截斷），保留 PASS/WARN/FAIL 標記跟最後的 verdict。
+
+組合用法：在外面看到 push notification 異常 → `/preflight` 確認狀態 → `/restart` → 等啟動訊息 → `/preflight` 確認綠燈。完整的「不用回電腦前也能 ship + verify」迴圈。
+
+**Bootstrap caveat**：兩個指令都只在這個版本之後才存在。第一次套用要在電腦前手動重啟（雙擊 start.bat），之後 `/restart` 才會在跑。
+
+安全：`chat_id` 過濾跟其他指令一樣，只接受 `TELEGRAM_CHAT_ID` 設定的對話。同樣 threat model（誰拿到 bot token + chat id 就能控制）。
+
+---
+
 ## [0.7.9] — 2026-05-01
 
 驗證導向的 hardening 版本。今天連發 0.7.7 / 0.7.8 之後做 chat 實機驗證，發現 voice 在抽象 / 元問題上會崩到 generic AI consultant 腔——包括 manifesto 第二守則（不欺騙）的違反。修了 chat prompt、刪了死代碼、做了健康檢查工具、寫了 regression test 鎖住規則。所有改動都 backed by 實際資料訊號，不是憑感覺。

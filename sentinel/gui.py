@@ -8745,12 +8745,126 @@ class MainWindow(QMainWindow):
                 else:
                     await update.message.reply_text("尚未自創任何技能。觀察量足夠後會自動產生。")
 
+            async def cmd_restart(update: Update, context):
+                """Remote restart — re-launches via start.bat from a new
+                detached process. start.bat's powershell kill step will
+                terminate THIS process; that's by design (kill-then-start
+                is how the .bat avoids dual-instance Telegram conflicts).
+
+                Bootstrap caveat: this command only exists from v0.7.10+.
+                The first restart that activates it has to be done at
+                the computer. After that, /restart is available remotely.
+                """
+                if update.message.chat_id != config.TELEGRAM_CHAT_ID:
+                    return
+                from pathlib import Path
+                import subprocess
+                import sys
+
+                # gui.py is at <repo>/sentinel/gui.py — go up two for repo root.
+                repo_root = Path(__file__).resolve().parent.parent
+                bat = repo_root / "start.bat"
+                if not bat.exists():
+                    await update.message.reply_text(
+                        f"❌ 找不到 {bat}\n"
+                        "/restart 需要 start.bat 在 repo 根目錄。"
+                    )
+                    return
+                if sys.platform != "win32":
+                    await update.message.reply_text(
+                        "⚠️ /restart 目前只支援 Windows（slimeagent 本來就是 Windows-only）"
+                    )
+                    return
+
+                await update.message.reply_text(
+                    "🔄 *正在重啟*\n"
+                    "1. git pull origin main\n"
+                    "2. kill 舊 sentinel\n"
+                    "3. 重新啟動\n\n"
+                    "新版會自己傳送啟動訊息。如果 30 秒內沒收到，回到電腦前看 cmd 視窗。",
+                    parse_mode="Markdown",
+                )
+
+                # Spawn detached cmd.exe → start.bat. The CREATE_NEW_CONSOLE
+                # + DETACHED_PROCESS combo makes the new process survive
+                # this one's death (which start.bat's kill step will cause
+                # in a few seconds — that's expected).
+                try:
+                    subprocess.Popen(
+                        ["cmd.exe", "/c", "start", "", str(bat)],
+                        creationflags=(
+                            subprocess.DETACHED_PROCESS
+                            | subprocess.CREATE_NEW_PROCESS_GROUP
+                        ),
+                        close_fds=True,
+                        cwd=str(repo_root),
+                    )
+                except Exception as e:
+                    await update.message.reply_text(f"❌ 重啟失敗：{e}")
+
+            async def cmd_preflight(update: Update, context):
+                """Run scripts/preflight.py and send the verdict back.
+
+                Runs as subprocess to keep preflight's stdout-print model
+                intact (importing it would entangle with bot's event loop).
+                Output trimmed to the per-check summary lines + verdict —
+                Telegram messages have a 4096 char cap and the full report
+                is verbose if many drift hits.
+                """
+                if update.message.chat_id != config.TELEGRAM_CHAT_ID:
+                    return
+                from pathlib import Path
+                import subprocess
+                import sys
+
+                repo_root = Path(__file__).resolve().parent.parent
+                script = repo_root / "scripts" / "preflight.py"
+                if not script.exists():
+                    await update.message.reply_text(f"❌ 找不到 {script}")
+                    return
+
+                await update.message.reply_text("🩺 跑 preflight 中...")
+
+                try:
+                    result = subprocess.run(
+                        [sys.executable, str(script)],
+                        capture_output=True, text=True, timeout=20,
+                        cwd=str(repo_root), encoding="utf-8",
+                    )
+                    output = result.stdout or ""
+                except Exception as e:
+                    await update.message.reply_text(f"❌ preflight 跑失敗：{e}")
+                    return
+
+                # Keep only the per-check lines (start with [PASS]/[WARN]/etc.)
+                # plus the bottom verdict block. Trim long WARN messages
+                # so the 4096-char cap isn't blown by a 50-term drift list.
+                kept: list[str] = []
+                for line in output.splitlines():
+                    s = line.strip()
+                    if (s.startswith("[PASS]") or s.startswith("[WARN]")
+                            or s.startswith("[FAIL]") or s.startswith("[SKIP]")):
+                        if len(line) > 200:
+                            line = line[:200] + " …(截斷)"
+                        kept.append(line)
+                    elif s.startswith("→") or "PASS ·" in s:
+                        kept.append(line)
+
+                if not kept:
+                    # Something weird — send raw output capped.
+                    msg = output[:3500] + "\n…" if len(output) > 3500 else output
+                else:
+                    msg = "```\n" + "\n".join(kept) + "\n```"
+                await update.message.reply_text(msg, parse_mode="Markdown")
+
             try:
                 app = ApplicationBuilder().token(config.TELEGRAM_BOT_TOKEN).build()
                 app.add_handler(CommandHandler("status", cmd_status))
                 app.add_handler(CommandHandler("evolution", cmd_evolution))
                 app.add_handler(CommandHandler("rollback", cmd_rollback))
                 app.add_handler(CommandHandler("skills", cmd_skills))
+                app.add_handler(CommandHandler("restart", cmd_restart))
+                app.add_handler(CommandHandler("preflight", cmd_preflight))
                 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
                 app.run_polling(drop_pending_updates=True)
             except Exception as e:
