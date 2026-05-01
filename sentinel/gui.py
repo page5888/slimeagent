@@ -8233,21 +8233,36 @@ class MainWindow(QMainWindow):
         # so the existing change-handlers safely no-op.
         self.tabs.addTab(self.home_tab, t("tab_home"))
         self.tabs.addTab(self.evolution_tab, t("tab_evolution"))
-        # self.tabs.addTab(self.equipment_tab, t("tab_equipment"))   # frozen v0.7
+        # equipment / federation / market — staying frozen this PR;
+        # archived in next PR per ADR 2026-04-30-slime-stays-private.md.
+        # The corresponding self.X_tab = ...Tab() instantiations above
+        # are still alive so signal connections / handlers don't break;
+        # they'll go in the same archive PR.
+        # self.tabs.addTab(self.equipment_tab, t("tab_equipment"))   # frozen v0.7, archive next PR
         self.tabs.addTab(self.chat_tab, t("tab_chat"))
-        # self.tabs.addTab(self.memory_tab, t("tab_memory"))         # frozen v0.7
+        # MemoryTab unfrozen — PR #119 added the 「箱子」 browse view
+        # (every memorable_moment with day_n prominent). No point in
+        # building 「箱子要可以被主人翻」 if the tab carrying it isn't
+        # in addTab.
+        self.tabs.addTab(self.memory_tab, t("tab_memory"))
         # self._federation_tab_index = self.tabs.addTab(
-        #     self.federation_tab, t("tab_federation")                # frozen v0.7
+        #     self.federation_tab, t("tab_federation")                # frozen v0.7, archive next PR
         # )
         self._federation_tab_index = -1
-        # self.tabs.addTab(self.market_tab, t("tab_market"))         # frozen v0.7
+        # self.tabs.addTab(self.market_tab, t("tab_market"))         # frozen v0.7, archive next PR
         self._routines_tab_index = self.tabs.addTab(
             self.routines_tab, "📋 常規"
         )
-        # self._approval_tab_index = self.tabs.addTab(               # frozen v0.7
-        #     self.approval_tab, t("tab_approval")
-        # )
-        self._approval_tab_index = -1
+        # ApprovalTab unfrozen — PR #120 added /pending /approve /reject
+        # Telegram commands, AND the slime's own 「AI Slime 提議：新技能」
+        # push notification literally tells the master 「打開視窗到「待
+        # 同意」分頁審閱」. Hard to follow that instruction if the tab
+        # isn't there. ADR slime-stays-private archives federation /
+        # equipment / market — approval is unrelated, it's the slime's
+        # self-evolution proposal queue, that stays.
+        self._approval_tab_index = self.tabs.addTab(
+            self.approval_tab, t("tab_approval")
+        )
         self.tabs.addTab(self.settings_tab, t("tab_settings"))
 
         # 待同意頁籤：切過去時主動刷新；動作後刷新 evolution + 標籤計數
