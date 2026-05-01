@@ -8838,6 +8838,11 @@ class MainWindow(QMainWindow):
             last_distill = time.time()
             last_idle = time.time()
             last_notify: dict[str, float] = {}
+            # last_cron 給 emergent_self_mark / loneliness_arc 的固定間隔
+            # 觸發用——這兩個檢查的內部都有自己的 24h / 30 天 rate cap，
+            # 所以呼叫頻率高沒成本。從 0 起跳代表 daemon 起來的第一個 tick
+            # 就會 fire 一次（內部如果不到時間自然會跳過）。
+            last_cron = 0.0
             activity_buf = []
 
             _consecutive_errors = 0
@@ -9139,6 +9144,31 @@ class MainWindow(QMainWindow):
                     # 端有平行的 push 路徑也在做同一件事。違反 ADR 共同沉
                     # 積機制 4 跟 manifesto 紅線。如果之後想做主人 pull-style
                     # 的「現在 slime 看到了什麼」，那是 home tab 的事。
+
+                    # 內部 cron tick：emergent_self_mark + loneliness arc。
+                    # 這兩個檢查原本只 wire 在 daemon.monitor_loop（透過
+                    # `python -m sentinel --no-gui` 才會跑），但 start.bat
+                    # 雙擊走的是 GUI 路徑，daemon thread 從沒被 spawn——
+                    # 意思是 emergent_self_mark 從上線到現在從沒被諮詢
+                    # 過一次（驗證：state 是 {}、log 不存在、moments 0 筆）。
+                    # 把同樣的呼叫補進 GUI 觀察迴圈讓它真的會跑。內部都有
+                    # 自己的 rate cap（24h emergent / 30d loneliness），
+                    # 所以 30 分鐘的 tick 只是給機會，不會炸 LLM 配額。
+                    # 兩個都用 try 包，任一壞掉不會把觀察迴圈拖下來。
+                    if now - last_cron >= config.IDLE_REPORT_INTERVAL:
+                        last_cron = now
+                        try:
+                            from sentinel.emergent_self_mark import (
+                                record_emergent_moment_if_due,
+                            )
+                            record_emergent_moment_if_due()
+                        except Exception as _esm_err:
+                            log.warning(f"emergent self-mark check error: {_esm_err}")
+                        try:
+                            from sentinel import identity as _identity
+                            _identity.record_loneliness_arc_if_due()
+                        except Exception as _lon_err:
+                            log.warning(f"loneliness arc check error: {_lon_err}")
 
                 time.sleep(2)
                 _consecutive_errors = 0  # 本次迴圈正常完成
