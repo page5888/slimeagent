@@ -3911,703 +3911,15 @@ class MemoryTab(QWidget):
         self.speech_group.setTitle(t("memory_speech_style"))
 
 
-# ─── Federation Tab (公頻 / Slime-to-Slime Knowledge Pool) ──────────────
-# Layer 3 of the federation design (sentinel/growth/federation.py):
-# other slimes' abstracted observations arrive here as "patterns", and
-# this tab lets the user vote whether the statement also fits them.
-# Submission (layer 2) shipped in Phase A1.
-
-
-class MyContributionsDialog(QDialog):
-    """Shows the user's own submitted patterns with current vote counts
-    and promotion status. Phase A3 — gives users visible feedback on
-    sharing so the loop doesn't feel one-way."""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle(t("fed_my_contributions"))
-        self.setMinimumSize(520, 420)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(8)
-
-        # Header + summary line (filled in _load after the fetch)
-        title = QLabel(f"<b style='color:#ffd166;'>{t('fed_my_contributions')}</b>")
-        title.setStyleSheet("font-size: 14px;")
-        layout.addWidget(title)
-
-        self.summary_lbl = QLabel(t("fed_loading"))
-        self.summary_lbl.setStyleSheet("color:#888; font-size: 11px;")
-        layout.addWidget(self.summary_lbl)
-
-        # Scrollable list of contribution cards
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        container = QWidget()
-        self.list_layout = QVBoxLayout(container)
-        self.list_layout.setContentsMargins(0, 0, 0, 0)
-        self.list_layout.setSpacing(6)
-        self.list_layout.addStretch()
-        scroll.setWidget(container)
-        layout.addWidget(scroll, 1)
-
-        close_btn = QPushButton(t("fed_my_close"))
-        close_btn.clicked.connect(self.accept)
-        close_btn.setStyleSheet(
-            "QPushButton { background:#333; color:#fff;"
-            " padding:6px 16px; border-radius:4px; border:none; }"
-            "QPushButton:hover { background:#444; }"
-        )
-        btn_row = QHBoxLayout()
-        btn_row.addStretch()
-        btn_row.addWidget(close_btn)
-        layout.addLayout(btn_row)
-
-        self._load()
-
-    def _load(self):
-        """Fetch my-patterns from relay and render cards."""
-        try:
-            from sentinel import relay_client
-            from sentinel.relay_client import RelayError
-        except Exception as e:
-            self.summary_lbl.setText(str(e))
-            return
-
-        try:
-            resp = relay_client.list_my_patterns(limit=50)
-        except Exception as e:
-            from sentinel.relay_client import RelayError
-            if isinstance(e, RelayError) and str(e.code) in ("401", "422"):
-                self.summary_lbl.setText(t("fed_login_required"))
-            else:
-                self.summary_lbl.setText(
-                    t("fed_network_err").format(err=str(e))
-                )
-            return
-
-        items = resp.get("items", []) or []
-
-        if not items:
-            self.summary_lbl.setText(t("fed_my_empty"))
-            return
-
-        # Summary: N submitted / M promoted
-        n_total = len(items)
-        n_community = sum(1 for r in items if r.get("status") == "community")
-        self.summary_lbl.setText(
-            t("fed_my_summary").format(total=n_total, community=n_community)
-        )
-
-        for item in items:
-            card = self._build_card(item)
-            self.list_layout.insertWidget(self.list_layout.count() - 1, card)
-
-    def _build_card(self, item: dict) -> QWidget:
-        status = item.get("status") or "pending"
-        # Status → color + label. Kept in one place so the scheme is
-        # consistent and easy to tweak.
-        status_style = {
-            "community": ("#00dcff", t("fed_my_status_community")),
-            "pending":   ("#888",    t("fed_my_status_pending")),
-            "rejected":  ("#e76f51", t("fed_my_status_rejected")),
-        }.get(status, ("#888", status))
-        color, status_label = status_style
-
-        card = QFrame()
-        card.setStyleSheet(
-            "QFrame { background: rgba(255,255,255,0.03); "
-            f"border-left: 3px solid {color}; "
-            "border-radius: 4px; padding: 8px; }"
-        )
-        v = QVBoxLayout(card)
-        v.setContentsMargins(10, 8, 10, 8)
-        v.setSpacing(4)
-
-        stmt = QLabel(item.get("statement", ""))
-        stmt.setWordWrap(True)
-        stmt.setStyleSheet("color:#e6e6e6; font-size: 12px;")
-        v.addWidget(stmt)
-
-        category_zh = t(f"fed_cat_{item.get('category','')}") or item.get("category", "")
-        meta_line = t("fed_my_meta").format(
-            category=category_zh,
-            status=status_label,
-            confirm=item.get("votes_confirm", 0),
-            refute=item.get("votes_refute", 0),
-            unclear=item.get("votes_unclear", 0),
-        )
-        meta = QLabel(meta_line)
-        meta.setStyleSheet(f"color:{color}; font-size: 10px;")
-        v.addWidget(meta)
-
-        return card
-
-
-class FederationTab(QWidget):
-    """Voting UI for community patterns."""
-
-    def __init__(self):
-        super().__init__()
-        from sentinel.ui import tokens as _tk
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(
-            _tk.SPACE["xl"], _tk.SPACE["lg"],
-            _tk.SPACE["xl"], _tk.SPACE["lg"],
-        )
-        layout.setSpacing(_tk.SPACE["md"])
-
-        # ── Page title ────────────────────────────────────────────────
-        # Single line. The tab name "公頻" already labels this tab, so
-        # we don't need a second "史萊姆之間的共同觀察" heading + a
-        # separate description paragraph — that doubled the chrome at
-        # the top of the screen.
-        _cyan = _tk.PALETTE['cyan']
-        _muted = _tk.PALETTE['text_muted']
-        _meta_size = _tk.FONT_SIZE['meta']
-        self.header_lbl = QLabel(
-            f"<span style='color:{_cyan}; font-weight:600;'>"
-            f"{t('fed_header')}</span>"
-            f"  <span style='color:{_muted};"
-            f" font-weight:400; font-size:{_meta_size}px;'>"
-            f"{t('fed_subtitle')}</span>"
-        )
-        self.header_lbl.setStyleSheet(
-            f"font-size:{_tk.FONT_SIZE['title']}px; padding-bottom: 2px;"
-        )
-        layout.addWidget(self.header_lbl)
-
-        # ── Pending section (your slime's proposals) ─────────────────
-        # Hidden entirely when queue is empty & session_count > 0 — see
-        # _rebuild_pending. Takes 0 visual weight when not in use.
-        self.pending_header = QLabel("")  # text set in _rebuild_pending
-        self.pending_header.setStyleSheet(_tk.text_section())
-        self.pending_header.setVisible(False)
-        layout.addWidget(self.pending_header)
-
-        self.pending_container = QWidget()
-        self.pending_container.setSizePolicy(
-            QSizePolicy.Expanding, QSizePolicy.Maximum
-        )
-        self.pending_container.setMaximumHeight(220)
-        self.pending_layout = QVBoxLayout(self.pending_container)
-        self.pending_layout.setContentsMargins(0, 0, 0, 0)
-        self.pending_layout.setSpacing(10)
-        self.pending_container.setVisible(False)
-        layout.addWidget(self.pending_container)
-
-        # ── Thin divider between "your slime" and "others" ─────────
-        self.divider = QFrame()
-        self.divider.setFrameShape(QFrame.HLine)
-        self.divider.setStyleSheet(
-            f"color:{_tk.PALETTE['border_subtle']};"
-            f" background:{_tk.PALETTE['border_subtle']};"
-        )
-        self.divider.setFixedHeight(1)
-        self.divider.setVisible(False)   # only shown when pending visible
-        layout.addWidget(self.divider)
-
-        # ── Community section ────────────────────────────────────────
-        # Community header is a "system / federation" theme so it uses
-        # cyan (text_section is amber for own-slime; for the federation
-        # we override to cyan via inline call to text_title).
-        self.community_header = QLabel(t("fed_community_header"))
-        self.community_header.setStyleSheet(
-            f"color:{_tk.PALETTE['cyan']};"
-            f" font-size:{_tk.FONT_SIZE['section']}px;"
-            f" font-weight:600;"
-            f" letter-spacing:0.3px;"
-        )
-        layout.addWidget(self.community_header)
-
-        self.status_lbl = QLabel(t("fed_loading"))
-        self.status_lbl.setStyleSheet(_tk.text_meta() + " padding:4px 0;")
-        layout.addWidget(self.status_lbl)
-
-        self.scroll = QScrollArea()
-        self.scroll.setWidgetResizable(True)
-        self.scroll.setFrameShape(QFrame.NoFrame)
-        self.list_container = QWidget()
-        self.list_layout = QVBoxLayout(self.list_container)
-        self.list_layout.setContentsMargins(0, 0, 0, 0)
-        self.list_layout.setSpacing(10)
-        self.list_layout.addStretch()
-        self.scroll.setWidget(self.list_container)
-        layout.addWidget(self.scroll, 1)
-
-        # ── Action row ───────────────────────────────────────────────
-        # my_btn: secondary (ghost). refresh_btn: primary (filled cyan).
-        # Both shorter & less visually loud than before. Matches the
-        # "cards have no chrome" theme above.
-        self.my_btn = QPushButton(t("fed_my_contributions"))
-        self.my_btn.setCursor(Qt.PointingHandCursor)
-        self.my_btn.clicked.connect(self._open_my_contributions)
-        self.my_btn.setStyleSheet(
-            "QPushButton { background:transparent; color:#ccc;"
-            " padding:6px 14px; border:1px solid #3a3a3a; border-radius:14px;"
-            " font-size:11px; }"
-            "QPushButton:hover { color:#ffd166; border-color:#ffd166; }"
-        )
-        self.refresh_btn = QPushButton(t("fed_refresh"))
-        self.refresh_btn.setCursor(Qt.PointingHandCursor)
-        self.refresh_btn.clicked.connect(self.refresh)
-        self.refresh_btn.setStyleSheet(
-            "QPushButton { background:#00a8c9; color:#fff; font-weight:500;"
-            " padding:6px 16px; border-radius:14px; border:none;"
-            " font-size:11px; }"
-            "QPushButton:hover { background:#00c0e3; }"
-        )
-        btn_row = QHBoxLayout()
-        btn_row.setContentsMargins(0, 4, 0, 0)
-        btn_row.addWidget(self.my_btn)
-        btn_row.addStretch()
-        btn_row.addWidget(self.refresh_btn)
-        layout.addLayout(btn_row)
-
-        self._patterns: list[dict] = []
-        self.refresh()
-
-    # ── Data ──────────────────────────────────────────────────────────
-    def refresh(self):
-        """Fetch patterns from the relay and rebuild the card list.
-
-        Runs synchronously — the list is small (≤20 items) and the
-        endpoint returns fast. A background thread would be nice but
-        isn't worth the complexity at this scale.
-        """
-        # Refresh the "pending to share" section first. It's local-only
-        # (no network), so even if the relay is down the user can still
-        # see + approve candidates the slime prepared earlier.
-        self._rebuild_pending()
-
-        self.status_lbl.setText(t("fed_loading"))
-        self.status_lbl.setVisible(True)
-        # Clear old cards but keep the trailing stretch
-        while self.list_layout.count() > 1:
-            item = self.list_layout.takeAt(0)
-            w = item.widget()
-            if w:
-                w.deleteLater()
-
-        try:
-            from sentinel import relay_client
-            resp = relay_client.list_patterns(limit=20)
-        except Exception as e:
-            # Distinguish "not logged in" from genuine network failure so
-            # users don't see "連線錯誤 422" and think the server's broken.
-            # See issue #5 — relay now returns 401 for missing auth header,
-            # but pre-fix builds may still see 422, so handle both.
-            from sentinel.relay_client import RelayError
-            if isinstance(e, RelayError) and str(e.code) in ("401", "422"):
-                self.status_lbl.setText(t("fed_login_required"))
-            else:
-                self.status_lbl.setText(
-                    t("fed_network_err").format(err=str(e))
-                )
-            self._patterns = []
-            return
-
-        self._patterns = resp.get("items", []) or []
-
-        if not self._patterns:
-            self.status_lbl.setText(t("fed_empty"))
-            return
-
-        self.status_lbl.setVisible(False)
-        for pat in self._patterns:
-            card = self._build_card(pat)
-            self.list_layout.insertWidget(self.list_layout.count() - 1, card)
-
-    def _build_card(self, pat: dict) -> QWidget:
-        """Render a single community pattern as a card with vote buttons.
-
-        Design: no filled background, just a 3px left accent bar and
-        padding. Accent color reflects status — cyan for community-
-        promoted, subtle grey-cyan for still-pending. Much lighter
-        visual weight than the translucent-box-with-border treatment
-        it replaces, so a list of 5-10 patterns reads as a list of
-        ideas instead of a stack of colored boxes.
-        """
-        status = pat.get("status", "pending")
-        accent = "#00dcff" if status == "community" else "#3a5f6b"
-        card = QFrame()
-        card.setStyleSheet(
-            f"QFrame {{ background: transparent; "
-            f"border: none; "
-            f"border-left: 3px solid {accent}; }}"
-        )
-        v = QVBoxLayout(card)
-        v.setContentsMargins(14, 6, 6, 10)
-        v.setSpacing(6)
-
-        # Statement at the top — this is what the user reads first and
-        # decides on. Larger than the meta line, clearly the main thing.
-        stmt_lbl = QLabel(pat.get("statement", ""))
-        stmt_lbl.setWordWrap(True)
-        stmt_lbl.setStyleSheet("color:#e6e6e6; font-size: 13px;")
-        v.addWidget(stmt_lbl)
-
-        # Meta line: category · status · vote tallies. Single row of
-        # small grey text so it reads as supporting info, not chrome.
-        cat_key = f"fed_cat_{pat.get('category', '')}"
-        cat_text = t(cat_key)
-        if cat_text == cat_key:
-            cat_text = pat.get("category", "")
-        status = pat.get("status", "pending")
-        status_key = "fed_status_community" if status == "community" else "fed_status_pending"
-        status_color = "#00dcff" if status == "community" else "#888"
-        vc = pat.get("votes_confirm", 0)
-        vr = pat.get("votes_refute", 0)
-        vu = pat.get("votes_unclear", 0)
-        meta_lbl = QLabel(
-            f"<span style='color:#888;'>{cat_text}</span>"
-            f"  ·  <span style='color:{status_color};'>{t(status_key)}</span>"
-            f"  ·  <span style='color:#5ab572;'>✓ {vc}</span>"
-            f"  <span style='color:#cc6b63;'>✗ {vr}</span>"
-            f"  <span style='color:#666;'>? {vu}</span>"
-        )
-        meta_lbl.setStyleSheet("font-size: 10px;")
-        v.addWidget(meta_lbl)
-
-        # Vote row. When user has already voted, show a subtle status
-        # line instead of disabled buttons — fewer visual elements,
-        # same information.
-        btn_row = QHBoxLayout()
-        btn_row.setContentsMargins(0, 2, 0, 0)
-        btn_row.setSpacing(6)
-        user_voted = pat.get("user_voted")
-
-        if user_voted:
-            voted_key = f"fed_voted_{user_voted}"
-            voted_lbl = QLabel(f"<span style='color:#666;'>{t(voted_key)}</span>")
-            voted_lbl.setStyleSheet("font-size: 10px;")
-            btn_row.addWidget(voted_lbl)
-            btn_row.addStretch()
-        else:
-            pattern_id = pat["id"]
-            btn_row.addStretch()
-            for vote_type, label_key, fg in [
-                ("confirm", "fed_btn_confirm", "#5ab572"),
-                ("refute",  "fed_btn_refute",  "#cc6b63"),
-                ("unclear", "fed_btn_unclear", "#888"),
-            ]:
-                btn = QPushButton(t(label_key))
-                btn.setCursor(Qt.PointingHandCursor)
-                btn.setStyleSheet(
-                    f"QPushButton {{ background:transparent; color:{fg}; "
-                    f"padding:3px 10px; border:1px solid {fg}; "
-                    f"border-radius:10px; font-size: 10px; }}"
-                    f"QPushButton:hover {{ background:rgba(255,255,255,0.05); }}"
-                )
-                btn.clicked.connect(
-                    lambda _checked, pid=pattern_id, v=vote_type: self._on_vote(pid, v)
-                )
-                btn_row.addWidget(btn)
-
-        v.addLayout(btn_row)
-        return card
-
-    def _on_vote(self, pattern_id: str, vote: str):
-        """Handle a vote click. Refreshes the list after success."""
-        from sentinel import relay_client
-        from sentinel.relay_client import RelayError
-        try:
-            resp = relay_client.vote_pattern(pattern_id, vote)
-        except Exception as e:
-            if isinstance(e, RelayError) and str(e.code) in ("401", "422"):
-                QMessageBox.warning(self, "AI Slime", t("fed_login_required"))
-            else:
-                QMessageBox.warning(self, "AI Slime",
-                                    t("fed_network_err").format(err=str(e)))
-            return
-
-        # H. Confirmed patterns feed back into chat prompt — the slime
-        # starts referencing community wisdom when relevant. We only
-        # store 'confirm' votes (patterns master validated as true) so
-        # the slime doesn't quote things master disagrees with.
-        if vote == "confirm":
-            try:
-                statement = None
-                category = None
-                for pat in getattr(self, "_patterns", []) or []:
-                    if pat.get("id") == pattern_id:
-                        statement = pat.get("statement")
-                        category = pat.get("category")
-                        break
-                if statement:
-                    from sentinel import identity
-                    identity.record_confirmed_pattern(pattern_id, statement, category)
-                    # Phase B2: also drop the statement into long-term
-                    # semantic memory so the slime can recall it in
-                    # chats ("你之前確認過『深夜工作者多半...』"). Kind
-                    # is federation_pattern so we can filter retrieval
-                    # by source if we later want different weights.
-                    try:
-                        from sentinel.memory import remember, KIND_FEDERATION
-                        remember(
-                            text=statement,
-                            kind=KIND_FEDERATION,
-                            metadata={
-                                "pattern_id": pattern_id,
-                                "category": category,
-                            },
-                        )
-                    except Exception as e:
-                        import logging
-                        logging.getLogger("sentinel.gui").warning(
-                            f"federation pattern memory persist failed: {e}"
-                        )
-            except Exception:
-                pass
-
-        if resp.get("promoted"):
-            QMessageBox.information(self, "AI Slime", t("fed_vote_promoted"))
-
-        # A2 reward: every 5th successful vote gets a drop roll. Rate
-        # is defined in DROP_CHANCES["federation_vote"] — if it misses,
-        # the user silently rolls the next one 5 votes later. Keeping
-        # the trigger frequency low on the client side (every 5) and
-        # the chance high (40%) feels more generous than rolling every
-        # vote at 8% — same expected rate, much more satisfying hits.
-        try:
-            from sentinel.growth.federation import increment_vote_counter
-            from sentinel.wallet.equipment import (
-                load_equipment, try_drop, save_equipment,
-            )
-            count = increment_vote_counter()
-            if count > 0 and count % 5 == 0:
-                eq = load_equipment()
-                drop = try_drop(eq, "federation_vote")
-                if drop:
-                    save_equipment(eq)
-                    QMessageBox.information(
-                        self, "AI Slime",
-                        t("fed_vote_drop").format(
-                            rarity=drop["rarity_zh"],
-                            name=drop["name"],
-                        ),
-                    )
-        except Exception as e:
-            # Reward hiccups should never break the vote path.
-            import logging
-            logging.getLogger("sentinel.gui").warning(
-                f"federation vote reward failed: {e}"
-            )
-
-        # Re-fetch — the card state (buttons → "已投", counts) changes
-        # based on the new data.
-        self.refresh()
-
-    # ── Pending candidates (the slime wants to share) ─────────────────
-
-    def _rebuild_pending(self):
-        """Re-render the "pending to share" section from the local queue.
-
-        Layout contract (redesigned):
-          - has candidates:       show header + 1 card per candidate
-          - no candidates, fresh: show header + inline "first distill
-                                  within ~1 hour" hint under it, no card
-          - no candidates, used:  HIDE header + container entirely so
-                                  the empty middle doesn't squeeze the
-                                  community list below
-
-        The previous design always drew a placeholder card even when
-        there was nothing to act on, which pushed community patterns
-        and the action buttons toward the bottom of the tab on every
-        visit. Not worth the visual cost for a hint that's mostly
-        relevant on day 0 only.
-        """
-        # Clear old cards
-        while self.pending_layout.count() > 0:
-            item = self.pending_layout.takeAt(0)
-            w = item.widget()
-            if w:
-                w.deleteLater()
-
-        from sentinel.growth.federation import list_pending
-        candidates = list_pending()
-
-        if candidates:
-            VISIBLE_CAP = 2
-            shown = candidates[:VISIBLE_CAP]
-            hidden_count = max(0, len(candidates) - VISIBLE_CAP)
-
-            suffix = ""
-            if hidden_count > 0:
-                suffix = (
-                    f"  <span style='color:#666; font-weight:400;'>"
-                    f"· {t('fed_pending_more').format(n=hidden_count)}</span>"
-                )
-            self.pending_header.setText(
-                f"{t('fed_pending_header')}{suffix}"
-            )
-            self.pending_header.setVisible(True)
-            self.pending_container.setVisible(True)
-            self.divider.setVisible(True)
-            for cand in shown:
-                card = self._build_pending_card(cand)
-                self.pending_layout.addWidget(card)
-            return
-
-        # Empty — decide between "onboarding hint" and "hide entirely"
-        # based on how long the slime has been running.
-        session_count = 0
-        try:
-            from sentinel.learner import load_memory
-            session_count = int(load_memory().get("session_count", 0) or 0)
-        except Exception:
-            pass
-
-        if session_count == 0:
-            # Fresh install: header with inline hint, no separate card.
-            self.pending_header.setText(
-                f"{t('fed_pending_header')}"
-                f"  <span style='color:#666; font-weight:400;'>"
-                f"· {t('fed_pending_empty_new_short')}</span>"
-            )
-            self.pending_header.setVisible(True)
-            self.pending_container.setVisible(False)
-            self.divider.setVisible(True)
-            return
-
-        # Used-before-but-nothing-queued-this-round: hide the whole
-        # section (header + divider + container) so the community list
-        # gets full vertical space. The tab-title badge counter still
-        # pings the user when real candidates arrive.
-        self.pending_header.setVisible(False)
-        self.pending_container.setVisible(False)
-        self.divider.setVisible(False)
-
-    def _build_pending_card(self, cand: dict) -> QWidget:
-        """Card for a candidate the slime wants to share.
-
-        Matches the community-card visual language: no filled
-        background, just a 3px amber left accent (amber = "yours") and
-        padding. Consistent with the cleaner community cards below so
-        the tab reads as one connected list with a color-coded stripe.
-        """
-        card = QFrame()
-        card.setStyleSheet(
-            "QFrame { background: transparent; border: none; "
-            "border-left: 3px solid #ffd166; }"
-        )
-        v = QVBoxLayout(card)
-        v.setContentsMargins(14, 6, 6, 10)
-        v.setSpacing(6)
-
-        stmt = QLabel(cand.get("statement", ""))
-        stmt.setWordWrap(True)
-        stmt.setStyleSheet("color:#e6e6e6; font-size: 13px;")
-        v.addWidget(stmt)
-
-        # Meta: category · confidence. Same density as community card
-        # meta so the two sections line up visually.
-        cat_text = t(f"fed_cat_{cand.get('category','')}") or cand.get("category", "")
-        conf_pct = int((cand.get("confidence", 0) or 0) * 100)
-        meta = QLabel(
-            f"<span style='color:#888;'>{cat_text}</span>"
-            f"  ·  <span style='color:#888;'>{t('fed_pending_confidence').format(pct=conf_pct)}</span>"
-        )
-        meta.setStyleSheet("font-size: 10px;")
-        v.addWidget(meta)
-
-        btn_row = QHBoxLayout()
-        btn_row.setContentsMargins(0, 2, 0, 0)
-        btn_row.setSpacing(6)
-        btn_row.addStretch()
-
-        skip_btn = QPushButton(t("fed_pending_skip"))
-        skip_btn.setCursor(Qt.PointingHandCursor)
-        skip_btn.setStyleSheet(
-            "QPushButton { background:transparent; color:#888;"
-            " padding:3px 12px; border:1px solid #444; border-radius:10px;"
-            " font-size:10px; }"
-            "QPushButton:hover { color:#ccc; border-color:#666; }"
-        )
-        skip_btn.clicked.connect(lambda _, cid=cand["id"]: self._on_skip_candidate(cid))
-        btn_row.addWidget(skip_btn)
-
-        share_btn = QPushButton(t("fed_pending_share"))
-        share_btn.setCursor(Qt.PointingHandCursor)
-        share_btn.setStyleSheet(
-            "QPushButton { background:#ffd166; color:#1a1a1a; font-weight:600;"
-            " padding:3px 14px; border:none; border-radius:10px;"
-            " font-size:10px; }"
-            "QPushButton:hover { background:#ffdc88; }"
-        )
-        share_btn.clicked.connect(lambda _, cid=cand["id"]: self._on_approve_candidate(cid))
-        btn_row.addWidget(share_btn)
-
-        v.addLayout(btn_row)
-        return card
-
-    def _on_approve_candidate(self, candidate_id: str):
-        from sentinel.growth.federation import (
-            approve_candidate, increment_shared_counter,
-        )
-        err = approve_candidate(candidate_id)
-        if err is None:
-            # A2 reward: successful submit rolls for an equipment drop
-            # (chance in DROP_CHANCES["federation_submit"]). Rate-limited
-            # to 3 submits per day on the server, so this is a capped
-            # reward — it won't be spammed.
-            drop_msg = ""
-            try:
-                increment_shared_counter()
-                from sentinel.wallet.equipment import (
-                    load_equipment, try_drop, save_equipment,
-                )
-                eq = load_equipment()
-                drop = try_drop(eq, "federation_submit")
-                if drop:
-                    save_equipment(eq)
-                    drop_msg = "\n\n" + t("fed_submit_drop").format(
-                        rarity=drop["rarity_zh"],
-                        name=drop["name"],
-                    )
-            except Exception as e:
-                import logging
-                logging.getLogger("sentinel.gui").warning(
-                    f"federation submit reward failed: {e}"
-                )
-            QMessageBox.information(
-                self, "AI Slime",
-                t("fed_pending_shared") + drop_msg,
-            )
-        else:
-            # Show the message from the server / local validator verbatim —
-            # it's already user-facing Chinese from federation.py's mapping.
-            QMessageBox.warning(self, "AI Slime", err.message)
-        # Refresh both sections — the candidate is gone (or kept on
-        # transient error), and the community list may have the new
-        # pattern if submission succeeded.
-        self.refresh()
-
-    def _on_skip_candidate(self, candidate_id: str):
-        from sentinel.growth.federation import skip_candidate
-        skip_candidate(candidate_id)
-        self._rebuild_pending()
-
-    # ── My contributions dialog (A3) ──────────────────────────────────
-
-    def _open_my_contributions(self):
-        """Open a dialog listing the user's submitted patterns."""
-        dlg = MyContributionsDialog(self)
-        dlg.exec()
-
-    # ── i18n ──────────────────────────────────────────────────────────
-    def retranslate(self):
-        self.header_lbl.setText(
-            f"<span style='color:#00dcff; font-weight:600;'>"
-            f"{t('fed_header')}</span>"
-            f"  <span style='color:#666; font-weight:400; font-size:11px;'>"
-            f"{t('fed_subtitle')}</span>"
-        )
-        self.community_header.setText(t("fed_community_header"))
-        self.refresh_btn.setText(t("fed_refresh"))
-        self.my_btn.setText(t("fed_my_contributions"))
-        self.refresh()
+# ─── Federation Tab REMOVED ──────────────────────────────────────────────
+# Per ADR docs/decisions/2026-04-30-slime-stays-private.md. The 公頻
+# federation system violated "Slime stays private" — Slime-to-Slime
+# knowledge pooling collides with co-sediment ADR's "two masters get
+# two completely different Slimes". MyContributionsDialog +
+# FederationTab class definitions removed here; module archived to
+# archive/sentinel-side/growth/federation.py. Server endpoints
+# already archived in PR #124. Instantiation + signal connections
+# also removed elsewhere in this file.
 
 
 # ─── Evolution Tab (子頁籤版) ────────────────────────────────────────────
@@ -8202,8 +7514,12 @@ class MainWindow(QMainWindow):
         self.home_tab = HomeTab()
         self.chat_tab = ChatTab(self.bridge)
         self.memory_tab = MemoryTab()
-        self.federation_tab = FederationTab()
         self.evolution_tab = EvolutionTab()
+        # equipment_tab / market_tab still instantiated here while their
+        # class definitions exist — full archive happens in the next
+        # equipment-cut PR. federation_tab is gone (this PR removed both
+        # the FederationTab class and the instantiation; module archived
+        # to archive/sentinel-side/growth/).
         self.equipment_tab = EquipmentTab()
         self.market_tab = MarketTab()
         self.approval_tab = ApprovalTab()
@@ -8217,39 +7533,15 @@ class MainWindow(QMainWindow):
         # 裝備變更時刷新形象
         self.equipment_tab.equipment_changed.connect(self.evolution_tab.refresh)
 
-        # ── v0.7-alpha daily-mirror lite mode ─────────────────────
-        # We froze the wider feature surface to focus 2 weeks of
-        # dogfooding on one core wedge: a daily reflection card from
-        # the slime. The hidden tabs (equipment / memory / federation
-        # / market / approval) keep working behind the scenes — their
-        # code is intact, only the UI entry point is removed. Approval
-        # traffic still surfaces inline in the chat tab via Phase D2
-        # so any LLM-proposed action can still be reviewed without
-        # the dedicated tab.
-        #
-        # To restore any of these for development, just uncomment the
-        # corresponding addTab line. Index trackers
-        # (_federation_tab_index / _approval_tab_index) are set to -1
-        # so the existing change-handlers safely no-op.
         self.tabs.addTab(self.home_tab, t("tab_home"))
         self.tabs.addTab(self.evolution_tab, t("tab_evolution"))
-        # equipment / federation / market — staying frozen this PR;
-        # archived in next PR per ADR 2026-04-30-slime-stays-private.md.
-        # The corresponding self.X_tab = ...Tab() instantiations above
-        # are still alive so signal connections / handlers don't break;
-        # they'll go in the same archive PR.
-        # self.tabs.addTab(self.equipment_tab, t("tab_equipment"))   # frozen v0.7, archive next PR
+        # equipment / market staying frozen this PR; archived in next
+        # PR per ADR 2026-04-30-slime-stays-private.md (need avatar
+        # refactor first to remove visual layer's equipment dependency).
+        # self.tabs.addTab(self.equipment_tab, t("tab_equipment"))
         self.tabs.addTab(self.chat_tab, t("tab_chat"))
-        # MemoryTab unfrozen — PR #119 added the 「箱子」 browse view
-        # (every memorable_moment with day_n prominent). No point in
-        # building 「箱子要可以被主人翻」 if the tab carrying it isn't
-        # in addTab.
         self.tabs.addTab(self.memory_tab, t("tab_memory"))
-        # self._federation_tab_index = self.tabs.addTab(
-        #     self.federation_tab, t("tab_federation")                # frozen v0.7, archive next PR
-        # )
-        self._federation_tab_index = -1
-        # self.tabs.addTab(self.market_tab, t("tab_market"))         # frozen v0.7, archive next PR
+        # self.tabs.addTab(self.market_tab, t("tab_market"))
         self._routines_tab_index = self.tabs.addTab(
             self.routines_tab, "📋 常規"
         )
@@ -8266,11 +7558,9 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.settings_tab, t("tab_settings"))
 
         # 待同意頁籤：切過去時主動刷新；動作後刷新 evolution + 標籤計數
-        # 公頻頁籤：切過去時清除「新訊息」badge
         # 常規頁籤：切過去時刷新（背景 scheduler 可能跑過 routine,
         #          fire_count 已更新但 GUI 不知道）
         self.tabs.currentChanged.connect(self._on_approval_tab_changed)
-        self.tabs.currentChanged.connect(self._on_federation_tab_changed)
         self.tabs.currentChanged.connect(self._on_routines_tab_changed)
         self.approval_tab.proposals_changed.connect(self.evolution_tab.refresh)
         self.approval_tab.proposals_changed.connect(self._refresh_approval_tab_label)
@@ -8379,7 +7669,6 @@ class MainWindow(QMainWindow):
         self.evo_timer.timeout.connect(self.equipment_tab.refresh)
         self.evo_timer.timeout.connect(self.approval_tab.refresh)
         self.evo_timer.timeout.connect(self._refresh_approval_tab_label)
-        self.evo_timer.timeout.connect(self._refresh_federation_tab_label)
         self.evo_timer.timeout.connect(self.home_tab.refresh)
         self.evo_timer.timeout.connect(self._sync_overlay_state)
         self.evo_timer.start(30000)  # 每 30 秒刷新進化、裝備、首頁
@@ -8688,32 +7977,6 @@ class MainWindow(QMainWindow):
         label = f"{base} ({n})" if n > 0 else base
         self.tabs.setTabText(idx, label)
 
-    def _on_federation_tab_changed(self, index: int):
-        """切到公頻分頁時清掉 new-pattern badge，重建「待分享」區塊。
-
-        **不會**自動打 relay API 重撈社群列表 — 那是個同步、Render 冷啟
-        下可能 30-90 秒才回來的網路呼叫，會把主執行緒整個凍住，造成
-        每切一次 tab 就卡住幾十秒。社群列表要更新時使用者按「重新感應」
-        按鈕即可。本地的待分享 pending 候選仍然會在 tab 切進來時即時
-        重建，因為那只是讀本地 JSON 檔，幾毫秒的事。
-        """
-        if getattr(self, "_federation_tab_index", None) is None:
-            return
-        if index != self._federation_tab_index:
-            return
-        try:
-            from sentinel.growth.federation import mark_viewed
-            mark_viewed()
-        except Exception:
-            pass
-        self._refresh_federation_tab_label()
-        # Cheap local rebuild only — surfaces any new pending candidates
-        # the distiller queued while the user was on another tab.
-        try:
-            self.federation_tab._rebuild_pending()
-        except Exception:
-            pass
-
     def _on_routines_tab_changed(self, index: int):
         """Refresh routine cards when the user opens the tab.
 
@@ -8730,26 +7993,6 @@ class MainWindow(QMainWindow):
             self.routines_tab.refresh()
         except Exception as e:
             log.warning(f"routines tab refresh on switch failed: {e}")
-
-    def _refresh_federation_tab_label(self):
-        """在公頻頁籤標題後面顯示待分享候選數量，像 `🌍 公頻 (2)`。
-
-        The count is `new_since_last_view` (candidates the distiller
-        queued since the user last opened the tab), not the total
-        pending — we want the badge to encourage revisiting, not nag
-        about candidates the user already saw and ignored.
-        """
-        idx = getattr(self, "_federation_tab_index", None)
-        if idx is None or idx < 0:
-            return
-        base = t("tab_federation")
-        try:
-            from sentinel.growth.federation import get_stats
-            n = get_stats().get("new_since_last_view", 0)
-        except Exception:
-            n = 0
-        label = f"{base} ({n})" if n > 0 else base
-        self.tabs.setTabText(idx, label)
 
     def _on_approval_submitted(self, approval):
         """Fires from sentinel.growth.approval.submit_for_approval.
@@ -9590,12 +8833,16 @@ class MainWindow(QMainWindow):
         accent = theme["accent"]
         self.title_label.setText(f"<b style='color:{accent}; font-size:18px;'>AI Slime Agent</b>"
                                  f"  <span style='color:#666;'>{t('app_subtitle')}</span>")
+        # Tab indices below are stale (they assume the v0.7-era ordering
+        # where every tab was added; equipment/market/federation are now
+        # frozen-or-archived). setTabText on a non-existent index is a
+        # no-op so this doesn't crash, just silently mis-targets some.
+        # v0.8 cleanup will rebuild this around the actual visible order.
         self.tabs.setTabText(0, t("tab_home"))
         self.tabs.setTabText(1, t("tab_evolution"))
         self.tabs.setTabText(2, t("tab_equipment"))
         self.tabs.setTabText(3, t("tab_chat"))
         self.tabs.setTabText(4, t("tab_memory"))
-        self.tabs.setTabText(5, t("tab_federation"))
         self.tabs.setTabText(6, t("tab_market"))
         self.tabs.setTabText(7, t("tab_approval"))
         self.tabs.setTabText(8, t("tab_settings"))
@@ -9604,7 +8851,6 @@ class MainWindow(QMainWindow):
         self.home_tab.retranslate()
         self.chat_tab.retranslate()
         self.memory_tab.retranslate()
-        self.federation_tab.retranslate()
         self.evolution_tab.retranslate()
         self.equipment_tab.retranslate()
         self.settings_tab.retranslate()
