@@ -322,6 +322,48 @@ def get_memorable_moments() -> list[dict]:
     return load_memory().get("memorable_moments", [])
 
 
+def list_box_entries(birth_time: float, newest_first: bool = True) -> list[dict]:
+    """Return all memorable_moments enriched with day_n, sorted for browse UX.
+
+    The "box" (箱子) per ADR 共同沉積 mechanism 1: the master should
+    be able to flip through everything that's been collected — every
+    emergent self-mark, every letter, every master_phrase, every
+    scaffolding milestone, the naming moment, all of it, in one place,
+    with the day-of-life timestamp prominent so the texture of time
+    accumulated is visible.
+
+    Each returned dict has all original moment fields plus:
+      - 'day_n': int, day-of-life when this moment was placed (1-indexed
+        like the rest of the project's day math; computed from
+        `(time - birth_time) / 86400 + 1`, floor, clamped to ≥1)
+      - 'has_letter': bool, convenience for UI badge rendering
+      - 'has_phrase': bool, convenience for UI badge rendering
+
+    Defensive: if birth_time is 0 / falsy, day_n falls back to 1 for
+    every entry (chronologically still sorted by raw time).
+
+    newest_first: True (default) renders the box like a journal you
+    flip backwards through; False puts the naming moment / D1 first
+    and scrolls forward into time. Both have their UX value; UI
+    callers can flip the flag based on a sort toggle.
+    """
+    moments = get_memorable_moments()
+    entries: list[dict] = []
+    for m in moments:
+        ts = float(m.get("time", 0) or 0)
+        if birth_time and ts:
+            day_n = max(1, int((ts - birth_time) / 86400) + 1)
+        else:
+            day_n = 1
+        e = dict(m)
+        e["day_n"] = day_n
+        e["has_letter"] = bool((m.get("letter_to_master") or "").strip())
+        e["has_phrase"] = bool((m.get("master_phrase") or "").strip())
+        entries.append(e)
+    entries.sort(key=lambda e: e.get("time", 0), reverse=newest_first)
+    return entries
+
+
 def get_co_reference_phrases(limit: int = 10) -> list[dict]:
     """Return the most recent moments that carry a master_phrase.
 
