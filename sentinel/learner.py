@@ -106,35 +106,14 @@ def distill_from_activity(recent_activity: str):
         memory["last_updated"] = time.time()
         memory["session_count"] = memory.get("session_count", 0) + 1
 
-        # Federation candidates: the LLM's proposed patterns to share
-        # with the community pool. They go into a local pending queue —
-        # the user approves each one via the 公頻 tab before anything
-        # is uploaded. We do this here (not inline in growth.federation)
-        # so the distillation → candidate pipeline is one trace to read.
-        # See sentinel/growth/federation.py for the opt-in contract.
-        candidates = result.get("federation_candidates") or []
-        if isinstance(candidates, list) and candidates:
-            try:
-                from sentinel.growth.federation import add_candidate
-                added = 0
-                for c in candidates[:3]:  # hard cap regardless of model output
-                    if not isinstance(c, dict):
-                        continue
-                    ok = add_candidate(
-                        category=str(c.get("category", "")),
-                        statement=str(c.get("statement", "")),
-                        confidence=float(c.get("confidence", 0.6) or 0.6),
-                        sample_n=max(1, memory["session_count"]),
-                    )
-                    if ok:
-                        added += 1
-                if added:
-                    log.info(f"Enqueued {added} federation candidate(s) for user review")
-            except Exception as e:
-                # Never let a federation hiccup break the distillation —
-                # profile update is the critical path; candidates are a
-                # nice-to-have by-product.
-                log.warning(f"Failed to enqueue federation candidates: {e}")
+        # Federation candidate enqueueing removed per ADR
+        # 2026-04-30-slime-stays-private.md. The community pool
+        # contradicts 共同沉積 mechanism「每隻 Slime 都不同」, and
+        # any 'Slime → outward' channel is forbidden. The LLM may
+        # still surface federation_candidates in its output — we
+        # just don't act on them. result.federation_candidates is
+        # discarded silently. sentinel/growth/federation.py is
+        # archived; see archive/sentinel-side/growth/.
 
         # Save learning log entry
         log_entry = {
