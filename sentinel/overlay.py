@@ -112,28 +112,19 @@ class SlimeOverlay(QWidget):
         self.update()
 
     def _load_equipped_visuals(self):
-        """Load equipped item visuals from equipment state."""
-        try:
-            from sentinel.wallet.equipment import load_equipment, EQUIPMENT_POOL
-            state = load_equipment()
-            visuals = {}
-            for slot, item_id in state.equipped.items():
-                if not item_id:
-                    continue
-                item = next((i for i in state.inventory if i["item_id"] == item_id), None)
-                if not item:
-                    continue
-                template = next(
-                    (t for t in EQUIPMENT_POOL if t["name"] == item["template_name"]), None)
-                if template and template.get("visual"):
-                    visuals[slot] = {
-                        "visual": template["visual"],
-                        "rarity": item["rarity"],
-                        "name": item["template_name"],
-                    }
-            self._equipped_visuals = visuals
-        except Exception:
-            self._equipped_visuals = {}
+        """Equipment system archived per ADR 2026-04-30-slime-stays-private.md.
+
+        Used to load `skin`/`background`/etc. visual templates from the
+        equipped items list. All downstream rendering branches in
+        paintEvent now see an empty dict and naturally skip the
+        equipment-overlay layers.
+
+        v0.8 cycle will replace this with a birth_signature reader per
+        ADR 2026-05-01-slime-physical-individuation.md — same idea
+        (per-instance visual variations), different mechanism (innate
+        traits, not collected loot).
+        """
+        self._equipped_visuals = {}
 
     def show_bubble(self, text: str, duration_ms: int = 5000):
         """Show a notification bubble above the slime."""

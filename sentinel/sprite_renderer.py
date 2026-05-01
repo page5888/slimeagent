@@ -163,12 +163,15 @@ def render_avatar(form: str, equipped: dict, inventory: list,
 
 
 def _find_template(template_name: str) -> dict | None:
-    """Find an equipment template by name."""
-    try:
-        from sentinel.wallet.equipment import EQUIPMENT_POOL
-        return next((t for t in EQUIPMENT_POOL if t["name"] == template_name), None)
-    except ImportError:
-        return None
+    """Equipment system archived per ADR 2026-04-30-slime-stays-private.md.
+
+    All callers feed an `equipment_visuals` dict to render functions;
+    after archive that dict is always empty (overlay/avatar's
+    _load_equipped_visuals returns {} now), so this function should
+    never actually be reached. Returns None for safety in case some
+    callsite still passes a template_name through.
+    """
+    return None
 
 
 # ── Widget ──────────────────────────────────────────────────────────────

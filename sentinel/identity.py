@@ -579,66 +579,16 @@ EQUIPMENT_VOICE_BY_SLOT = {
 
 
 def get_equipment_voice_hints() -> str:
-    """Return a short text block describing how equipment affects speech.
+    """Equipment system archived per ADR 2026-04-30-slime-stays-private.md.
 
-    Reads current equipped items. If none or all low-rarity, returns "".
+    Used to feed equipped-item voice hints into chat.py's system prompt
+    (ultra-rare items would slightly shift Slime's tone). With equipment
+    archived this returns "" — chat.py splices "" naturally so the
+    EQUIPMENT_VOICE block is just absent. v0.8's birth_signature work
+    may add a similar hook for innate physical traits → voice tint, but
+    that's a separate channel.
     """
-    try:
-        from sentinel.wallet.equipment import load_equipment
-    except Exception:
-        return ""
-
-    try:
-        state = load_equipment()
-    except Exception:
-        return ""
-
-    if not state.equipped:
-        return ""
-
-    # Find all equipped items with their rarity
-    item_by_id = {i.get("item_id"): i for i in state.inventory}
-    equipped_items = []
-    for slot, item_id in state.equipped.items():
-        item = item_by_id.get(item_id)
-        if item:
-            equipped_items.append((slot, item))
-
-    if not equipped_items:
-        return ""
-
-    # Rank: ultimate > mythic > legendary > epic ... (drop below legendary)
-    rarity_rank = {"ultimate": 7, "mythic": 6, "legendary": 5, "epic": 4,
-                   "rare": 3, "uncommon": 2, "common": 1}
-    equipped_items.sort(
-        key=lambda si: rarity_rank.get(si[1].get("rarity", "common"), 0),
-        reverse=True,
-    )
-
-    hints = []
-    seen_rarity_hints = set()
-
-    # Top 3 items by rarity
-    for slot, item in equipped_items[:3]:
-        rarity = item.get("rarity", "common")
-        if rarity_rank.get(rarity, 0) < 5:  # skip below legendary
-            continue
-
-        name = item.get("template_name", "未知裝備")
-        # Rarity-level hint (dedup — don't repeat same rarity twice)
-        if rarity not in seen_rarity_hints:
-            rhint = EQUIPMENT_VOICE_BY_RARITY.get(rarity, "")
-            if rhint:
-                hints.append(f"・「{name}」（{rarity}）— {rhint}")
-                seen_rarity_hints.add(rarity)
-        # Slot-level hint (only for signature slots)
-        shint = EQUIPMENT_VOICE_BY_SLOT.get(slot)
-        if shint and rarity_rank.get(rarity, 0) >= 5:
-            hints.append(f"・{shint}")
-
-    if not hints:
-        return ""
-    return "\n".join(hints)
+    return ""
 
 
 # ── E. Slime's own opinions ──────────────────────────────────────────
