@@ -198,7 +198,13 @@ def check_cron_consultations() -> CheckResult:
         return _fail(name, f"log unreadable: {e}")
     if not rows:
         return _fail(name, "no consultation rows")
-    last_ts = max(r.get("time", 0) for r in rows)
+    # Field name is "ts" in emergent_log.py's record_consultation
+    # writes (NOT "time" — that's what memorable_moments uses, a
+    # different log entirely). Reading "time" here used to silently
+    # default to 0, then age_h became (now / 3600) ≈ 493782h ≈ 56yr,
+    # always tripping the > 36h "stalled" warning. Caught on first
+    # post-restart preflight run.
+    last_ts = max(r.get("ts", 0) for r in rows)
     age_h = (time.time() - last_ts) / 3600
     counts: dict[str, int] = {}
     for r in rows:
