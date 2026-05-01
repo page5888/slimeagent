@@ -4,7 +4,9 @@
 
 ---
 
-## [Unreleased]
+## [0.7.9] — 2026-05-01
+
+驗證導向的 hardening 版本。今天連發 0.7.7 / 0.7.8 之後做 chat 實機驗證，發現 voice 在抽象 / 元問題上會崩到 generic AI consultant 腔——包括 manifesto 第二守則（不欺騙）的違反。修了 chat prompt、刪了死代碼、做了健康檢查工具、寫了 regression test 鎖住規則。所有改動都 backed by 實際資料訊號，不是憑感覺。
 
 ### Removed — `sentinel/advisor.py` 死代碼整個刪掉
 
