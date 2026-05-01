@@ -18,6 +18,9 @@
 - `2026-04-30-business-model.md` — 永遠免費，5888 備份是保險不是門票
 - `2026-04-30-no-individual-engagement.md` — 個體層級禁用 engagement metric
 
+身體個體化（裝備砍除後的視覺差異化機制）：
+- `2026-05-01-slime-physical-individuation.md` — 每隻 slime 從 D1 就長得不一樣（出生簽名 + 累積簽名兩層）
+
 ---
 
 ## 專案速寫
