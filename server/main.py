@@ -40,22 +40,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Register routers
+# Register routers.
+#
+# equipment / marketplace / federation routers archived — see
+# archive/server-side/README.md and ADR 2026-04-30-slime-stays-private.md.
+# Slime is meant to be private; equipment is for showing off, marketplace
+# turns Slime into a platform, federation merges Slimes into a collective.
+# All three contradict 共同沉積 mechanism「每隻 Slime 都不同」 and the
+# Slime-doesn't-go-outward principle. Code preserved in archive/ for git
+# history; routes are not registered here, so the server doesn't expose
+# the endpoints anymore.
 from server.auth.router import router as auth_router
 from server.wallet.router import router as wallet_router
 from server.images.router import router as images_router
-from server.equipment.router import router as equipment_router
-from server.marketplace.router import router as marketplace_router
 from server.evolution.router import router as evolution_router
-from server.federation.router import router as federation_router
 
 app.include_router(auth_router)
 app.include_router(wallet_router)
 app.include_router(images_router)
-app.include_router(equipment_router)
-app.include_router(marketplace_router)
 app.include_router(evolution_router)
-app.include_router(federation_router)
 
 
 # Serve web frontend

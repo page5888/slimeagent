@@ -6,6 +6,30 @@
 
 ## [Unreleased]
 
+### Removed — server-side: federation / equipment / marketplace 三個對外子系統下線
+
+對應 ADR `docs/decisions/2026-04-30-slime-stays-private.md`。Slime 設計上是私人的——任何「對外」機制都不該綁進 Slime 核心。三個子系統全部違反這條原則：
+
+- **federation**（公頻）— 跟「兩個用同一份程式的人 3 年後養出兩隻完全不同的 Slime」本質互斥
+- **equipment**（裝備）— 是炫耀物，違反「Slime 是這個主人專屬的」
+- **marketplace**（裝備市場）— 5% 平台抽成讓 Slime 變平台，violates manifesto 紅線
+
+執行：
+
+- `git mv server/{federation,equipment,marketplace}/` → `archive/server-side/`（保留 history、不 `git rm`）
+- `server/main.py` 移除 3 個 router 的 import 跟 `include_router` 呼叫
+- `archive/server-side/README.md` 寫明每個子系統「曾經存在、為什麼選擇不走這條路」+ 指向權威 ADR
+
+不影響：
+
+- 部署中的 server（存量 deployment 還能跑舊 router 直到下次 redeploy）
+- daemon 端跟 GUI（client side 還沒動，下個 PR 處理）
+- evolution / auth / wallet / images router（保留，這些不違反 ADR）
+
+下個 PR 會處理 client-side 的 federation / equipment 對應 module（`sentinel/growth/federation.py` / `sentinel/equipment_visuals.py` / `sentinel/wallet/equipment.py`）跟對應的 GUI tab。
+
+119/119 既有測試全綠（這個改動是純粹的檔案搬移 + main.py import 變動，無對應 unit test）。
+
 ### Added — 「箱子」可瀏覽：MemoryTab 加上時間軸列表
 
 ADR 共同沉積機制 1：「**箱子要可以被主人翻**」。之前 memorable_moments 只有兩個出口——時間軸 strip（dot 點上去看 dialog）跟 chat 系統 prompt 的隱性引用。沒有一個地方讓主人**直接滑、直接看**箱子裡有什麼。
