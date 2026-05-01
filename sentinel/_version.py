@@ -5,4 +5,4 @@ README.md's version badge. If you change the value here, also update
 those two — drift means the GUI header lies about which build is
 running.
 """
-__version__ = "0.7.9"
+__version__ = "0.7.10"

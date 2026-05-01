@@ -4,7 +4,9 @@
 
 ---
 
-## [Unreleased]
+## [0.7.10] — 2026-05-01
+
+主人不一定常在電腦前。把今天累積的修復（cron / voice / preflight）做成可遠端套用 + 遠端驗證的工具鏈。
 
 ### Added — Telegram `/restart` 跟 `/preflight` 遠端指令
 
