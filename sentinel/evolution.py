@@ -49,6 +49,12 @@ class EvolutionState:
     slime_name: str = ""               # Given by master at Named Slime tier; sacred, immutable after set
     last_seen: float = 0               # Epoch seconds — master last interacted with the slime (startup or chat)
     naming_pending: bool = False       # Set True when tier advances to Named Slime; GUI consumes + clears
+    # Layer 1 of physical individuation — generated once from birth_time,
+    # never re-rolled. None on first load means "needs generation"; the
+    # load_evolution() migration path fills it in. Schema in
+    # sentinel/birth_signature.py. ADR 2026-05-01-slime-physical-
+    # individuation.md.
+    birth_signature: dict = field(default_factory=dict)
 
     def days_alive(self) -> float:
         if not self.birth_time:
@@ -250,6 +256,20 @@ def load_evolution() -> EvolutionState:
             state.evolution_log = data.get('evolution_log', [])
             state.dominant_traits = data.get('dominant_traits', [])
             state.affinity_scores = data.get('affinity_scores', {})
+            # Lazy migration for pre-v0.8 saves — slime predates the
+            # birth_signature schema. Generate from birth_time so the
+            # signature is the same one this slime would have had if
+            # born under v0.8. Persist immediately; the next load is
+            # a no-op. ADR 2026-05-01-slime-physical-individuation.md.
+            if not state.birth_signature and state.birth_time > 0:
+                from sentinel.birth_signature import (
+                    generate_birth_signature, signature_to_dict,
+                )
+                sig = generate_birth_signature(state.birth_time)
+                state.birth_signature = signature_to_dict(sig)
+                save_evolution(state)
+                log.info("Backfilled birth_signature for existing slime "
+                         "(birth_time=%.0f).", state.birth_time)
             return state
         except Exception as e:
             # CRITICAL: do NOT silently overwrite a corrupt/incompatible save.
@@ -279,12 +299,20 @@ def load_evolution() -> EvolutionState:
                 raise
 
     # First boot - birth!
+    birth = time.time()
     state = EvolutionState(
-        birth_time=time.time(),
+        birth_time=birth,
         skills=[Skill(**asdict(s)) for s in CORE_SKILLS],
     )
     for s in state.skills:
         s.acquired_at = time.time()
+    # Generate birth_signature from the same birth_time, immediately.
+    # Per ADR: 從 D1 開始就長得不一樣. The signature is locked the
+    # second the slime exists, not deferred to first GUI render.
+    from sentinel.birth_signature import (
+        generate_birth_signature, signature_to_dict,
+    )
+    state.birth_signature = signature_to_dict(generate_birth_signature(birth))
     state.evolution_log.append({
         "time": time.time(),
         "event": "birth",
