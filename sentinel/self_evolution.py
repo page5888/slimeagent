@@ -1,9 +1,11 @@
 """Self-Evolution Engine - AI Slime's ability to modify and improve itself.
 
-Three layers of evolution:
+Two active layers:
 1. Memory accumulation (learner.py) - already exists
-2. Skill generation - create new .py skill files based on observed needs
-3. Self-modification - improve own prompts, thresholds, analysis logic
+2. Self-modification - improve own prompts, thresholds, analysis logic
+   (was Layer 3 historically; Layer 2 was 'skill generation' which got
+    archived 2026-05-02 — see archive/sentinel-side/
+    self_evolution_skill_gen.py for the rationale).
 
 Safety principle:
 - User data (memory, logs, activity) is NEVER touched by rollback
@@ -13,7 +15,9 @@ Safety principle:
 
 Directory structure:
   sentinel/core_backup/   ← pristine copy of original files (created once, read-only)
-  sentinel/skills/        ← generated skill files (safe to delete)
+  sentinel/skills/        ← legacy directory (used to hold generated skills;
+                              kept because snapshot/rollback still references
+                              it, but no new files land here)
   ~/.hermes/evolution_snapshots/  ← pre-modification backups
   ~/.hermes/user_data/    ← user data that rollback NEVER touches:
                              sentinel_memory.json, sentinel_activity.jsonl,
@@ -201,223 +205,28 @@ def rollback_to_core() -> bool:
         return False
 
 
-# ─── Skill Generation (Layer 2) ─────────────────────────────────────────
+# ─── Skill Generation (Layer 2) ── REMOVED 2026-05-02 ────────────────────
+#
+# generate_skill / execute_skill / list_skills / _validate_skill /
+# _is_code_safe / _identify_skill_need / SKILL_GEN_PROMPT and the
+# SKILL_GEN branch in maybe_evolve() were all removed.
+#
+# Reason: the runtime side of "approved skill actually runs" never
+# existed — execute_skill() had zero callers across the entire
+# codebase. The slime would propose skills, the user would approve,
+# the .py file landed in SKILLS_DIR/ — and nothing ever loaded or
+# invoked it. UI lying to the master violates manifesto 守則 #2.
+#
+# Per principle "real over performative" (also captured in 0xspeter's
+# 「真實的累積」phrasing on 2026-05-02), the proposer is removed
+# rather than the missing runtime built. Resurrection conditions and
+# the original code are preserved at:
+#
+#   archive/sentinel-side/self_evolution_skill_gen.py
+#
+# SELF_MOD (Layer 3) below is unchanged — that path actually has
+# effect (writes to MODIFIABLE_FILES, picked up next launch).
 
-SKILL_GEN_PROMPT = """你是 AI Slime，一個正在進化的 AI agent。
-根據你對使用者的觀察，你決定創造一個新技能來更好地服務他。
-
-使用者的 Profile：
-<<PROFILE>>
-
-使用者的行為模式：
-<<PATTERNS>>
-
-你觀察到的需求：
-<<NEED>>
-
-請產生一個 Python 技能檔案。規則：
-1. 檔名用英文小寫加底線（例如 auto_backup.py）
-2. 必須有一個 execute() 函數作為入口
-3. 必須有 SKILL_NAME（中文技能名）和 SKILL_DESCRIPTION（描述）
-4. 不能刪除或修改使用者的檔案
-5. 不能發送網路請求（除了透過 sentinel.llm）
-6. 只能讀取、分析、產生建議
-
-回覆格式：
-FILENAME: xxx.py
-```python
-程式碼
-```"""
-
-
-def generate_skill(need_description: str) -> dict | None:
-    """Let AI Slime propose a new skill based on observed needs.
-
-    IMPORTANT CHANGE (growth PR 1):
-    This used to auto-deploy the generated skill into SKILLS_DIR.
-    It now routes through the approval queue — the skill file is
-    written to ~/.hermes/approvals/pending/ as a proposal. A human
-    must call sentinel.growth.approval.approve() before the skill
-    becomes runnable.
-
-    Returns:
-      {"approval_id": "...", "filename": "...", "skill_name": "...",
-       "description": "...", "status": "pending"}
-    on successful proposal, or None on refusal / generation failure.
-    """
-    from sentinel.llm import call_llm
-    from sentinel.learner import load_memory
-    from sentinel.growth import (
-        can_perform, Capability, scan_code, submit_for_approval,
-    )
-    from sentinel.growth.approval import SKILL_GEN
-    from dataclasses import asdict
-
-    # Capability gate — refuse if this tier can't propose skills
-    decision = can_perform(Capability.PROPOSE_SKILL)
-    if not decision.allowed:
-        log.info("generate_skill refused: %s", decision.reason)
-        _log_event("skill_refused",
-                   f"拒絕技能生成：{decision.reason}")
-        return None
-
-    memory = load_memory()
-    profile = memory.get("profile", "(尚無)")
-    patterns = json.dumps(memory.get("patterns", {}), ensure_ascii=False)
-
-    prompt = SKILL_GEN_PROMPT.replace(
-        "<<PROFILE>>", profile
-    ).replace(
-        "<<PATTERNS>>", patterns
-    ).replace(
-        "<<NEED>>", need_description
-    )
-
-    text = call_llm(prompt, temperature=0.4, max_tokens=1500)
-    if not text:
-        return None
-
-    try:
-        # Parse filename
-        import re
-        fname_match = re.search(r'FILENAME:\s*(\w+\.py)', text)
-        if not fname_match:
-            return None
-        filename = fname_match.group(1)
-
-        # Parse code
-        code_match = re.search(r'```python\s*\n(.*?)```', text, re.DOTALL)
-        if not code_match:
-            return None
-        code = code_match.group(1).strip()
-
-        # AST safety scan — blocks obvious attacks regardless of
-        # whitespace/alias/reflection tricks
-        report = scan_code(code)
-        if not report.safe:
-            for f in report.blocking:
-                log.warning("Skill %s blocked by safety: [%s] %s",
-                            filename, f.rule, f.message)
-            _log_event("skill_blocked",
-                       f"技能「{filename}」未通過安全掃描：{report.summary()}")
-            return None
-
-        # Submit to approval queue — NOT deployed yet
-        target = SKILLS_DIR / filename
-        approval = submit_for_approval(
-            kind=SKILL_GEN,
-            title=need_description[:60],
-            reason=need_description,
-            target_path=str(target),
-            source=code,
-            safety_findings=[asdict(f) for f in report.findings],
-            proposer_tier=decision.tier,
-        )
-        _log_event("skill_proposed",
-                   f"提議新技能「{filename}」(id={approval.id})，等待使用者核准")
-        return {
-            "approval_id": approval.id,
-            "filename": filename,
-            "skill_name": filename.replace(".py", ""),
-            "description": need_description,
-            "status": "pending",
-        }
-
-    except Exception as e:
-        log.error(f"Skill generation error: {e}")
-        return None
-
-
-def _is_code_safe(code: str) -> bool:
-    """Check if generated code is safe to execute."""
-    dangerous = [
-        "os.remove", "os.unlink", "shutil.rmtree", "shutil.move",
-        "subprocess", "os.system", "eval(", "exec(",
-        "open(", "write(",  # No file writing
-        "__import__",
-        "requests.", "urllib.", "http.",  # No direct network
-        "ctypes.",  # No system calls
-        "import os", "from os",
-    ]
-
-    # Allow specific safe patterns
-    safe_overrides = [
-        "from sentinel.llm import",
-        "from sentinel.learner import",
-        "from sentinel.system_monitor import",
-        "import json", "import re", "import time", "import datetime",
-        "from pathlib import Path",
-    ]
-
-    code_lower = code.lower()
-    for d in dangerous:
-        if d.lower() in code_lower:
-            # Check if it's part of a safe override
-            is_safe = False
-            for s in safe_overrides:
-                if s.lower() in code_lower and d.lower() in s.lower():
-                    is_safe = True
-                    break
-            if not is_safe:
-                log.warning(f"Dangerous code detected: {d}")
-                return False
-    return True
-
-
-def _validate_skill(skill_path: Path) -> tuple[str, str]:
-    """Try to import a skill and check it has required attributes."""
-    try:
-        import importlib.util
-        spec = importlib.util.spec_from_file_location("skill_test", skill_path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-
-        name = getattr(module, "SKILL_NAME", None)
-        desc = getattr(module, "SKILL_DESCRIPTION", "")
-        has_execute = hasattr(module, "execute")
-
-        if name and has_execute:
-            return name, desc
-        return None, None
-    except Exception as e:
-        log.error(f"Skill validation failed: {e}")
-        return None, None
-
-
-def list_skills() -> list[dict]:
-    """List all generated skills."""
-    if not SKILLS_DIR.exists():
-        return []
-    skills = []
-    for f in SKILLS_DIR.glob("*.py"):
-        if f.name.startswith("_"):
-            continue
-        name, desc = _validate_skill(f)
-        if name:
-            skills.append({
-                "filename": f.name,
-                "skill_name": name,
-                "description": desc,
-            })
-    return skills
-
-
-def execute_skill(filename: str) -> str:
-    """Execute a generated skill and return its output."""
-    skill_path = SKILLS_DIR / filename
-    if not skill_path.exists():
-        return "技能檔案不存在"
-
-    try:
-        import importlib.util
-        spec = importlib.util.spec_from_file_location("skill_exec", skill_path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        result = module.execute()
-        return str(result) if result else "執行完成"
-    except Exception as e:
-        log.error(f"Skill execution error: {e}")
-        return f"執行失敗：{e}"
 
 
 # ─── Self-Modification (Layer 3) ────────────────────────────────────────
@@ -600,21 +409,9 @@ def maybe_evolve(evolution_state, memory: dict) -> list[str]:
     patterns = memory.get("patterns", {})
     profile = memory.get("profile", "")
 
-    # Skill generation: every 10 learnings, consider PROPOSING a new skill.
-    # Proposals land in the approval queue; the user decides whether to
-    # actually deploy them. We don't announce them as "acquired" because
-    # they aren't yet — they're pending human review.
-    if learnings > 0 and learnings % 10 == 0:
-        existing_skills = list_skills()
-        if len(existing_skills) < 10:  # Cap at 10 approved skills
-            need = _identify_skill_need(patterns, profile, existing_skills)
-            if need:
-                result = generate_skill(need)
-                if result and result.get("status") == "pending":
-                    events.append(
-                        f"提議了新技能「{result['skill_name']}」，"
-                        f"等你確認（id={result['approval_id']}）"
-                    )
+    # SKILL_GEN branch removed 2026-05-02 — see top-of-file note.
+    # The proposer used to fire every 10 learnings; archived in
+    # archive/sentinel-side/self_evolution_skill_gen.py.
 
     # Self-modification: every 30 learnings, consider PROPOSING an
     # improvement. Same rule — proposal only, no auto-deploy.
@@ -630,26 +427,6 @@ def maybe_evolve(evolution_state, memory: dict) -> list[str]:
                 )
 
     return events
-
-
-def _identify_skill_need(patterns: dict, profile: str, existing_skills: list) -> str | None:
-    """Use LLM to identify what new skill would be useful."""
-    from sentinel.llm import call_llm
-
-    existing_names = [s["skill_name"] for s in existing_skills]
-
-    prompt = f"""根據以下使用者 profile 和行為模式，判斷 AI Slime 需要什麼新技能。
-
-Profile: {profile}
-Patterns: {json.dumps(patterns, ensure_ascii=False)}
-已有技能: {', '.join(existing_names) if existing_names else '(無)'}
-
-用一句話描述需要的新技能（如果不需要新技能，回覆 NONE）："""
-
-    result = call_llm(prompt, temperature=0.5, max_tokens=100)
-    if result and "NONE" not in result.upper():
-        return result.strip()
-    return None
 
 
 def _identify_improvement(patterns: dict, profile: str) -> tuple[str, str] | None:

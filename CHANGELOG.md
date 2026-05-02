@@ -6,7 +6,76 @@
 
 ## [Unreleased]
 
-### Added — birth_signature 接 render：v0.8 雙層身體個體化視覺落地
+### Removed — SKILL_GEN 自動產生「待同意技能」功能下線（manifesto 守則 #2 / 真實的累積原則）
+
+對應原則：**「真實的累積」**——主人 0xspeter 在 2026-05-02 review 待同意佇列時提出，「我希望史萊姆要有真實的累積」。對齊 manifesto 守則 #2（不欺騙）。
+
+問題本質：SKILL_GEN 走完整條 propose → approve 流程，但**沒有 runtime**。
+
+```
+slime 提案    → ✓
+寫進 ~/.hermes/approvals/pending/ → ✓
+GUI 顯示卡片  → ✓
+主人按同意    → ✓
+寫檔到 SKILLS_DIR/foo.py → ✓
+slime 跑 foo.py → ✗  （execute_skill() 全 codebase 0 caller）
+```
+
+`execute_skill()` 實作正確（line 405：`importlib.util.spec_from_file_location` → `exec_module` → `module.execute()`），**但沒人呼叫**。同意之後檔案躺在硬碟，slime 行為不變。等於 UI 上「同意」按鈕對主人撒謊。
+
+跟 2026-04-30 那次 `record_emergent_moment_if_due()` 接到沒在跑的 daemon loop 是同形 bug；那次 600 行 ADR 跟 3 個 feature PR 蓋在沒執行過的路徑上。
+
+### 為什麼 archive 而不是補 runtime
+
+補完整 SKILL_GEN runtime 需要：
+
+1. **Invocation policy** — slime 何時自決跑某個 skill？autonomy 風險 vs 主人手動 invoke = 退化成 macro library
+2. **Output destination** — `execute_skill()` 回 string，要丟 chat / 通知 / 學習日誌？沒設計死
+3. **真沙箱** — runtime 真的 import + execute LLM 寫的 Python in-process。`_is_code_safe()` 字串掃描已知不夠；`growth/safety.py` AST 掃描在 submission time 跑，不在 execution time 跑
+
+評估後：
+- 增量價值 vs chat + ACTION 估 5-15%
+- 安全工程量大（沙箱化是 v0.8 範圍外的另一個 cycle）
+- v0.8 主軸是 `birth_signature` + 稱號系統，這條路不在 ADR 路線圖上
+
+主人選擇 archive。
+
+### 落地
+
+**移除（從 `sentinel/self_evolution.py`）**：
+
+- `SKILL_GEN_PROMPT` constant
+- `generate_skill()` — LLM 寫 skill 並 submit approval
+- `_is_code_safe()` — 舊字串掃描（已被 growth/safety AST 取代）
+- `_validate_skill()` — import skill 驗證 SKILL_NAME / execute 屬性
+- `list_skills()` — 列出 SKILLS_DIR 內容
+- `execute_skill()` — 那個 orphan runtime
+- `_identify_skill_need()` — LLM 找需求
+- `maybe_evolve()` 內每 10 次學習觸發 SKILL_GEN 的分支
+
+**移除（從 `sentinel/gui.py`）**：
+
+- `cmd_skills` Telegram 指令（列 SKILL_GEN 產出技能）
+- 對應的 `app.add_handler(CommandHandler("skills", cmd_skills))`
+
+**保留**：
+
+- `SELF_MOD`（Layer 3，`self_modify()`）— 這條真的有效：approve 後覆寫 `MODIFIABLE_FILES`，下次啟動載入新版
+- `ACTION` 整套（`chain.run` 等註冊 handler）— 這條真的有效
+- `kind == "skill_gen"` 的 GUI 顯示分支 — 留著處理任何**既有**的 pending SKILL_GEN approval（這個 PR 不會主動清你硬碟上的 `~/.hermes/approvals/pending/<old_skill_id>.json`，你看到舊卡片時自己 reject）
+- `SKILLS_DIR` 常數 + 既有的 snapshot/rollback 對它的 copy/clear 邏輯（無害，目錄空也不會出錯）
+
+**歸檔**：完整原始 SKILL_GEN code 移至 `archive/sentinel-side/self_evolution_skill_gen.py`，含「為什麼歸檔」+「未來要復活的條件」說明。
+
+### 這個 PR 對 manifesto 的意義
+
+manifesto 三大守則裡，**守則 #2「不欺騙」** 直接被「approve 按了沒效果」違反。這是 tech-debt cleanup，但**也是哲學一致性 cleanup**。
+
+ADR `2026-04-30-co-sediment-architecture.md` mech 1（「箱子要可以被主人翻」）跟 mech 4（「不主動長出原則」）的精神是「累積要是真的、要看得到」。SKILL_GEN 表面上「累積技能」，實際上累積的是死檔。砍掉之後**剩下的累積機制都是真的**：memorable_moments 寫進 chat 系統 prompt（chat.py 真讀）、dominant_traits 寫進 affinity 計算（evolution.py 真讀）、birth_signature 寫進 paint loop（PR #131 真畫）、SELF_MOD approval 真改檔。
+
+154/154 tests 全綠（前 PR 的 birth_signature 跟 GUI smoke test 都還活）。
+
+
 
 對應 ADR `docs/decisions/2026-05-01-slime-physical-individuation.md`。前一個 PR（#130）只搭好後端 schema + generator，這個 PR 把它接到實際的 paint loop。**重啟後桌面浮窗 + 首頁 slime 從 D1 開始就長得不一樣**。
 
