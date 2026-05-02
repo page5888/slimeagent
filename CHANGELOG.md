@@ -6,7 +6,39 @@
 
 ## [Unreleased]
 
-### Added — Phase 3b of v0.8 sensor refactor：LLM fallback + 持久化 cache
+### Fixed — Phase 1 cleanup：chat.py system prompt 殘留 CPU/RAM 引用全清
+
+PR #134 的 Phase 1 archive 加了「禁止報電腦狀態」line 但**沒清乾淨 chat.py 系統 prompt 本身**。檢驗 PR #134 + #135 + #136 + #137 累積結果時，發現 chat.py 還有 4 處 instructional content 跟禁止行**直接互相矛盾**：
+
+| 位置 | 舊內容 | 為什麼是 bug |
+|---|---|---|
+| `SELF_AWARENESS_TEMPLATE` 感知系統列表 | `「系統之眼：監控 CPU/RAM/磁碟」` | 告訴 LLM 它能看 CPU |
+| `CHAT_SYSTEM_PROMPT` 開頭自我介紹 | `「你能觀察主人的電腦狀態和開發活動」` | 直接打臉禁止行 |
+| `CHAT_SYSTEM_PROMPT` 行為指引 | `「主人問系統狀態 → 報 CPU 78%，挺拼的喔」` | 明文教 slime 回 CPU% |
+| `PERSONALITY_BY_TIER["Ultimate Slime"]` quirk | `「連 CPU 是什麼都不知道呢」` | 角色設定提 CPU |
+| `EMOTION_TRIGGERS["worried"]` conditions | `["CPU 使用率超過 90", "RAM 使用率超過 85", "磁碟使用率超過 90", ...]` | dead match terms（system_summary post-Phase-1 永遠空、永遠不會 fire）但讀起來誤導 |
+
+LLM 看到「禁止 + 教你怎麼回」會行為不可預測。重啟前一定要清掉。
+
+**修法**：
+
+- `SELF_AWARENESS_TEMPLATE` 感知系統列表移除「系統之眼」行、改為「視窗追蹤」+「感知之眼（idle / 活躍程度，不抓內容）」+ 加註解寫死「v0.8 sensor 重構 archive、主人不在意電腦狀態」
+- `CHAT_SYSTEM_PROMPT` 自我介紹改為「能觀察主人正在做什麼——他在哪個視窗、看什麼網頁、寫什麼程式、跟誰聊天」
+- `CHAT_SYSTEM_PROMPT` 行為指引改為「主人問你看到什麼／在做什麼，講具體看到的視窗跟活動（『你開著 chat.py 寫了快一小時』『你剛切到 Reddit 在看 r/programming』），**不報任何電腦硬體 metric**」
+- `PERSONALITY_BY_TIER["Ultimate Slime"].quirk` 改為「還記得剛轉生的時候，連你打開哪個視窗都看不全呢」（保留懷舊感、把感官對象從 CPU 換成主人視窗）
+- `EMOTION_TRIGGERS["worried"].conditions` 移除 CPU/RAM/磁碟 keyword，留 `["process crash", "build fail"]`（這兩個還可能從 file_watcher / claude_watcher activity 串中 match）
+
+**驗證 sanity grep**：
+
+```
+grep CPU|RAM|磁碟 sentinel/chat.py
+```
+
+剩下的全部在註解或禁止行內部（教 slime「不准講 CPU/RAM/磁碟」那行本身——留著對的）。
+
+274/274 tests 全綠（無新增 test，這是 prompt 文字 cleanup，覆蓋率不變）。
+
+
 
 **對應**：v0.8 sensor 重構 Phase 3b（接 Phase 3a PR #136）。Phase 3a 規則層覆蓋 80%，這個 PR 處理長尾 — 規則認不出來的 app / title，丟 LLM 解、結果 cache 起來避免重複燒 token。
 
