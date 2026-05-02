@@ -54,12 +54,15 @@ class TestSecondsSinceLastInput(unittest.TestCase):
         # etc.), we should swallow it and return 0 rather than
         # killing the loop. We mock the GetLastInputInfo function
         # specifically so the exception path actually fires.
+        # `create=True` is needed because ctypes.windll only exists
+        # on Windows; CI runs on Linux where mock.patch otherwise
+        # refuses to patch a non-existent attribute.
         bad_user32 = mock.MagicMock()
         bad_user32.GetLastInputInfo.side_effect = OSError("access denied")
         windll_mock = mock.MagicMock()
         windll_mock.user32 = bad_user32
         with mock.patch.object(sys, "platform", "win32"), \
-                mock.patch("ctypes.windll", windll_mock):
+                mock.patch("ctypes.windll", windll_mock, create=True):
             tracker = ActivityTracker()
             self.assertEqual(tracker.seconds_since_last_input(), 0.0)
 
