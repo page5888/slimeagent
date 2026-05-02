@@ -49,6 +49,11 @@ class SlimeOverlay(QWidget):
         self._traits = []
         self._title = "初生史萊姆"
         self._equipped_visuals = {}
+        # birth_signature: see slime_avatar.SlimeWidget for the full
+        # rationale. Cached once at __init__; empty dict if loading
+        # fails so paintEvent falls through to base TIER_COLORS.
+        self._birth_signature: dict = {}
+        self._load_birth_signature()
         self._anim_phase = 0.0
         self._opacity = 0.75  # Base opacity (semi-transparent)
         self._hover = False
@@ -125,6 +130,17 @@ class SlimeOverlay(QWidget):
         traits, not collected loot).
         """
         self._equipped_visuals = {}
+
+    def _load_birth_signature(self):
+        """Read birth_signature from evolution.json once. Empty dict
+        on any failure — overlay still draws a slime, it just won't
+        be individuated this session."""
+        try:
+            from sentinel.evolution import load_evolution
+            state = load_evolution()
+            self._birth_signature = state.birth_signature or {}
+        except Exception:
+            self._birth_signature = {}
 
     def show_bubble(self, text: str, duration_ms: int = 5000):
         """Show a notification bubble above the slime."""
@@ -206,6 +222,16 @@ class SlimeOverlay(QWidget):
                 colors["body"] = override["body"]
                 colors["highlight"] = override["highlight"]
 
+        # Per-instance birth_signature — same call as slime_avatar so
+        # the desktop overlay slime and the home tab slime share the
+        # exact same colour shift / dimension scale. Order: signature
+        # comes after any skin override, so it always rides on top of
+        # the current palette.
+        from sentinel.birth_signature_render import (
+            apply_signature_to_colors, apply_signature_to_dimensions,
+        )
+        colors = apply_signature_to_colors(colors, self._birth_signature)
+
         # Breathing
         breath = math.sin(self._anim_phase) * 0.03
         bounce = math.sin(self._anim_phase * 2) * 1.5
@@ -214,6 +240,8 @@ class SlimeOverlay(QWidget):
         base_size = 30 + tier_index * 3
         body_w = int(base_size * (1.0 + breath))
         body_h = int(base_size * 0.8 * (1.0 - breath))
+        body_w, body_h = apply_signature_to_dimensions(
+            body_w, body_h, self._birth_signature)
 
         # Equipment context
         equip_ctx = {
@@ -270,6 +298,13 @@ class SlimeOverlay(QWidget):
         p.setPen(QPen(outline, 1.5))
         body_rect = QRect(cx - body_w, int(cy - body_h + bounce), body_w * 2, body_h * 2)
         p.drawEllipse(body_rect)
+
+        # Birth-signature marking (~30% chance the slime carries one).
+        # Drawn on the body surface, before the antenna so the antenna
+        # bump sits cleanly on top.
+        from sentinel.birth_signature_render import draw_marking
+        draw_marking(p, self._birth_signature, cx, cy + bounce,
+                     body_w, body_h, colors["body"])
 
         # Antenna (tier 1+)
         if tier_index >= 1:

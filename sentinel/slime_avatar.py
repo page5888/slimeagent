@@ -119,6 +119,13 @@ class SlimeWidget(QWidget):
         self._skill_count = 0
         self._title = "初生史萊姆"
         self._equipped_visuals = {}  # {slot: {"visual", "rarity", "name"}}
+        # birth_signature is the per-instance "this slime is this
+        # slime" visual seed. Loaded once from evolution.json — never
+        # changes for the slime's lifetime, so a single read at widget
+        # construction is correct. Empty dict on failure → renderer
+        # falls through to base TIER_COLORS unchanged.
+        self._birth_signature: dict = {}
+        self._load_birth_signature()
 
         # Animation
         self._anim_phase = 0.0
@@ -179,6 +186,22 @@ class SlimeWidget(QWidget):
         ADR 2026-05-01-slime-physical-individuation.md.
         """
         self._equipped_visuals = {}
+
+    def _load_birth_signature(self):
+        """Read birth_signature from evolution.json (one shot).
+
+        Failure modes — file missing, schema older than this code,
+        load throws — all degrade to an empty dict so the renderer
+        falls back to base TIER_COLORS. We deliberately don't raise:
+        a corrupt evolution file should not stop the GUI from drawing
+        the slime, only stop the per-instance differentiation.
+        """
+        try:
+            from sentinel.evolution import load_evolution
+            state = load_evolution()
+            self._birth_signature = state.birth_signature or {}
+        except Exception:
+            self._birth_signature = {}
 
     def _tick(self):
         self._anim_phase += 0.05
@@ -242,6 +265,18 @@ class SlimeWidget(QWidget):
             colors["body"] = _apply_trait_tint(colors["body"], self._traits)
             colors["highlight"] = _apply_trait_tint(colors["highlight"], self._traits)
 
+        # K. Apply per-instance birth_signature on top of everything
+        # else. This is what makes "two slimes from the same TIER_COLORS
+        # palette still visibly differ from D1" — the manifesto promise.
+        # Order matters: signature comes LAST so trait tints / equipment
+        # skins (when re-introduced) shift the body colour first, and
+        # signature is the per-instance variation on whatever the
+        # current palette says.
+        from sentinel.birth_signature_render import (
+            apply_signature_to_colors, apply_signature_to_dimensions,
+        )
+        colors = apply_signature_to_colors(colors, self._birth_signature)
+
         # Breathing animation
         breath = math.sin(self._anim_phase) * 0.03
         bounce = math.sin(self._anim_phase * 2) * 2
@@ -251,6 +286,12 @@ class SlimeWidget(QWidget):
         base_size = 50 + tier_index * 5
         body_w = int(base_size * (1.0 + breath))
         body_h = int(base_size * 0.8 * (1.0 - breath))
+        # Signature scales body dimensions on top of the breath / tier
+        # baseline. We do this AFTER breath so the per-instance shape
+        # variation rides along with the live animation rather than
+        # being blown away by it.
+        body_w, body_h = apply_signature_to_dimensions(
+            body_w, body_h, self._birth_signature)
 
         # Equipment drawing context
         equip_ctx = {
@@ -310,6 +351,13 @@ class SlimeWidget(QWidget):
         # Draw body as smooth ellipse (like a droplet)
         body_rect = QRect(cx - body_w, int(cy - body_h + bounce), body_w * 2, body_h * 2)
         p.drawEllipse(body_rect)
+
+        # ─── Birth-signature marking (only ~30% of slimes) ───
+        # Drawn between body and bump so it sits on the body surface.
+        # No-op when signature is empty or carries marking == None.
+        from sentinel.birth_signature_render import draw_marking
+        draw_marking(p, self._birth_signature, cx, cy + bounce,
+                     body_w, body_h, colors["body"])
 
         # ─── Small top bump (slime antenna) ───
         if tier_index >= 1:
