@@ -14,7 +14,12 @@ from sentinel.config import (
     TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, NOTIFICATION_COOLDOWN,
     DISTILL_INTERVAL,
 )
-from sentinel.system_monitor import take_snapshot
+# OS-metrics sensor (system_monitor) archived 2026-05-02 per v0.8 sensor
+# refactor. All call sites in this file are disabled with TODO markers
+# pending the master-activity sensor that replaces this loop's input.
+# Note: this whole daemon.py is the --no-gui path, dormant under start.bat
+# (which goes via gui.run_gui). The live observation loop with the same
+# disabled snapshot logic lives in gui.py:_start_daemon.
 from sentinel.file_watcher import FileWatcher
 from sentinel.claude_watcher import get_claude_activity_summary
 from sentinel.brain import analyze_events, build_context
@@ -56,16 +61,32 @@ async def on_message(update: Update, context):
 
 
 async def cmd_status(update: Update, context):
-    """Handle /status command - show current system state."""
+    """Handle /status — slime-self status, not OS metrics.
+
+    Used to show CPU/RAM/disk via take_snapshot. v0.8 sensor refactor
+    swapped this for slime-relevant info: how long it's been alive,
+    what tier, how many memorable_moments are in the box. The point of
+    /status is "what's the state of *this slime*", not "how is the
+    laptop". 主人不在意電腦怎麼了 (per施工指示 reasoning).
+    """
     if update.message.chat_id != TELEGRAM_CHAT_ID:
         return
 
-    snapshot = take_snapshot()
+    from sentinel.evolution import load_evolution
+    evo = load_evolution()
     profile = get_profile_summary()
 
+    name = getattr(evo, "slime_name", "") or "AI Slime"
+    days = evo.days_alive() if hasattr(evo, "days_alive") else 0
+    form = getattr(evo, "form", "Slime")
+    title = getattr(evo, "title", "初生史萊姆")
+    moments = len((load_memory().get("memorable_moments") or []))
+
     text = (
-        f"📊 *系統狀態*\n"
-        f"{snapshot.summary()}\n\n"
+        f"🧬 *{name}*\n"
+        f"形態：{form}（{title}）\n"
+        f"活了：{days:.1f} 天\n"
+        f"箱子：{moments} 張紙\n\n"
         f"🧠 *對你的理解*\n"
         f"{profile[:500]}"
     )
@@ -122,7 +143,15 @@ def monitor_loop(bot_send_fn):
             if now - last_check >= SYSTEM_CHECK_INTERVAL:
                 last_check = now
 
-                snapshot = take_snapshot()
+                # OS-metrics sensor disabled — see file header. impulse
+                # engine now drives off file/Claude activity only until
+                # the master-activity sensor lands in Phase 2-5 of the
+                # v0.8 sensor cycle. has_warnings (CPU/RAM/disk) used
+                # to gate analyze_events; without it, only burst
+                # detection fires.
+                # TODO(v0.8 sensor cycle): replace `None` with the new
+                # master-activity summary feed once Phase 4 lands.
+                snapshot = None
                 file_events = watcher.get_events()
                 claude_activity = get_claude_activity_summary()
                 context = build_context(snapshot, file_events, claude_activity)
@@ -144,8 +173,11 @@ def monitor_loop(bot_send_fn):
                     # Telegram silence is still preserved by the
                     # content-conditional compose_message.
 
-                # Analyze if something looks off
-                has_warnings = bool(snapshot.warnings)
+                # Analyze if something looks off — has_warnings used to
+                # come from CPU/RAM thresholds; now snapshot is always
+                # None so this collapses to burst detection. Phase 5 of
+                # the v0.8 sensor cycle redesigns this trigger entirely.
+                has_warnings = False
                 has_burst = len(file_events) > 20
                 if has_warnings or has_burst:
                     decision = analyze_events(context)
@@ -159,8 +191,10 @@ def monitor_loop(bot_send_fn):
                             bot_send_fn(msg)
                             last_notify_time[cat] = now
 
-                if snapshot.warnings:
-                    log.warning(f"Warnings: {snapshot.warnings}")
+                # OS-metrics warnings (snapshot.warnings) gone with
+                # the sensor refactor. v0.8 Phase 5 will add new
+                # warnings tied to master activity (e.g. long stretches
+                # in heavy content).
 
             # Learning cycle (configurable interval)
             if now - last_distill >= DISTILL_INTERVAL and activity_buffer:
@@ -195,7 +229,14 @@ def monitor_loop(bot_send_fn):
             # opportunities — they decide for themselves whether to act.
             if now - last_idle_report >= IDLE_REPORT_INTERVAL:
                 last_idle_report = now
-                snapshot = take_snapshot()
+                # OS-metrics snapshot disabled — see file header.
+                # compose_message gates the snapshot block on
+                # truthiness of `warnings`, so passing empty list +
+                # empty summary makes that block never fire; only
+                # llm_warning can produce a message now.
+                # TODO(v0.8 sensor cycle): replace with master-activity
+                # signals (long stretch in heavy content, etc.) when
+                # the new sensor lands.
 
                 llm_warning = None
                 try:
@@ -206,8 +247,8 @@ def monitor_loop(bot_send_fn):
 
                 from sentinel.idle_report import compose_message
                 message = compose_message(
-                    warnings=snapshot.warnings,
-                    snapshot_summary=snapshot.summary(),
+                    warnings=[],
+                    snapshot_summary="",
                     llm_warning=llm_warning,
                 )
                 if message is not None:
