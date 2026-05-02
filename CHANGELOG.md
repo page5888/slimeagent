@@ -6,7 +6,66 @@
 
 ## [Unreleased]
 
-### Added — title_storage：稱號系統的箱子 metadata schema + persistence layer（v0.8 cycle）
+### Removed — Phase 1 of v0.8 sensor refactor：archive OS-metrics sensor（slime 看主人，不看電腦）
+
+**對應**：v0.8 sensor 重構施工指示 Phase 1（2026-05-02 0xspeter）。前置 7 份 ADR 共同論證 slime 必須看到「主人在做什麼」、不是「電腦在做什麼」。Phase 1 砍掉錯方向的基礎，Phase 2-6 接上對方向的基礎。
+
+**核心判斷**（直接引用 0xspeter）：
+
+> 「目前史萊姆都沒有真的與我互動。他都只會說我電腦怎麼了。我的電腦硬體發生什麼我真的不在意。」
+
+舊的 `sentinel/system_monitor.py` 觀察 CPU/RAM/disk/process —— 這些是「電腦的內臟」，不是「主人的生活」。manifesto + 7 份 ADR（emergent milestones / voice anchors / 共同沉積 / Slime 不向外 / 稱號 / 商業模式 / no-individual-engagement）的所有規則都假設 slime 看到主人，但 sensor 看的是電腦。**所有 manifesto 在錯的 sensor 基礎上是空話**。換 sensor 是讓 slime 真的開始活的物質基礎。
+
+**這次落地（Phase 1 only）**
+
+實際結構跟施工指示假設的不同（沒有 `sentinel/sensors/cpu_monitor.py` 那種多檔結構，只有單一 `sentinel/system_monitor.py`），所以 Phase 1 範圍依現實調整：
+
+- `sentinel/system_monitor.py` → `archive/sensors-os-metrics/system_monitor.py`（`git mv`，保 history）
+- `archive/sensors-os-metrics/README.md` 寫死哲學基礎、disabled callsites 對照表、復活條件
+
+**陪伴面 callsites 全部 disable + 加 TODO**（不刪程式碼，等 Phase 2-5 接新 sensor 重新接）：
+
+| 位置 | 舊 | 新 |
+|---|---|---|
+| `chat.py:_build_system_prompt` | `snapshot.summary()` 灌進 `<<SYSTEM_STATE>>` slot | `system_summary = ""`（slot 空著）|
+| `chat.py` system prompt「能看到什麼」描述 | 列了「系統 snapshot」 | 改成明寫「禁止報主人的電腦狀態」 |
+| `daemon.py:monitor_loop` 主 loop | `snapshot = take_snapshot()` → `build_context` | `snapshot = None`，`build_context` 改成接受 None |
+| `daemon.py:monitor_loop` idle cycle | `compose_message(warnings=snapshot.warnings, summary=snapshot.summary(), ...)` | `compose_message(warnings=[], summary="", ...)`（OS metrics block 永不觸發，只剩 LLM warning 可發訊） |
+| `gui.py:_start_daemon._run` 主 loop | 同 daemon.py | 同步處理 |
+| `gui.py:_start_daemon._run` analyze_events 觸發條件 | `snapshot.warnings or len(file_events) > 20` | 只剩 `len(file_events) > 20`（CPU/RAM 觸發退場）|
+| `brain.py:build_context` signature | `system_snapshot` 必填 | 接受 None，None 時 skip publish 「system」entry 到 context bus |
+
+**`/status` Telegram 指令**（option B，調度面留著但換內容）：
+
+```
+舊：📊 系統狀態
+    CPU 23% | RAM 45% (3.2/8GB) | Disk 67% (free 102GB)
+    Top processes: chrome (PID 1234): CPU 5% ...
+
+新：🧬 AI Slime
+    形態：Slime+（覺醒史萊姆）
+    活了：47.3 天
+    箱子：12 張紙
+    觀察：1,234
+```
+
+理由：`/status` 在調度面（per ADR `2026-04-30-co-sediment-architecture.md` 兩個面架構），是 admin/debug 工具不是 slime 講話。留指令、換內容對齊「slime 不報電腦」精神。`daemon.py:cmd_status` 跟 `gui.py:cmd_status`（live Telegram）兩處同步處理。
+
+**還沒處理的相鄰項目**（不在 Phase 1 範圍）：
+
+- `sentinel/input_tracker.py`（鍵盤輸入內容）— 抓的不只是節奏，是內容；對方向但踩到「不要 IME hook」紅線的邊。Phase 2-3 內部再判斷
+- `sentinel/screen_watcher.py`（截圖 + multimodal LLM）— 施工指示「不要做」清單明寫，但 in prod 在跑。獨立判斷
+- `sentinel/skills/{bun_resource_monitor,resource_task_scheduler}.py`（untracked 孤兒，PR #132 之後 inert）— git history 沒有它們、留原處不動，README 寫明可手動刪
+- `EMOTION_TRIGGERS["worried"]["conditions"]` 裡的 CPU/RAM 關鍵字 — `system_summary` 空之後永遠 match 不到、是 dead match terms。Phase 5 重設計時清掉
+- `CPU_WARN_PERCENT` 等 config 常數 — 暫留（怕 `core_backup` 還引用）
+
+**測試**：
+
+186/186 全綠（154 prior + 32 from PR #133）。沒新增測試——這次是純移除 + disable，沒有新行為值得 cover；後續 Phase 2 加新 sensor 時才開始寫對應 test。
+
+CI gate（PR #129 GUI smoke）保護仍有效。
+
+
 
 對應 ADR `docs/decisions/2026-04-30-title-system.md`。稱號系統是 v0.8 cycle 的核心工作，這個 PR 是它的第一塊：純後端 schema + 持久化，**沒有 LLM、沒有 chat hook、沒有 GUI**——那三塊各是後續 PR。
 

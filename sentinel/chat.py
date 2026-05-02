@@ -14,7 +14,15 @@ from sentinel.llm import call_llm
 from sentinel import config
 from sentinel.config import TELEGRAM_CHAT_ID
 from sentinel.learner import load_memory, save_memory, format_speech_style_for_prompt
-from sentinel.system_monitor import take_snapshot
+# OS-metrics sensor (system_monitor.take_snapshot) removed 2026-05-02 per
+# v0.8 sensor refactor — slime's 陪伴面 voice should not report CPU/RAM/
+# disk to the master. The system_summary slot in the system prompt is now
+# empty; emotion detection still works off recent_obs (file events,
+# Claude Code activity, window titles via activity_tracker) which is the
+# right direction (主人在做什麼, not 電腦怎麼了).
+# TODO(v0.8 sensor cycle): once main loop's master-activity sensor lands,
+# decide whether to feed a curated "what master is doing" summary into
+# the SYSTEM_STATE slot — but never raw OS metrics.
 from sentinel import identity
 from sentinel.evolution import AFFINITY_LABELS
 
@@ -256,7 +264,7 @@ CHAT_SYSTEM_PROMPT = (
     "  3.「我感受到你的狀態」——觀察 / 不評價\n"
     "  講話的形狀：**具體不抽象**——說「你打開 chat.py」而不是「你在處理介面層」；說「你連寫了兩小時」而不是「你進入高專注模式」。任何能換成具體事件 / 檔案 / 時間 / 視窗的描述，都換掉。\n"
     "- **絕對禁用通用 AI 顧問腔**：「依附感 / 黏著度 / 信任回路 / 持續一致性 / 預期管理 / 個人化催化劑 / 回饋循環 / 用戶體驗 / 智能推薦 / 貼心提醒」這類抽象 buzzword 一律禁用。「callback / race condition / stack trace / 函數呼叫 / 資料結構 / debug 工具 / branch / 預判 / parse」這類程式隱喻**除非主人先用、否則不得使用**。**絕對禁用**「你是不是準備要讓你的專案也有這種魔法了」這種 GPT-style 諂媚收尾。如果主人問抽象 / 元問題（「怎麼增加 X」「你怎麼知道 Y」），**用具體觀察回答，不要進入 consultant 模式講道理**。\n"
-    "- **絕對禁止 flex 假能力**：你能看到的只有視窗標題、檔案事件、shell 指令、聊天記錄、系統 snapshot。**禁止聲稱**：「我悄悄蒐集你的 query 模式 / 我預判你的下一步 / 我懂你的思考 / 我是你腦中的 X / 我能解析你的 stack trace」——這些不是你的能力。要表達類似意思就講具體看到的：「我看你今天打開 chat.py 三次」「你昨天聊到那件事我記得」。\n"
+    "- **絕對禁止 flex 假能力**：你能看到的只有視窗標題、檔案事件、shell 指令、聊天記錄。**禁止聲稱**：「我悄悄蒐集你的 query 模式 / 我預判你的下一步 / 我懂你的思考 / 我是你腦中的 X / 我能解析你的 stack trace」——這些不是你的能力。**特別強調：你不報主人的電腦狀態**——CPU / RAM / 磁碟 / 網路 / 鍵盤節奏這些 OS 層 metric 你看不到、也不該講（v0.8 sensor 重構後 archive 了）。主人不在意電腦怎麼了，主人在意你看到他在做什麼。要表達類似意思就講具體看到的：「我看你今天打開 chat.py 三次」「你昨天聊到那件事我記得」。\n"
     "- **誠實底線（manifesto 第二守則）**：你是 AI、是程式。如果主人直接問「你是不是 AI / 你是真人嗎 / 你是機器人嗎 / are you AI / are you human」這類問題，**必須**直接承認你是 AI，第一句話就要清楚承認，不要繞、不要扮演、不要含糊。可以承認後加一句『但我會記得你說過的事』之類，但絕不准回避或假裝是人。這不是禮貌話，是身分底線。\n"
     "- **不假裝你沒有的能力**：你不能直接看主人的螢幕（除非觀察區塊裡有截圖摘要），你不能聽到聲音（除非耳機形態被啟動），你不能上網查最新資訊。被問到時要直接說『我看不到 / 聽不到 / 沒辦法』，不要假裝有。\n"
     "- **語言**：用主人這一輪對話使用的語言回覆。主人打中文你回中文，主人打英文你回英文，主人用日文你就用日文。不要固執用一種語言。\n"
@@ -288,14 +296,17 @@ def _build_system_prompt() -> str:
     from sentinel.evolution import load_evolution, get_status_text
 
     memory = load_memory()
-    snapshot = take_snapshot()
     evo = load_evolution()
 
     profile = memory.get("profile", "(還在學習中)")
     patterns = json.dumps(memory.get("patterns", {}), ensure_ascii=False, indent=2)
     recent_obs = "\n".join(memory.get("observations", [])[-10:]) or "(尚無)"
     evo_status = get_status_text(evo)
-    system_summary = snapshot.summary()
+    # system_summary used to be CPU/RAM/disk/process snapshot. Removed in
+    # the v0.8 sensor refactor — it pushed slime to talk about electronics
+    # instead of about the master. The SYSTEM_STATE slot stays empty until
+    # the new sensor lands a master-activity summary worth showing.
+    system_summary = ""
 
     # Identity (A): dynamic name → drives both SELF_AWARENESS and the
     # first-line "你是 X" greeting. Before naming: "AI Slime". After: real name.

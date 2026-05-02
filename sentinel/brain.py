@@ -86,13 +86,18 @@ def build_context(system_snapshot, file_events: list, claude_activity: str,
     """
     bus = get_bus()
 
-    # System state is always present — publish the summary plus any
-    # active warnings as one combined entry so the LLM reads them
-    # together ("CPU 92%, warning: RAM high" vs. splitting them).
-    system_text = system_snapshot.summary()
-    if getattr(system_snapshot, "warnings", None):
-        system_text += "\n⚠️ 系統警告: " + " | ".join(system_snapshot.warnings)
-    bus.publish("system", system_text)
+    # OS-metrics sensor (system_snapshot) was disconnected 2026-05-02
+    # per v0.8 sensor refactor. Signature kept (callers still pass the
+    # legacy positional arg, often None now) so existing call sites
+    # don't all need to change in lock-step. None → skip the publish;
+    # the bus simply doesn't carry a "system" entry on this tick.
+    # TODO(v0.8 sensor cycle): replace this slot with a master-activity
+    # summary entry when the new sensor lands.
+    if system_snapshot is not None:
+        system_text = system_snapshot.summary()
+        if getattr(system_snapshot, "warnings", None):
+            system_text += "\n⚠️ 系統警告: " + " | ".join(system_snapshot.warnings)
+        bus.publish("system", system_text)
 
     if file_events:
         bus.publish("files", _format_file_events(file_events))

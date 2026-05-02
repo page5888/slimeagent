@@ -6711,12 +6711,28 @@ class MainWindow(QMainWindow):
                 await update.message.reply_text(reply)
 
             async def cmd_status(update: Update, context):
+                """slime-self status, not OS metrics. v0.8 sensor refactor:
+                /status used to show CPU/RAM/disk via take_snapshot —
+                same content as a Task Manager tab. Replaced with info
+                about *this slime* (form, days alive, box thickness),
+                aligned with manifesto framing that 主人不在意電腦怎麼了.
+                """
                 if update.message.chat_id != config.TELEGRAM_CHAT_ID:
                     return
-                from sentinel.system_monitor import take_snapshot
-                snap = take_snapshot()
                 evo = load_evolution()
-                text = f"📊 *系統狀態*\n{snap.summary()}\n\n🧬 *{evo.title}*\n觀察: {evo.total_observations:,}"
+                from sentinel.learner import load_memory as _load_mem
+                name = getattr(evo, "slime_name", "") or "AI Slime"
+                days = evo.days_alive() if hasattr(evo, "days_alive") else 0
+                form = getattr(evo, "form", "Slime")
+                title = getattr(evo, "title", "初生史萊姆")
+                moments = len((_load_mem().get("memorable_moments") or []))
+                text = (
+                    f"🧬 *{name}*\n"
+                    f"形態：{form}（{title}）\n"
+                    f"活了：{days:.1f} 天\n"
+                    f"箱子：{moments} 張紙\n"
+                    f"觀察：{evo.total_observations:,}"
+                )
                 await update.message.reply_text(text, parse_mode="Markdown")
 
             async def cmd_evolution(update: Update, context):
@@ -7026,7 +7042,11 @@ class MainWindow(QMainWindow):
 
     def _start_daemon(self):
         def _run():
-            from sentinel.system_monitor import take_snapshot
+            # OS-metrics sensor (system_monitor.take_snapshot) archived
+            # 2026-05-02 per v0.8 sensor refactor — slime should observe
+            # 主人活動, not 電腦狀態. Live call sites in this loop are
+            # disabled with TODO markers below; the sensor file is at
+            # archive/sensors-os-metrics/system_monitor.py.
             from sentinel.file_watcher import FileWatcher
             from sentinel.claude_watcher import get_claude_activity_summary
             from sentinel.brain import analyze_events, build_context
@@ -7150,7 +7170,15 @@ class MainWindow(QMainWindow):
                 if now - last_check >= config.SYSTEM_CHECK_INTERVAL:
                     last_check = now
 
-                    snapshot = take_snapshot()
+                    # OS-metrics sensor disabled — see _run header.
+                    # build_context now accepts snapshot=None and skips
+                    # publishing the "system" entry. has_warnings drops
+                    # to False; only burst detection stays as a trigger
+                    # until Phase 5 redesigns this on top of master-
+                    # activity signals.
+                    # TODO(v0.8 sensor cycle): replace `None` with the
+                    # master-activity summary feed.
+                    snapshot = None
                     file_events = watcher.get_events()
                     claude_act = get_claude_activity_summary()
                     user_act = tracker.get_activity_summary()
@@ -7323,7 +7351,11 @@ class MainWindow(QMainWindow):
                         activity_buf.append(ctx)
                         last_idle = now
 
-                    if snapshot.warnings or len(file_events) > 20:
+                    # snapshot.warnings was the CPU/RAM/disk threshold
+                    # gate; with sensor disabled the trigger collapses
+                    # to file-burst detection until Phase 5 redesigns
+                    # this on master-activity signals.
+                    if len(file_events) > 20:
                         decision = analyze_events(ctx)
                         if decision and decision.get("should_notify"):
                             cat = decision.get("category", "general")
