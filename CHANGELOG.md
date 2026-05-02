@@ -6,7 +6,74 @@
 
 ## [Unreleased]
 
-### Added — Phase 3a of v0.8 sensor refactor：window-title 語意理解（規則層）
+### Added — Phase 3b of v0.8 sensor refactor：LLM fallback + 持久化 cache
+
+**對應**：v0.8 sensor 重構 Phase 3b（接 Phase 3a PR #136）。Phase 3a 規則層覆蓋 80%，這個 PR 處理長尾 — 規則認不出來的 app / title，丟 LLM 解、結果 cache 起來避免重複燒 token。
+
+**新模組 `sentinel/window_semantics_llm.py`**
+
+跟純 rule 層 `window_semantics.py` 分開，所以 importer 想要免費規則路徑可以繼續用 `interpret_window`，要 LLM hybrid 才用這個。
+
+**Public API**：
+
+```python
+interpret_window_with_llm(snapshot, *, use_llm=True) -> dict
+```
+
+回 schema 跟規則層一模一樣的 9-key dict，下游 consumer 不用知道答案來自規則還 LLM。
+
+**決策樹**：
+
+```
+1. 跑規則層
+2. confidence != UNKNOWN → 回規則答案（規則 high confidence 永遠贏，LLM 不必 retry）
+3. use_llm=False → 回規則的 unknown（test/dry-run/省電模式 gate）
+4. cache hit → 回 cached
+5. LLM call:
+   - 成功 → cache + 回（confidence 標 MEDIUM，跟規則 high 區分）
+   - 失敗（unreachable/garbled JSON）→ 回規則的 unknown，**不 cache failure**
+```
+
+**Cache 設計**
+
+- 檔案：`~/.hermes/aislime_window_semantics_cache.json`，atomic 寫（`.tmp` → `replace`）
+- Key：`process_name +  + window_title`（控制字符 separator，避免任一欄位內容碰撞）
+- Value：完整 semantic dict + meta（`interpreted_at` epoch、`model` 標籤）
+- 上限：5000 entry
+- Eviction：FIFO by `interpreted_at`（最舊的先丟）。**選 FIFO 不選 LRU** 的理由：daemon 每 2s poll 一次當前視窗，true LRU 永遠不會 evict 主人最近用的東西、即使那些是穩定的；FIFO 配 age cap 比較貼近實際使用形狀
+- Failure not cached：LLM 暫時掛掉的話下次 retry，不會把「unknown」永久塞進 cache
+
+**LLM prompt 設計**
+
+- temperature 0.2（要求 cache friendly：同 input 大致同 output）
+- max_tokens 250（schema dict ~150 token、留 slack）
+- 嚴格指定 JSON-only 輸出，但 `_parse_llm_json` 容錯：strip markdown fence、容忍 leading prose、找最外層 `{...}` span
+- 隱私規則寫進 prompt：messaging 只給 contact 名、絕不抓 message content / preview / 主題 / 情緒
+- Schema enforcement：parse 後檢查 `app_category` 在 enum 內、不在的話 normalize 為 UNKNOWN（防 LLM 幻覺）
+
+**Cache → rule 回流：deliberately NOT 自動做**
+
+施工指示提到「定期把 LLM 判斷 cache 起來變成新規則」，但 LLM 判斷 across runs 可能變動（即使 temperature 0.2），自動 promotion 會把不一致釘進規則層。本 PR 留 cache file 給未來人工 review，看哪些 title 反覆 fall through、手動 add rule 到 `window_semantics.py`。
+
+**測試**：29 個新測試（`tests/test_window_semantics_llm.py`）：
+
+- **`_parse_llm_json` 容錯（8）**：clean JSON / markdown fence / leading prose / unparseable / non-dict / 缺欄位 default 補空 / unknown category → UNKNOWN / topic_signal 截斷 / 非 string 值 coerce
+- **決策樹（7）**：規則 high → 不 call LLM、`use_llm=False` → 不 call、unknown 觸發 LLM call、LLM None → 不 cache + 回規則、garbled JSON → 同上、failure 不被 cache、empty snapshot 不 call LLM
+- **Cache 持久化（5）**：first call 寫檔、second 同 input 用 cache、模組 reload 後 cache 仍生效（disk 讀回）、不同 title 各自 entry、corrupt cache file 不 crash
+- **Eviction（2）**：under cap 不 evict、over cap 丟最舊
+- **Key construction（2）**：process + title 分隔正確、空 component 不 crash
+- **Privacy / schema（4）**：rule path / LLM path / failure path 三條都回完整 9-key schema、`is_idle` pass-through 不丟
+
+274/274 全綠（245 prior + 29 new）。
+
+**還沒做**
+
+- Phase 4：activity track 寫進 SQLite 讓主人 query「我昨天看了什麼」
+- Phase 5：impulse engine 重設計
+- Phase 6：整合測試
+- 沒人 call `interpret_window_with_llm` in daemon loop 還沒接 — 同 schema-first pattern。Phase 4 寫入時整合
+
+
 
 **對應**：v0.8 sensor 重構 Phase 3a（接 Phase 2 PR #135）。施工指示提到 Phase 3 是「window title 翻譯成主人在做什麼」，建議混合做法（rule 80% + LLM 20%）。這個 PR 只做 **rule 層**，LLM fallback 單獨拆 Phase 3b。
 
