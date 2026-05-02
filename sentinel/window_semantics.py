@@ -59,36 +59,38 @@ from typing import Optional
 
 
 class AppCategory:
-    BROWSER       = "browser"
-    IDE           = "ide"
-    MESSAGING     = "messaging"
-    VIDEO         = "video"
-    AUDIO         = "audio"
-    DOCUMENT      = "document"
-    TERMINAL      = "terminal"
-    FILE_BROWSER  = "file_browser"
-    GAME          = "game"
-    UNKNOWN       = "unknown"
+    BROWSER             = "browser"
+    IDE                 = "ide"
+    MESSAGING           = "messaging"
+    VIDEO               = "video"
+    AUDIO               = "audio"
+    DOCUMENT            = "document"
+    TERMINAL            = "terminal"
+    FILE_BROWSER        = "file_browser"
+    GAME                = "game"
+    SELF_INTROSPECTION  = "self_introspection"   # slime looking at its own GUI
+    UNKNOWN             = "unknown"
 
     ALL = (BROWSER, IDE, MESSAGING, VIDEO, AUDIO, DOCUMENT,
-           TERMINAL, FILE_BROWSER, GAME, UNKNOWN)
+           TERMINAL, FILE_BROWSER, GAME, SELF_INTROSPECTION, UNKNOWN)
 
 
 class ContentType:
     """High-level content the master is engaging with. Phase 5 impulse
     engine uses these to decide how (and whether) to react."""
 
-    CODING            = "coding"
-    SOCIAL_DISCUSSION = "social_discussion"
-    VIDEO_WATCHING    = "video_watching"
-    MUSIC_LISTENING   = "music_listening"
-    READING           = "reading"          # articles, docs, PDFs
-    CONVERSATION      = "conversation"     # messaging
-    SHELL             = "shell"            # terminal commands
-    BROWSING          = "browsing"         # general web, no specific platform
-    FILE_NAVIGATION   = "file_navigation"
-    GAMING            = "gaming"
-    UNKNOWN           = "unknown"
+    CODING             = "coding"
+    SOCIAL_DISCUSSION  = "social_discussion"
+    VIDEO_WATCHING     = "video_watching"
+    MUSIC_LISTENING    = "music_listening"
+    READING            = "reading"          # articles, docs, PDFs
+    CONVERSATION       = "conversation"     # messaging
+    SHELL              = "shell"            # terminal commands
+    BROWSING           = "browsing"         # general web, no specific platform
+    FILE_NAVIGATION    = "file_navigation"
+    GAMING             = "gaming"
+    SELF_INTROSPECTION = "self_introspection"  # master is looking at slime's own UI
+    UNKNOWN            = "unknown"
 
 
 class Confidence:
@@ -126,6 +128,8 @@ _PROCESS_TO_CATEGORY: dict[str, str] = {
     "code.exe":         AppCategory.IDE,
     "code - insiders":  AppCategory.IDE,
     "cursor":           AppCategory.IDE,
+    "claude.exe":       AppCategory.IDE,    # Claude Code (Anthropic desktop)
+    "claude code":      AppCategory.IDE,
     "sublime_text":     AppCategory.IDE,
     "pycharm":          AppCategory.IDE,
     "idea":             AppCategory.IDE,
@@ -430,6 +434,36 @@ def interpret_window(focus_snapshot: dict) -> dict:
     }
 
     if not process_name and not title:
+        return out
+
+    # 0. Self-introspection check — when the master is looking at slime's
+    # own GUI (MainWindow, dialogs, tabs), we want this classified as
+    # SELF_INTROSPECTION rather than "unknown".
+    #
+    # Two signals must BOTH match:
+    #   (a) process is one of the python launchers slime runs under
+    #       (python.exe / pythonw.exe). Restricting by process avoids
+    #       the false positive where a browser visits a page titled
+    #       "AI Slime" (e.g. the github repo readme).
+    #   (b) title contains "AI Slime" — slime's windows all carry
+    #       this prefix and that string is vanishingly unlikely in
+    #       another python-based app.
+    #
+    # Why classify rather than filter: Phase 5's impulse engine should
+    # KNOW the master is looking at slime — it's a real interaction
+    # (peeking at the box, reviewing approvals, etc.) — but it's also
+    # not "看主人在做什麼" in the sensor-refactor sense, so it deserves
+    # its own bucket rather than being mixed in with browser/IDE.
+    proc_l = (process_name or "").lower()
+    is_python_launcher = proc_l in (
+        "python.exe", "pythonw.exe", "py.exe",
+        "aislime.exe", "ai_slime.exe",  # if pyinstaller build is ever shipped
+    )
+    if is_python_launcher and "AI Slime" in (title or ""):
+        out["app_category"] = AppCategory.SELF_INTROSPECTION
+        out["content_type"] = ContentType.SELF_INTROSPECTION
+        out["topic_signal"] = _truncate_for_signal(title) or "slime UI"
+        out["confidence"] = Confidence.HIGH
         return out
 
     # 1. Category from process. Falls back to UNKNOWN if no rule hit.

@@ -6,7 +6,51 @@
 
 ## [Unreleased]
 
-### Fixed — Phase 1 cleanup：chat.py system prompt 殘留 CPU/RAM 引用全清
+### Added — Phase 3a 規則微調：claude.exe → IDE + slime 自身識別（覆蓋率 70.5% → 98.5%）
+
+**對應**：在你最近 200 個視窗 row 上跑 PR #136 規則層、發現規則層 hit rate 70.5%、低於 spec 80% 目標。深入分析 unknown 群發現兩個明顯 pattern：
+
+1. **`claude.exe`（Claude Code 桌面 app）** ~22.5% 落在 unknown — 規則庫沒涵蓋
+2. **slime 看自己**（`python.exe` + 「AI Slime」title）~6% — 沒分類，混在 unknown 裡
+
+**修法**
+
+`sentinel/window_semantics.py`：
+
+- `_PROCESS_TO_CATEGORY` 加 `"claude.exe": IDE` + `"claude code": IDE`（後者 cover Anthropic 在不同建制下的 process 命名）
+- 新 `AppCategory.SELF_INTROSPECTION` enum
+- 新 `ContentType.SELF_INTROSPECTION` enum
+- `interpret_window` 加 step 0 早期檢查：process 是 python 系（`python.exe` / `pythonw.exe` / `py.exe` / `aislime.exe` / `ai_slime.exe`）AND title 含「AI Slime」→ 直接 SELF_INTROSPECTION HIGH，跳過後續 category 判斷
+
+**為什麼是 process + title 雙條件**
+
+第一版只用 title 含「AI Slime」，被自己的測試抓出 false positive：browser 開 github 上的 slime repo 頁面（title 含「AI Slime」）也會被誤判成 self_introspection。process 限制成 python 系直接擋掉這個。
+
+**為什麼分類成 SELF_INTROSPECTION 而不是 filter 掉**
+
+Phase 5 impulse engine 應該**知道**主人在看 slime 自己（翻箱子、審核 approval、改設定），這是有意義的互動。但這也不是「看主人在做什麼」（sensor 重構的本意），所以給它一個 dedicated bucket、不要混進 browser/IDE/unknown。
+
+**真實覆蓋率重測**（同 200 row 樣本）：
+
+| Category | Confidence | Count | % |
+|---|---|---|---|
+| browser | medium | 135 | 67.5% |
+| **ide** | medium | **45** | **22.5%** ← claude.exe 進規則庫的成果 |
+| **self_introspection** | high | **12** | **6.0%** ← slime 看自己 |
+| file_browser | medium | 3 | 1.5% |
+| unknown | unknown | 3 | 1.5% |
+| browser | high | 2 | 1.0% |
+
+**Rule hit rate: 197/200 = 98.5%**（前 70.5%）。剩下 1.5% 真正長尾、Phase 3b LLM fallback 接手。
+
+**測試**：8 個新測試（`tests/test_window_semantics.py`）：
+
+- `TestSelfIntrospection`（5）：main window 分類、含 AI Slime 的 dialog、topic_signal 帶 title、非 slime python 不誤判、browser 開 slime repo 不誤判（false-positive guard）、pythonw.exe 也被認
+- `TestClaudeCodeRule`（3）：claude.exe 認為 IDE、含 file 的 title 抽 file、session picker 仍歸 IDE
+
+283/283 全綠（274 prior + 8 new + 1 修改了既有的 `test_self_check_is_process_agnostic`，那個原設計是錯的、現在改成 false-positive guard）。
+
+
 
 PR #134 的 Phase 1 archive 加了「禁止報電腦狀態」line 但**沒清乾淨 chat.py 系統 prompt 本身**。檢驗 PR #134 + #135 + #136 + #137 累積結果時，發現 chat.py 還有 4 處 instructional content 跟禁止行**直接互相矛盾**：
 
