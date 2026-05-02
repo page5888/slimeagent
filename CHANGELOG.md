@@ -6,7 +6,73 @@
 
 ## [Unreleased]
 
-### Added — Phase 2 of v0.8 sensor refactor：window-title 觀察強化 + idle 偵測 + spec snapshot API
+### Added — Phase 3a of v0.8 sensor refactor：window-title 語意理解（規則層）
+
+**對應**：v0.8 sensor 重構 Phase 3a（接 Phase 2 PR #135）。施工指示提到 Phase 3 是「window title 翻譯成主人在做什麼」，建議混合做法（rule 80% + LLM 20%）。這個 PR 只做 **rule 層**，LLM fallback 單獨拆 Phase 3b。
+
+**為什麼拆**：
+
+1. LLM call 每次有 token 成本，daemon 每 2s poll 一次、un-cached LLM 燒爆
+2. Rule 層先測試覆蓋率 — 看 0xspeter 實際 8x% 比例落在哪、再決定要不要花 LLM
+3. PR #128 → #129 的教訓：每個 PR 範圍小、好 review、CI 容易擋住問題
+
+**落地：`sentinel/window_semantics.py`**
+
+新模組純 logic（無 Qt、無 IO、無 LLM），單一 entry point：
+
+```python
+interpret_window(focus_snapshot: dict) -> dict
+```
+
+input 是 Phase 2 的 `current_focus_snapshot()` 輸出，output 是固定 schema 的語意 dict：
+
+| key | 來源 | 用途 |
+|---|---|---|
+| `app_category` | process_name → category map | browser / ide / messaging / video / audio / document / terminal / file_browser / game / unknown |
+| `content_type` | category default + browser/IDE/messaging override | coding / social_discussion / video_watching / music_listening / reading / conversation / shell / browsing / file_navigation / gaming / unknown |
+| `topic_signal` | category-specific parser | 短文字 hint，例：`"Reddit: r/programming - Bash zsh"` / `"coding: gui.py (slimeagent)"` / `"chatting: 媽媽"` |
+| `platform` | browser title regex | reddit / youtube / github / stackoverflow / twitter / hackernews / medium / bilibili / netflix / ai_chat / 等等 |
+| `file` / `project` | IDE title parser | VS Code / JetBrains 雙格式都支援 |
+| `contact` | messaging title parser | 只抓對象名、**從不抓內容**（隱私邊界） |
+| `confidence` | high / medium / low / unknown | Phase 3b LLM 看 confidence 決定要不要 override |
+| `is_idle` | pass-through | 從 snapshot 來 |
+
+**規則庫覆蓋**：
+- 50+ process 名稱 → 10 個 category
+- 14 個 browser platform regex（reddit / youtube / github / stackoverflow / twitter / facebook / hackernews / medium / instagram / bilibili / twitch / netflix / spotify / **ai_chat**——後者讓 Phase 5 impulse 可以判斷主人在跟別的 AI 講話、自己閉嘴）
+- IDE title 三種格式（VS Code 雙/三段、JetBrains `(project)`、modified marker `●`）
+- Messaging title 四種分隔符（` - ` / ` — ` / ` · ` / ` | `）+ 12 個 app 名 keyword
+
+**設計原則**
+
+- **Pure function**：純 dict in / dict out、無副作用、可在任何 thread 任何頻率呼叫。Phase 3b 的 LLM cache 寫在另一層、不污染這個
+- **Forward-compatible 輸出**：`confidence` 欄位讓 Phase 3b 知道該不該 override；rule 認的 high confidence 不必讓 LLM 重判
+- **隱私邊界**：messaging 只暴露對象名、不抓 preview content。Test 明文 pin 這條（`test_messaging_does_not_leak_content`）
+- **Topic signal 截斷**：80 字元上限，保證 Phase 5 LLM prompt 不會被超長 title 灌爆
+- **Truly unknown 留 topic_signal = title**：給 Phase 3b LLM 跟 log reader 都有東西可看
+
+**測試**：43 個新測試（`tests/test_window_semantics.py`）：
+
+- Schema：所有輸出含完整 9 個 key，包括 empty / unknown 情境（4 tests）
+- Empty input handling（2 tests）
+- Browser 偵測（4 tests）+ platform rules（8 tests，cover 施工指示提到的 reddit / youtube + 6 個額外）
+- IDE 偵測（3 tests）+ title parsing 5 個格式（VS Code 雙/三段、JetBrains、modified marker、unparseable）
+- Messaging 偵測（5 tests，含 contact 抓取 + privacy pin）
+- Video / Audio / Terminal / Document（各 1-3 tests）
+- Unknown 情境（3 tests，含 truncation + topic_signal 仍保留）
+- Pure function 性質（2 tests，repeatable + 不 mutate input）
+
+245/245 全綠（202 prior + 43 new）。
+
+**還沒做（Phase 3b）**
+
+- LLM fallback 處理 `confidence == unknown` 的 long-tail
+- 持久化 cache（`~/.hermes/aislime_window_semantics_cache.json` 或 SQLite）
+- Cache → 規則回流機制（high-frequency LLM 判斷反饋成新規則）
+
+**沒人 use 這個 API**：對。同 #130 / #133 pattern，schema 先、消費者後。Phase 3b 加 LLM、Phase 4 把語意結果存進 activity track、Phase 5 接 impulse engine——逐步閉合。
+
+
 
 **對應**：v0.8 sensor 重構 Phase 2（接 Phase 1 PR #134）。Phase 1 砍掉錯方向的 OS-metrics sensor，Phase 2 強化對方向的 sensor——主人正在看什麼視窗、看了多久、有沒有在動鍵盤滑鼠。
 
