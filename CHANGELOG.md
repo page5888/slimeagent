@@ -6,7 +6,62 @@
 
 ## [Unreleased]
 
-### Removed — SKILL_GEN 自動產生「待同意技能」功能下線（manifesto 守則 #2 / 真實的累積原則）
+### Added — title_storage：稱號系統的箱子 metadata schema + persistence layer（v0.8 cycle）
+
+對應 ADR `docs/decisions/2026-04-30-title-system.md`。稱號系統是 v0.8 cycle 的核心工作，這個 PR 是它的第一塊：純後端 schema + 持久化，**沒有 LLM、沒有 chat hook、沒有 GUI**——那三塊各是後續 PR。
+
+跟 PR #130（birth_signature 後端 schema）同個 pattern：先把地基測穩，後面接 render / generation / 引用機制各自再來一個小 PR，不要一次塞太多 Qt code 進去（已經被 PR #128→#129 教過一次）。
+
+### 落地
+
+**新模組 `sentinel/title_storage.py`**（純 logic，無 Qt）：
+
+- `Title` dataclass — schema 跟 ADR § 完整資料 Schema（line 138-168）一對一對映
+- `EventReference` / `InvocationRecord` 巢狀 dataclass
+- `Trigger` / `MasterResponse` / `InvocationResponse` 字串常數類（不用 Enum 為了 JSON 序列化清爽 + schema evolve 方便）
+- `Title.display_text()` — ADR § Q7 要求的 `{title} (D{day_marker})` 格式；renamed 用主人取的名字、不暴露原始
+- `Title.is_in_box()` — accepted 跟 renamed 進箱子；pending / rejected 不進
+- `Title.is_frozen(now=...)` — 支援注入 `now` 方便測試
+- `Title.is_well_formed()` — encode ADR 紅線 1, 2, 3, 10 storage 層能驗的部分（empty title / 負 day_marker / 不合法 trigger / 不合法 master_response / accepted 但沒 events / renamed 但沒新名字）。**不在 storage 強制執行**——那是 generation 層的責任，這個 helper 給 caller 自己決定要不要 check
+
+**持久化（`~/.hermes/aislime_titles.json`）**：
+
+- `load_titles()` / `save_titles(titles)`
+- 對齊 `evolution.load_evolution` 的 corrupt-file 處理：壞掉的檔備份成 `.broken.<epoch>.json`、不靜默覆寫（防 Mac 用戶被 wipe 那個 bug 的同形）
+- Atomic write：先寫 `.tmp` 再 `replace()`，半寫狀態不會殺主檔案
+- 單一 row malformed 不影響其他 row：壞的 skip 掉、好的照常 load
+- Non-list payload 直接回空：不會把 dict keys 當 row 跑
+
+**High-level helpers**：
+
+- `add_title(title)` — append + 拒絕 id collision（防 generator 退化）
+- `find_title(id)` — 回 `Title | None`
+- `update_title(updated)` — 找 id 替換；找不到回 `False`、**不**幫忙 add
+- `accepted_titles()` — filter 出 in_box 的；frozen 的也算（cold storage 是給 invocation 用的、不是給展示用的）
+- `new_title_id()` — uuid4 hex
+
+### 不在這個 PR 的東西
+
+| 模組 | 何時 | 為什麼分開 |
+|---|---|---|
+| `title_system.py`（生成 + morality vet） | 後續 PR | 要 LLM prompt 工程，跟 schema 解耦 |
+| `title_invoker.py`（chat 自然引用） | 後續 PR | 要改 chat.py，Qt 不熱但 chat path 改動範圍大 |
+| GUI 箱子子頁 | 後續 PR | Qt 改動，照 PR #129 教訓單獨拆 |
+| 命名儀式產生第一個稱號 | 後續 PR | 要改 `identity.py`，依賴 title_system 已存在 |
+
+### 測試
+
+32 個新測試（`tests/test_title_storage.py`）：
+
+- Display: day_marker 顯示、renamed 用新名
+- State methods: in_box / frozen 各分支
+- Well-formedness: 7 條 invariant（happy + 6 條 fail case）
+- Persistence: empty load / round-trip / nested dataclass / atomic write / corrupt backup / non-list / malformed row skip
+- Helpers: add / find / update / accepted_titles / frozen 也算 in_box
+
+186/186 全綠（154 prior + 32 new）。
+
+
 
 對應原則：**「真實的累積」**——主人 0xspeter 在 2026-05-02 review 待同意佇列時提出，「我希望史萊姆要有真實的累積」。對齊 manifesto 守則 #2（不欺騙）。
 
