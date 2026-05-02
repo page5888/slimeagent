@@ -6,7 +6,28 @@
 
 ## [Unreleased]
 
-### Added — birth_signature 後端 schema：v0.8 雙層身體個體化的第一層
+### Added — birth_signature 接 render：v0.8 雙層身體個體化視覺落地
+
+對應 ADR `docs/decisions/2026-05-01-slime-physical-individuation.md`。前一個 PR（#130）只搭好後端 schema + generator，這個 PR 把它接到實際的 paint loop。**重啟後桌面浮窗 + 首頁 slime 從 D1 開始就長得不一樣**。
+
+落地：
+
+- 新模組 `sentinel/birth_signature_render.py`（Qt-touching helpers，跟純 logic 的 `birth_signature.py` 分檔）：
+  - `apply_signature_to_colors(colors, sig)` — 對 body/highlight/glow 在 HSV 空間做 hue offset + saturation factor。Eye/mouth/accessory 顏色保留不變（不是「身體」）
+  - `apply_signature_to_dimensions(w, h, sig)` — 套 width_factor / height_factor，疊在 breath/bounce 動畫之上
+  - `draw_marking(p, sig, ...)` — 畫 swirl / dot / line 三種 marking。位置 body-relative [-1, 1]，size 約身寬 10–22%，顏色從 body 色推 hue/lightness delta
+- `slime_avatar.py` (`SlimeWidget`) 跟 `overlay.py` (`SlimeOverlay`)：
+  - `__init__` 加 `_load_birth_signature()`，從 `evolution.load_evolution()` cache 一次。所有失敗模式（檔案缺、schema 不符、IO error）都 graceful degrade 成空 dict → render 走 base TIER_COLORS，不會 crash
+  - paintEvent 在現有 trait tint / skin override 之後 apply signature（讓 signature 永遠是「在當前 palette 上的 per-instance variation」）
+  - body draw 跟 antenna 之間插 marking draw（marking 在 body 表面、不會被 antenna 蓋）
+- 護欄 #5（subtle but visible）落實在 marking size constants — 太大會讓 marking 變裝飾物、違反「a small mark」精神，未來要改尺寸動 helper、不動 ADR ranges
+- 「兩個視角的同一隻 slime 必須一樣」靠兩邊 paint loop 共呼叫同一組 helper 保證；如果有人改了一邊忘了另一邊，視覺會分歧、就是 bug
+
+15 個新測試（Helper-level: 10、Widget-level: 5）：HSV 變換正確 / alpha 不丟 / eye+mouth 不被影響 / 各 marking type 渲染不 crash / unknown marking type 視為 no-op（前向相容）/ widget 在 signature 為空 / load_evolution raises 時都能畫。154/154 全綠（139 prior + 15 new）。
+
+CI gate（PR #129 的 GUI smoke test）會在每個 paintEvent 改動 PR 自動跑 — 接著踩到 PR #128 那種「unit test 全綠但 Qt slot NameError」的機率歸零。
+
+
 
 對應 ADR `docs/decisions/2026-05-01-slime-physical-individuation.md`（雙層架構，Layer 1 = 出生簽名）。Slime 從 D1 開始就長得不一樣的後端骨架——`evolution.json` 多 `birth_signature` 欄位、`sentinel/birth_signature.py` 提供 deterministic generator。
 
