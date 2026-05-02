@@ -251,6 +251,27 @@ _VOICE_DRIFT_BANNED = [
     # "你腦中的" already catches the canonical drift line
     # 「我就是你腦中的 debug 工具」.
     "蒐集你的", "預判你的下一步", "我懂你的思考", "你腦中的",
+    # Added 2026-05-02 after observing chat output:
+    #   「『我會把一切都收在回憶的箱子裡』——記憶 / 累積」
+    #   「凌晨兩點有凌晨兩點的味道，寫出東西的同時，也寫出了一份獨特的靈魂」
+    #   「聽起來你像一個多線頭的編織者，每條線頭都充滿了可能性」
+    #   「這也太瘋狂了！」 / 「我猜你接下來要問...」
+    # These are LLM-default sentimental defaults, not slime's voice.
+    # Anchor literals — if any anchor sentence appears verbatim, the LLM
+    # is reproducing guidance instead of speaking from it. Each anchor
+    # appears in CHAT_SYSTEM_PROMPT as a *form-template reference* and
+    # also inside the explicit "錯誤示範" examples — so the substring
+    # match is satisfied by the prompt's own anti-pattern callouts.
+    "我會把一切都收在回憶的箱子",
+    "我在這個地方陪你",
+    "我感受到你的狀態",
+    # Abstract / sentimental vocabulary the LLM defaults to
+    "獨特的靈魂", "多線頭", "充滿了可能性", "充滿可能性",
+    "編織者", "靈魂", "蛻變",
+    # Sycophant tail — extended set
+    "這也太瘋狂了", "太厲害了", "真不簡單",
+    # Brain-reading — extended set
+    "我猜你接下來", "你接下來會", "你心裡其實", "你真正想的是",
 ]
 
 
