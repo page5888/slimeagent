@@ -6741,18 +6741,9 @@ class MainWindow(QMainWindow):
                     msg = "已恢復出廠設定（你的記憶和資料完整保留）" if ok else "恢復失敗"
                 await update.message.reply_text(f"🔄 {msg}")
 
-            async def cmd_skills(update: Update, context):
-                if update.message.chat_id != config.TELEGRAM_CHAT_ID:
-                    return
-                from sentinel.self_evolution import list_skills
-                skills = list_skills()
-                if skills:
-                    lines = ["🎯 *AI Slime 自創技能*\n"]
-                    for s in skills:
-                        lines.append(f"  {s['skill_name']} — {s['description']}")
-                    await update.message.reply_text("\n".join(lines))
-                else:
-                    await update.message.reply_text("尚未自創任何技能。觀察量足夠後會自動產生。")
+            # /skills removed 2026-05-02 — listed SKILL_GEN-generated
+            # skills which are no longer produced. archive/sentinel-side/
+            # self_evolution_skill_gen.py has the rationale.
 
             async def cmd_restart(update: Update, context):
                 """Remote restart — re-launches via start.bat from a new
@@ -7019,7 +7010,6 @@ class MainWindow(QMainWindow):
                 app.add_handler(CommandHandler("status", cmd_status))
                 app.add_handler(CommandHandler("evolution", cmd_evolution))
                 app.add_handler(CommandHandler("rollback", cmd_rollback))
-                app.add_handler(CommandHandler("skills", cmd_skills))
                 app.add_handler(CommandHandler("restart", cmd_restart))
                 app.add_handler(CommandHandler("preflight", cmd_preflight))
                 app.add_handler(CommandHandler("pending", cmd_pending))
