@@ -2330,6 +2330,94 @@ class HomeTab(QWidget):
 # 2026-05-01-slime-physical-individuation.md.
 
 
+# 箱子 view helpers — restored after PR #128 accidentally removed them
+# along with the equipment/marketplace cleanup. Originally landed in
+# PR #119 (memorable_moments browseable list, ADR 共同沉積 mech 1).
+# Kept module-level above MemoryTab because both refresh() and any
+# future tests want to call _render_box_html directly.
+_BOX_CATEGORY_EMOJI = {
+    "naming":              "📝",
+    "first_chat":          "✨",
+    "evolution":            "🧬",
+    "skill":               "🎯",
+    "chat_peak":           "💬",
+    "milestone":           "🎁",
+    "emergent_self_mark":  "🌿",
+    "loneliness":          "🌙",
+}
+
+
+def _esc_html(s: str) -> str:
+    """Minimal HTML escape for dynamic content rendered in QTextEdit."""
+    return (s.replace("&", "&amp;").replace("<", "&lt;")
+             .replace(">", "&gt;").replace('"', "&quot;"))
+
+
+def _render_box_html(entries: list[dict]) -> str:
+    """Render the 箱子 list as styled HTML for the QTextEdit.
+
+    Each entry: prominent day_n (the timestamp anchor), category
+    emoji, headline, and inline content for letter / master_phrase
+    when present. No click handlers in this version — the view is
+    pure browse, like flipping through a journal.
+
+    Empty / pre-naming case shows an honest placeholder rather than
+    a blank pane: 「還什麼都沒發生。空著是合理的。」
+
+    The section dividers + mid-grey day-number rail are deliberate
+    visual choices: the day numbers should read as a thread that
+    runs through the entries, not as engagement metrics.
+    """
+    if not entries:
+        return (
+            "<div style='color:#666;line-height:1.6;padding:8px;'>"
+            "還什麼都沒發生。空著是合理的——慢慢長就好。"
+            "</div>"
+        )
+
+    parts = ["<div style='line-height:1.7;'>"]
+    for e in entries:
+        day_n = int(e.get("day_n", 1))
+        cat = e.get("category", "")
+        emoji = _BOX_CATEGORY_EMOJI.get(cat, "·")
+        headline = _esc_html((e.get("headline", "") or "").strip())
+        detail = _esc_html((e.get("detail", "") or "").strip())
+        letter = _esc_html((e.get("letter_to_master", "") or "").strip())
+        phrase = _esc_html((e.get("master_phrase", "") or "").strip())
+
+        parts.append("<div style='margin:14px 0;'>")
+        # Day-of-life rail. Subdued colour, slightly larger so it
+        # reads as the timeline anchor, not a metric badge.
+        parts.append(
+            f"<span style='color:#5e6470;font-size:12px;letter-spacing:1px;'>"
+            f"第 {day_n} 天</span>"
+            f" &nbsp;<span style='font-size:14px;'>{emoji}</span>"
+            f" &nbsp;<span style='color:#ccc;font-size:14px;'>{headline}</span>"
+        )
+        if detail:
+            parts.append(
+                f"<div style='margin:4px 0 0 56px;color:#999;font-size:12px;'>"
+                f"{detail}</div>"
+            )
+        if phrase:
+            parts.append(
+                "<div style='margin:6px 0 0 56px;color:#5e6470;font-size:11px;'>"
+                "─ Slime 之語 · 你說過的一句 ─</div>"
+                f"<div style='margin:0 0 0 56px;color:#a8d8d0;font-size:13px;'>"
+                f"「{phrase}」</div>"
+            )
+        if letter:
+            parts.append(
+                "<div style='margin:6px 0 0 56px;color:#5e6470;font-size:11px;'>"
+                "─ 給你的話 ─</div>"
+                f"<div style='margin:0 0 0 56px;color:#ffe4b8;font-size:13px;'>"
+                f"{letter}</div>"
+            )
+        parts.append("</div>")
+    parts.append("</div>")
+    return "".join(parts)
+
+
 class MemoryTab(QWidget):
     def __init__(self):
         super().__init__()
