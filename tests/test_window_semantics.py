@@ -318,6 +318,87 @@ class TestUnknown(unittest.TestCase):
         self.assertLess(len(out["topic_signal"]), 100)
 
 
+class TestSelfIntrospection(unittest.TestCase):
+    """Slime watching its own GUI gets a dedicated category so Phase 5
+    impulse engine knows the master is interacting with slime itself
+    rather than mistaking it for an unknown app."""
+
+    def test_main_window_classified_as_self(self):
+        out = interpret_window(_snap(process="python.exe",
+                                     title="AI Slime Agent"))
+        self.assertEqual(out["app_category"], AppCategory.SELF_INTROSPECTION)
+        self.assertEqual(out["content_type"], ContentType.SELF_INTROSPECTION)
+        self.assertEqual(out["confidence"], Confidence.HIGH)
+
+    def test_dialog_with_AI_Slime_title_classified_as_self(self):
+        out = interpret_window(_snap(process="python.exe",
+                                     title="AI Slime"))
+        self.assertEqual(out["app_category"], AppCategory.SELF_INTROSPECTION)
+
+    def test_topic_signal_carries_slime_window_title(self):
+        # Phase 5 might want to know WHICH slime UI surface the master
+        # is on (Approval Tab vs Memory Tab vs Settings) — title is
+        # the cheapest carrier of that.
+        out = interpret_window(_snap(process="python.exe",
+                                     title="AI Slime Agent"))
+        self.assertEqual(out["topic_signal"], "AI Slime Agent")
+
+    def test_non_slime_python_is_not_self(self):
+        # Plain python.exe with a title that doesn't contain "AI Slime"
+        # must NOT be misclassified — could be any python script the
+        # master runs.
+        out = interpret_window(_snap(process="python.exe",
+                                     title="Some other tool"))
+        self.assertNotEqual(out["app_category"], AppCategory.SELF_INTROSPECTION)
+
+    def test_browser_visiting_ai_slime_page_is_NOT_self(self):
+        # False-positive guard: a browser viewing the slime project's
+        # github page or any web doc that mentions "AI Slime" must
+        # not be classified as self-introspection. Process restriction
+        # (must be a python launcher) prevents this.
+        out = interpret_window(_snap(
+            process="chrome.exe",
+            title="page5888/slimeagent: AI Slime - GitHub"))
+        self.assertNotEqual(out["app_category"], AppCategory.SELF_INTROSPECTION)
+        # Should classify as browser (with github platform)
+        self.assertEqual(out["app_category"], AppCategory.BROWSER)
+        self.assertEqual(out["platform"], "github")
+
+    def test_pythonw_also_recognized(self):
+        # GUI builds run under pythonw.exe (no console). Same self-
+        # detection should fire.
+        out = interpret_window(_snap(process="pythonw.exe",
+                                     title="AI Slime Agent"))
+        self.assertEqual(out["app_category"], AppCategory.SELF_INTROSPECTION)
+
+
+class TestClaudeCodeRule(unittest.TestCase):
+    """claude.exe (Anthropic's Claude Code desktop app) is a coding
+    tool — should be IDE, not unknown. Discovered via real-data
+    coverage check (29.5% of unknowns came from this one app)."""
+
+    def test_claude_exe_is_ide(self):
+        out = interpret_window(_snap(process="claude.exe",
+                                     title="Claude"))
+        self.assertEqual(out["app_category"], AppCategory.IDE)
+        self.assertEqual(out["content_type"], ContentType.CODING)
+
+    def test_claude_code_with_filename_extracts_file(self):
+        # Title format common with Claude Code editing: "file - Claude Code"
+        out = interpret_window(_snap(process="claude.exe",
+                                     title="main.py - Claude Code"))
+        self.assertEqual(out["app_category"], AppCategory.IDE)
+        self.assertEqual(out["file"], "main.py")
+
+    def test_claude_session_picker_still_classifies_as_ide(self):
+        # Pre-session UI ("Select folder for local session") shouldn't
+        # extract a file but should still be IDE category.
+        out = interpret_window(_snap(
+            process="claude.exe",
+            title="Select folder for local session"))
+        self.assertEqual(out["app_category"], AppCategory.IDE)
+
+
 class TestPureFunction(unittest.TestCase):
     """interpret_window must be pure: same input → same output, no
     state. If anyone adds a cache or counter inside the function,
