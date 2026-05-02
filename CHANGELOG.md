@@ -6,7 +6,30 @@
 
 ## [Unreleased]
 
-### Removed — server-side: federation / equipment / marketplace 三個對外子系統下線
+### Added — birth_signature 後端 schema：v0.8 雙層身體個體化的第一層
+
+對應 ADR `docs/decisions/2026-05-01-slime-physical-individuation.md`（雙層架構，Layer 1 = 出生簽名）。Slime 從 D1 開始就長得不一樣的後端骨架——`evolution.json` 多 `birth_signature` 欄位、`sentinel/birth_signature.py` 提供 deterministic generator。
+
+落地（**純後端，沒接 render**）：
+
+- 新模組 `sentinel/birth_signature.py`：`BirthSignature` + `Marking` dataclass；`generate_birth_signature(birth_time: float)` 從 `birth_time` 衍生 deterministic 種子（sha256 → 64-bit int → `random.Random`），確保「同一隻 slime 一輩子長這樣」。
+- 五個視覺軸 + ranges（ADR 護欄 #2）寫死成 module-level constant。改範圍要動 ADR、不能默默改：
+  - `body_hue_offset`：±30°
+  - `body_saturation_factor`：0.85–1.10
+  - `body_height_factor`：0.95–1.05
+  - `body_width_factor`：0.95–1.05
+  - `marking`：~30% 機率有，含 type / position / hue_delta / lightness_delta
+- `evolution.py`：`EvolutionState` 加 `birth_signature: dict` field。Lazy migration：既有 v0.7.x slime 第一次跑 v0.8 → 從 `birth_time` 反推同一個 signature 並回填儲存。新生 slime 在 birth path 立刻生成。
+- `random.Random` 的 draw order 用「spend the seeds」pattern：marking gate 不 early-return，前面的 marking 欄位永遠抽固定數量的 seed，這樣未來加新軸不會把舊 slime 重 roll。
+
+不接的東西（下個 PR）：
+
+- `overlay.py` / `slime_avatar.py` 沒接 `birth_signature`。Render 還是吃預設色 + 預設形狀。下個 PR 把 generator 結果接到 paint loop。
+- Title `visual_signature`（Layer 2）依 ADR 排在後面 cycle item，跟稱號系統重構一起做。
+
+17 個新測試覆蓋 determinism / range guardrail / marking probability / round-trip / migration（既有 save 回填、新生 slime 立刻有 signature）。139/139 全綠（122 prior + 17 new）。
+
+
 
 對應 ADR `docs/decisions/2026-04-30-slime-stays-private.md`。Slime 設計上是私人的——任何「對外」機制都不該綁進 Slime 核心。三個子系統全部違反這條原則：
 
