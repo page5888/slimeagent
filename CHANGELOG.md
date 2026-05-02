@@ -6,7 +6,59 @@
 
 ## [Unreleased]
 
-### Removed — Phase 1 of v0.8 sensor refactor：archive OS-metrics sensor（slime 看主人，不看電腦）
+### Added — Phase 2 of v0.8 sensor refactor：window-title 觀察強化 + idle 偵測 + spec snapshot API
+
+**對應**：v0.8 sensor 重構 Phase 2（接 Phase 1 PR #134）。Phase 1 砍掉錯方向的 OS-metrics sensor，Phase 2 強化對方向的 sensor——主人正在看什麼視窗、看了多久、有沒有在動鍵盤滑鼠。
+
+**Phase 2 acceptance**（per 施工指示）：
+
+- [x] window title 抓取（**已存在**，pre-Phase-2 已是這個架構，現有 `_get_active_window` via Win32 `GetForegroundWindow`）
+- [x] sensor 輸出可在 log 看到具體 title（新加 `log.info("active window: [proc] title")` 在 poll 切換時）
+- [x] 抓取頻率 5-10 秒（**比 spec 更快**：現存 daemon loop 是 `time.sleep(2)`，每 2s tick 一次，不調慢）
+- [x] 額外加 `is_idle` 旗標（spec 要求）
+- [x] 暴露 spec-shape `current_focus_snapshot()` 給 Phase 3+ 消費
+
+**落地**
+
+`sentinel/activity_tracker.py` 新增三個 API：
+
+| API | 作用 |
+|---|---|
+| `seconds_since_last_input()` | Win32 `GetLastInputInfo` + `GetTickCount`，回 master 上次有鍵盤/滑鼠輸入到現在多少秒。非 Windows 平台 fallback `0.0`（測試環境 cross-platform OK） |
+| `is_user_idle(threshold_secs=60)` | 上面那個的閾值版 |
+| `current_focus_snapshot(idle_threshold_secs=60) -> dict` | 回施工指示 spec 要的 dict：`{timestamp (ISO-8601 Z), epoch, app_name, process_name, window_title, duration_in_focus, idle_seconds, is_idle}` |
+
+`WindowEvent` dataclass 加 `is_idle: bool = False` field。`poll()` 在 record 切換事件時，capture 當下 `is_user_idle()` 寫入 event。
+
+JSONL log（`~/.hermes/sentinel_activity.jsonl`）多了 `is_idle` 欄位，pre-Phase-2 既有 row 沒這個欄位的話，下游 reader 用 `.get("is_idle", False)` 回讀（`recent_activity.py` 沒有顯式 read 這個欄位、不會壞）。
+
+`poll()` 在偵測到視窗切換時新加 `log.info("active window: [%s] %s", proc, title_short)` 一行——Phase 2 的可觀察 acceptance：0xspeter 在主 log 直接看到「Slime 知道我在看 X 網頁了」這類訊息，**不用 tail JSONL**。
+
+**設計細節**
+
+- `current_focus_snapshot()` 跟 `poll()` 解耦：snapshot 是 read-only 純 query，沒有副作用、不更新 daily stats、不寫 JSONL；poll 才做這些。Phase 3 的 LLM 解析可以高頻 read snapshot 不擔心污染狀態。
+- ISO-8601 timestamp 統一用 UTC + Z suffix，跨時區讀回 log 不會誤判
+- `app_name` 跟 `process_name` 暫時同值（都是 `.exe` 名）。Phase 3 的「window-title 語意理解」會把 `app_name` 從 `chrome.exe` map 成 `Google Chrome`，那時候才會分歧
+- Idle 偵測選 `GetLastInputInfo`（OS 原生 API）而非 hook `input_tracker._last_key_time`，原因：(a) `input_tracker` macOS 整個 disabled、couple 進來會跨平台破裂；(b) `GetLastInputInfo` 同時涵蓋鍵盤/滑鼠/觸控/程式輸入，比鎖定 keyboard 更全面
+- `GetTickCount()` 32-bit ms 計數器每 ~49.7 天 wrap 一次，用 `& 0xFFFFFFFF` 處理 wrap-around
+
+**測試**：16 個新測試（`tests/test_activity_tracker.py`，新檔）：
+
+- `seconds_since_last_input`：non-Windows → 0、Win32 API failure → 0、兩個 cross-platform smoke
+- `is_user_idle`：閾值上下、邊界（>= 算 idle）、預設值釘 60s 不要悄悄改
+- `current_focus_snapshot`：spec keys 全到、ISO-8601 格式正確、title/process pass-through、duration 在切換瞬間 = 0、duration 在持續同視窗時 grow、is_idle flag 反映 threshold、`_get_active_window` failure 時 graceful return
+- JSONL：`is_idle` 寫進 row、`poll()` 切換時 capture is_idle
+
+202/202 tests 全綠（186 prior + 16 new）。
+
+**還沒處理**
+
+- Phase 3：window-title 語意理解（rule + LLM 混合，把 `chrome.exe / "Reddit - r/programming/comments/xxx"` map 成 `{app_category: "browser", content_type: "social_discussion", topic_signal: "programming - Bash Zsh"}`）
+- Phase 4：activity track 寫進 SQLite 讓主人 query「我昨天看了什麼」
+- Phase 5：impulse engine 重新設計
+- Phase 6：整合測試「Slime 真的在看主人了」
+
+
 
 **對應**：v0.8 sensor 重構施工指示 Phase 1（2026-05-02 0xspeter）。前置 7 份 ADR 共同論證 slime 必須看到「主人在做什麼」、不是「電腦在做什麼」。Phase 1 砍掉錯方向的基礎，Phase 2-6 接上對方向的基礎。
 
