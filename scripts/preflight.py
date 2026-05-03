@@ -272,6 +272,15 @@ _VOICE_DRIFT_BANNED = [
     "這也太瘋狂了", "太厲害了", "真不簡單",
     # Brain-reading — extended set
     "我猜你接下來", "你接下來會", "你心裡其實", "你真正想的是",
+    # 2026-05-03 — second round, after observing 'sensor narrative weaving':
+    # slime saw the master was on Claude in the morning and produced
+    # 「聽起來你今天也忙碌了一天了呢」 (fabricated context to "explain" the
+    # sensor reading). Plus consultant-mode offers like 「至少可以設定一個
+    # 睡眠模式吧？」「還是要不要幫你設定一個？」 unsolicited setup advice.
+    # These are subtler patterns than the first round; the prompt now
+    # explicitly bans them, preflight mirrors so drift is detectable.
+    "聽起來你", "看樣子你", "看起來你",
+    "至少可以設定", "至少可以", "要不要幫你設定",
 ]
 
 
